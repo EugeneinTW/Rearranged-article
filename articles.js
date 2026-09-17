@@ -22,7 +22,7 @@ window.ARTICLES = {
       ],
       "extras": [
         {
-          "label": "圖解卡連續閱讀版（10 張）",
+          "label": "圖解卡連續閱讀版",
           "path": "articles/eval-skills/cards.html"
         }
       ]
