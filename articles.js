@@ -55,6 +55,34 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "agentic-design-patterns",
+      "path": "articles/agentic-design-patterns/index.html",
+      "title": "Agentic Design Patterns：進步來自工作流，不只來自下一代模型",
+      "summary": "Andrew Ng 在 The Batch 的五封信：用 HumanEval 的數字說明「讓模型反覆修改」帶來的進步，比換下一代模型還大，並把 agent 的做法分成 Reflection、Tool Use、Planning、Multi-agent collaboration 四種設計模式。這份整理把五封信併成一頁，每種模式一張圖卡，並標出 Ng 對成熟度的判斷。",
+      "source": {
+        "name": "The Batch · Andrew Ng",
+        "url": "https://www.deeplearning.ai/the-batch/how-agents-can-improve-llm-performance/",
+        "date": "2024-03-20"
+      },
+      "date": "2026-09-23",
+      "tags": [
+        "agents",
+        "design-patterns",
+        "workflows",
+        "andrew-ng",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/agentic-design-patterns/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "commerce-agents",
       "path": "articles/commerce-agents/index.html",
       "title": "Claude Commerce Agents：電商 AI Agent 的開源藍圖，重點不在推薦商品，在守住邊界",
