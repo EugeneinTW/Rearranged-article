@@ -181,6 +181,42 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "colbert-late-interaction",
+      "path": "articles/colbert-late-interaction/index.html",
+      "title": "ColBERT：把互動延到最後一步，BERT 級的段落檢索也能又快又準",
+      "summary": "Stanford 的 Khattab 與 Zaharia 在 2020 年提出 late interaction：查詢和文件各自用 BERT 編成一袋詞向量，最後才用 MaxSim（每個查詢向量找文件裡最像的向量，再加總）互動。文件可以離線先算好，重排 MS MARCO 的效果和 BERT 相當、延遲少 170 倍以上；分數對剪枝友善，還能用向量索引直接從 880 萬段落裡檢索，召回勝過 BM25 系列。每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "arXiv · Omar Khattab、Matei Zaharia（Stanford）",
+        "url": "https://arxiv.org/abs/2004.12832",
+        "date": "2020-04-27"
+      },
+      "date": "2026-09-23",
+      "tags": [
+        "retrieval",
+        "late-interaction",
+        "bert",
+        "rag",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 2,
+        "kind": "選讀",
+        "section": "Building Blocks",
+        "lecture": "Retrieval-Augmented Generation (RAG)",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/colbert-late-interaction/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "agentic-design-patterns",
       "path": "articles/agentic-design-patterns/index.html",
       "title": "Agentic Design Patterns：進步來自工作流，不只來自下一代模型",

@@ -1,0 +1,2154 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ColBERT Late Interaction</title>
+<meta name="description" content="Stanford 的 Khattab 與 Zaharia 在 2020 年提出 late interaction：查詢和文件各自用 BERT 編成一袋詞向量，最後才用 MaxSim（每個查詢向量找文件裡最像的向量，再加總）互動。文件可以離線先算好，重排 MS MARCO 的效果和 BERT 相當、延遲少 170 倍以上；分數對剪枝友善，還能用向量索引直接從 880 萬段落裡檢索，召回勝過 BM25 系列。每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="retrieval, late-interaction, bert, rag, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2004.12832">
+<meta name="date" content="2026-09-23">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Theme: tech-modern 變體「測試報告語意色」
+   藍 = 主色 / 綠 = pass / 琥珀 = 注意 / 紅 = fail
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --paper: #ffffff;
+  --paper-soft: #f3f5f8;
+  --paper-shadow: #dde2e8;
+  --ink: #121821;
+  --ink-soft: #3b4450;
+  --ink-mute: #6b7481;
+  --primary: #1e56a8;
+  --primary-deep: #143a72;
+  --primary-bg: #e6eef9;
+  --accent: #157a52;
+  --accent-deep: #0d5236;
+  --accent-bg: #e1f3e9;
+  --warm: #b8620e;
+  --warm-deep: #7d4108;
+  --warm-bg: #fbeddc;
+  --danger: #b83228;
+  --danger-bg: #f9e3e0;
+  --stone: #5a6370;
+  --stone-bg: #eceff3;
+  --code-bg: #0f1720;
+  --code-ink: #e6edf3;
+  --code-mute: #8b98a8;
+  --code-blue: #7cc4ff;
+  --code-green: #7ee2b8;
+  --code-amber: #ffc46b;
+
+  --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-cjk: 'Noto Sans TC', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --content-width: 780px;
+  --wide-width: 1100px;
+  --gutter: 24px;
+}
+
+/* ---------- reset & 排版 ---------- */
+* { box-sizing: border-box; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+body {
+  margin: 0; padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-cjk);
+  font-size: 18px;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: var(--content-width); margin: 0 auto; padding: 0 var(--gutter); }
+.wide { max-width: var(--wide-width); margin: 0 auto; padding: 0 var(--gutter); }
+section { padding-block: 64px; }
+section + section { border-top: 1px solid var(--paper-shadow); }
+
+h1, h2, h3, h4 { font-family: var(--font-cjk); font-weight: 700; text-wrap: balance; }
+h1 { font-size: 56px; line-height: 1.14; margin: 0 0 24px; font-weight: 800; }
+h2 { font-size: 36px; line-height: 1.25; margin: 0 0 18px; letter-spacing: -0.01em; }
+h3 { font-size: 25px; line-height: 1.35; margin: 44px 0 14px; }
+h4 { font-size: 20px; line-height: 1.4; margin: 26px 0 10px; }
+p { margin: 0 0 18px; }
+ul, ol { padding-left: 26px; margin: 0 0 18px; }
+li { margin-bottom: 8px; }
+em { font-style: normal; color: var(--primary-deep); font-weight: 600; }
+strong { font-weight: 700; }
+a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+code {
+  font-family: var(--font-mono); font-size: 0.86em;
+  background: var(--stone-bg); color: var(--primary-deep);
+  padding: 2px 6px; border-radius: 4px;
+}
+.mono { font-family: var(--font-mono); }
+
+/* ---------- Hero ---------- */
+.hero {
+  padding-block: 84px 60px;
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-soft) 100%);
+  border-bottom: 2px solid var(--primary-deep);
+  position: relative;
+}
+.hero::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: linear-gradient(90deg,
+    var(--primary) 0%, var(--primary) 25%,
+    var(--accent) 25%, var(--accent) 50%,
+    var(--warm) 50%, var(--warm) 75%,
+    var(--danger) 75%, var(--danger) 100%);
+}
+.hero-meta {
+  display: flex; flex-wrap: wrap; gap: 10px 22px;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  margin-bottom: 32px;
+}
+.hero-meta span::before { content: "—"; margin-right: 10px; color: var(--paper-shadow); }
+.hero-meta span:first-child::before { content: ""; margin: 0; }
+.hero h1 { font-size: 60px; font-weight: 800; word-break: keep-all; }
+.hero h1 .accent {
+  display: block; margin-top: 12px;
+  font-size: 0.55em; font-weight: 600; line-height: 1.3;
+  color: var(--primary-deep);
+}
+.hero .lede { font-size: 22px; max-width: 720px; }
+.hero-keystat {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 28px; margin: 44px 0 0; padding-top: 34px;
+  border-top: 1px dashed var(--paper-shadow);
+}
+.hero-keystat dt {
+  font-family: var(--font-sans);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--ink-mute); margin-bottom: 6px;
+}
+.hero-keystat dd {
+  margin: 0; font-family: var(--font-mono);
+  font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1;
+}
+.hero-keystat dd small { font-family: var(--font-cjk); font-size: 14px; color: var(--ink-mute); font-weight: 400; margin-left: 6px; }
+
+/* ---------- Chapter / lede / eyebrow ---------- */
+.chapter {
+  font-family: var(--font-mono);
+  font-size: 12.5px; color: var(--primary);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 0 0 10px;
+}
+.chapter::before { content: "§ "; color: var(--paper-shadow); margin-right: 4px; }
+.lede {
+  font-size: 22px; line-height: 1.6; color: var(--ink-soft);
+  margin: 0 0 28px; font-weight: 400;
+}
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--primary); margin: 0 0 14px;
+}
+
+/* ---------- Pull quote ---------- */
+.pullquote {
+  margin: 48px -16px; padding: 32px 40px;
+  font-family: var(--font-cjk);
+  font-size: 27px; line-height: 1.5; font-weight: 600;
+  color: var(--primary-deep);
+  border-left: 5px solid var(--primary);
+  background: linear-gradient(90deg, var(--primary-bg) 0%, transparent 100%);
+}
+.pullquote.bronze {
+  color: var(--accent-deep); border-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-bg) 0%, transparent 100%);
+}
+.pullquote.terra {
+  color: var(--warm-deep); border-color: var(--warm);
+  background: linear-gradient(90deg, var(--warm-bg) 0%, transparent 100%);
+}
+.pullquote cite {
+  display: block; margin-top: 16px; font-style: normal; font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  letter-spacing: 0.06em;
+}
+.pullquote cite::before { content: "— "; }
+
+/* ---------- English quote ---------- */
+.quote-en {
+  margin: 28px 0;
+  font-family: var(--font-sans); font-style: italic;
+  font-size: 21px; line-height: 1.5; color: var(--ink);
+  padding-left: 20px; border-left: 3px solid var(--accent);
+}
+.quote-en .zh {
+  display: block; margin-top: 10px;
+  font-family: var(--font-cjk); font-style: normal;
+  font-size: 15px; color: var(--ink-soft); line-height: 1.6;
+}
+
+/* ---------- Story ---------- */
+.story {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 14px;
+  padding: 38px 44px; margin: 48px 0;
+  position: relative;
+}
+.story::before {
+  content: "❝"; position: absolute; top: -6px; left: 24px;
+  font-size: 72px; color: var(--warm); line-height: 1;
+  font-family: var(--font-sans);
+}
+.story .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.18em;
+  color: var(--warm); margin-bottom: 10px; padding-left: 42px;
+}
+.story h4 { margin: 0 0 16px; font-size: 22px; color: var(--warm-deep); }
+.story p { margin-bottom: 14px; font-size: 17px; line-height: 1.7; }
+.story p:last-child { margin-bottom: 0; }
+
+/* ---------- Explain ---------- */
+.explain {
+  background: var(--primary-bg);
+  border-left: 4px solid var(--primary);
+  border-radius: 4px;
+  padding: 26px 30px; margin: 36px 0;
+  font-family: var(--font-cjk); position: relative;
+}
+.explain.bronze { background: var(--accent-bg); border-color: var(--accent); }
+.explain.terra { background: var(--warm-bg); border-color: var(--warm); }
+.explain.stone { background: var(--stone-bg); border-color: var(--stone); }
+.explain .label {
+  position: absolute; top: -12px; left: 16px;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.15em; padding: 4px 12px;
+  border-radius: 3px; text-transform: uppercase;
+}
+.explain.bronze .label { background: var(--accent); }
+.explain.terra .label { background: var(--warm); }
+.explain.stone .label { background: var(--stone); }
+.explain h4 { margin: 4px 0 12px; font-size: 19px; color: var(--primary-deep); }
+.explain.bronze h4 { color: var(--accent-deep); }
+.explain.terra h4 { color: var(--warm-deep); }
+.explain.stone h4 { color: var(--ink); }
+.explain p { font-size: 16.5px; }
+.explain p:last-child { margin-bottom: 0; }
+.explain ul, .explain ol { margin: 8px 0 0; padding-left: 22px; }
+.explain li { margin-bottom: 6px; font-size: 16px; }
+.explain code { background: rgba(255,255,255,0.75); }
+
+/* ---------- Stat grid ---------- */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.stat-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 28px 24px; text-align: center;
+  border-top: 4px solid var(--primary);
+}
+.stat-card.bronze { border-color: var(--accent); }
+.stat-card.terra { border-color: var(--warm); }
+.stat-card.danger { border-color: var(--danger); }
+.stat-card .big {
+  font-family: var(--font-mono);
+  font-size: 46px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1; margin-bottom: 10px;
+}
+.stat-card.bronze .big { color: var(--accent-deep); }
+.stat-card.terra .big { color: var(--warm-deep); }
+.stat-card.danger .big { color: var(--danger); }
+.stat-card .big small { font-family: var(--font-cjk); font-size: 16px; opacity: 0.75; margin-left: 4px; font-weight: 500; }
+.stat-card .label {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.stat-card .note { margin-top: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.55; }
+
+/* ---------- Compare table ---------- */
+.table-scroll { overflow-x: auto; margin: 36px 0; }
+.compare {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-cjk); font-size: 15.5px;
+  background: var(--paper-soft);
+  border-radius: 10px; overflow: hidden;
+  min-width: 560px;
+}
+.compare th, .compare td {
+  padding: 15px 18px; text-align: left;
+  border-bottom: 1px solid var(--paper-shadow);
+  vertical-align: top; line-height: 1.6;
+}
+.compare th {
+  background: var(--primary-deep); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+}
+.compare tr:last-child td { border-bottom: none; }
+.compare td:first-child { font-weight: 700; color: var(--primary-deep); width: 24%; }
+.compare .id { font-family: var(--font-mono); font-size: 13px; display: block; color: var(--ink-mute); font-weight: 500; margin-bottom: 2px; }
+.compare .yes { color: var(--accent-deep); font-weight: 700; }
+.compare .no { color: var(--danger); font-weight: 700; }
+
+/* ---------- Value cards ---------- */
+.values {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.value-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 26px 24px;
+  border-top: 5px solid var(--primary);
+}
+.value-card:nth-child(2) { border-top-color: var(--accent); }
+.value-card:nth-child(3) { border-top-color: var(--warm); }
+.value-card:nth-child(4) { border-top-color: var(--primary-deep); }
+.value-card:nth-child(5) { border-top-color: var(--stone); }
+.value-card .num {
+  font-family: var(--font-mono);
+  font-size: 38px; font-weight: 700;
+  color: var(--primary); line-height: 1; margin-bottom: 12px;
+}
+.value-card:nth-child(2) .num { color: var(--accent); }
+.value-card:nth-child(3) .num { color: var(--warm); }
+.value-card:nth-child(4) .num { color: var(--primary-deep); }
+.value-card:nth-child(5) .num { color: var(--stone); }
+.value-card .tag {
+  display: inline-block; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--primary); margin-bottom: 10px;
+}
+.value-card:nth-child(2) .tag { color: var(--accent); }
+.value-card:nth-child(3) .tag { color: var(--warm); }
+.value-card:nth-child(4) .tag { color: var(--primary-deep); }
+.value-card h4 { margin: 0 0 10px; font-size: 19px; line-height: 1.4; }
+.value-card p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin: 0; }
+
+/* ---------- 擴充檢查卡（附成本標籤） ---------- */
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px; margin: 40px 0;
+}
+.card {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 12px;
+  padding: 24px 24px 22px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.card .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card h4 { margin: 0; font-size: 18.5px; line-height: 1.4; }
+.card p { margin: 0; font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); }
+.card .signal { font-family: var(--font-mono); font-size: 12.5px; color: var(--primary-deep); background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 6px; padding: 6px 10px; margin-top: 4px; overflow-x: auto; white-space: nowrap; }
+.pill {
+  flex: none; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px;
+}
+.pill.fast { background: var(--accent-bg); color: var(--accent-deep); }
+.pill.mid { background: var(--warm-bg); color: var(--warm-deep); }
+.pill.slow { background: var(--danger-bg); color: var(--danger); }
+
+/* ---------- Thought ---------- */
+.thought {
+  background: var(--accent-bg);
+  border-left: 4px solid var(--accent);
+  padding: 26px 30px; margin: 40px 0;
+  border-radius: 4px; position: relative;
+}
+.thought .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--accent-deep); margin-bottom: 10px;
+}
+.thought h4 { font-size: 19px; margin: 0 0 14px; color: var(--accent-deep); line-height: 1.45; }
+.thought p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin-bottom: 8px; }
+.thought .hint {
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px dashed rgba(13, 82, 54, 0.3);
+  font-size: 14px; color: var(--accent-deep);
+}
+.thought .hint::before { content: "建議方向："; font-weight: 700; }
+
+/* ---------- Code block ---------- */
+.codeblock { margin: 30px 0; }
+.codeblock .file {
+  display: inline-block; font-family: var(--font-mono);
+  font-size: 12px; color: var(--ink-mute);
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow); border-bottom: none;
+  border-radius: 8px 8px 0 0; padding: 7px 14px;
+}
+pre.code {
+  margin: 0; background: var(--code-bg); color: var(--code-ink);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65;
+  padding: 22px 24px; border-radius: 0 10px 10px 10px;
+  overflow-x: auto; tab-size: 2; white-space: pre;
+}
+pre.code.solo { border-radius: 10px; }
+pre.code .c { color: var(--code-mute); }
+pre.code .k { color: var(--code-blue); }
+pre.code .s { color: var(--code-green); }
+pre.code .a { color: var(--code-amber); font-weight: 700; }
+
+/* ---------- Flow（eval 迴圈圖） ---------- */
+.flow { display: flex; align-items: stretch; margin: 40px 0; }
+.flow-step {
+  flex: 1 1 0; min-width: 0;
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow);
+  border-radius: 10px; padding: 18px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.flow-step .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--primary); letter-spacing: 0.1em; }
+.flow-step strong { font-size: 17px; line-height: 1.3; }
+.flow-step span.d { font-size: 14px; line-height: 1.55; color: var(--ink-soft); }
+.flow-step.score { border-color: var(--accent); background: var(--accent-bg); }
+.flow-step.score .k { color: var(--accent-deep); }
+.flow-arrow { flex: none; width: 30px; position: relative; }
+.flow-arrow::before {
+  content: ""; position: absolute; top: 50%; left: 2px; right: 2px; height: 2px;
+  background: var(--primary); transform: translateY(-50%);
+}
+.flow-arrow::after {
+  content: ""; position: absolute; top: 50%; right: 4px; width: 9px; height: 9px;
+  border-top: 2px solid var(--primary); border-right: 2px solid var(--primary);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+/* ---------- Cascade（編號步驟） ---------- */
+.cascade { display: flex; flex-direction: column; gap: 14px; margin: 32px 0; }
+.cascade-step {
+  display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px;
+}
+.cascade-step .n {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-mono); font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.cascade-step .t { font-size: 16.5px; line-height: 1.65; }
+.cascade-step .t strong { display: block; margin-bottom: 2px; }
+
+/* ---------- Checklist ---------- */
+.checklist { list-style: none; padding: 0; margin: 32px 0; display: flex; flex-direction: column; gap: 12px; }
+.checklist li {
+  display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px; margin: 0;
+  font-size: 16.5px; line-height: 1.65;
+}
+.checklist .box {
+  width: 24px; height: 24px; margin-top: 3px;
+  border: 2px solid var(--accent); border-radius: 6px; background: var(--paper);
+}
+.checklist strong { display: block; }
+.checklist small { display: block; color: var(--ink-soft); font-size: 15px; }
+
+/* ---------- Glossary ---------- */
+.glossary { background: var(--primary-deep); color: var(--paper); padding-block: 64px; }
+.glossary h2 { color: var(--paper); margin-top: 0; }
+.glossary .eyebrow { color: var(--accent-bg); }
+.glossary .lede { color: var(--paper); opacity: 0.8; }
+.glossary-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 26px; margin: 42px 0 0;
+}
+.term { border-top: 2px solid var(--accent); padding-top: 16px; }
+.term:nth-child(3n+2) { border-color: var(--warm); }
+.term:nth-child(3n+3) { border-color: var(--paper); }
+.term dt {
+  font-family: var(--font-mono);
+  font-size: 14px; font-weight: 700;
+  color: var(--accent-bg); letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+.term .zh-name { font-family: var(--font-cjk); font-size: 16px; font-weight: 600; color: var(--paper); margin-bottom: 8px; display: block; }
+.term dd { margin: 0; font-family: var(--font-cjk); font-size: 14.5px; line-height: 1.65; color: rgba(255, 255, 255, 0.8); }
+
+/* ---------- TOC ---------- */
+.toc {
+  position: fixed; right: 24px; top: 50%; transform: translateY(-50%); z-index: 10;
+  font-family: var(--font-sans); font-size: 12px;
+  background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 10px;
+  padding: 18px 20px; max-width: 236px;
+  box-shadow: 0 4px 18px rgba(18, 24, 33, 0.08);
+}
+.toc h5 { margin: 0 0 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-mute); }
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc -1; }
+.toc li { margin-bottom: 6px; counter-increment: toc; font-size: 12px; line-height: 1.45; display: flex; gap: 8px; }
+.toc li::before { content: counter(toc, decimal-leading-zero); font-family: var(--font-mono); color: var(--ink-mute); font-size: 10.5px; padding-top: 2px; }
+.toc a { color: var(--ink-soft); text-decoration: none; }
+.toc a:hover { color: var(--primary); }
+@media (max-width: 1340px) { .toc { display: none; } }
+
+/* ---------- Footer ---------- */
+footer {
+  padding-block: 48px 64px;
+  background: var(--paper-soft);
+  text-align: center;
+  font-family: var(--font-cjk);
+  font-size: 13.5px; color: var(--ink-mute);
+}
+footer p { margin: 0 0 8px; }
+footer .credit { font-family: var(--font-sans); }
+footer .disclaimer { margin-top: 14px; font-size: 12px; opacity: 0.75; max-width: 640px; margin-inline: auto; }
+
+/* ---------- 響應式 ---------- */
+@media (max-width: 768px) {
+  body { font-size: 17px; }
+  .hero { padding-block: 56px 42px; }
+  .hero h1 { font-size: 36px; }
+  .hero .lede { font-size: 18px; }
+  h2 { font-size: 27px; }
+  h3 { font-size: 22px; }
+  section { padding-block: 46px; }
+  .lede { font-size: 19px; }
+  .pullquote { font-size: 21px; margin: 34px 0; padding: 24px; }
+  .story { padding: 30px 24px; }
+  .stat-card .big { font-size: 36px; }
+  .flow { flex-direction: column; }
+  .flow-arrow { width: auto; height: 30px; }
+  .flow-arrow::before { top: 2px; bottom: 2px; left: 50%; right: auto; width: 2px; height: auto; transform: translateX(-50%); }
+  .flow-arrow::after { top: auto; bottom: 4px; left: 50%; right: auto; transform: translateX(-50%) rotate(135deg); }
+  .compare td:first-child { width: auto; }
+}
+
+/* ---------- 列印 ---------- */
+@media print {
+  .toc { display: none; }
+  body { font-size: 12pt; }
+  .hero, .glossary {
+    color: var(--ink) !important; background: white !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .glossary h2, .glossary .term dt, .glossary .lede, .glossary .term .zh-name { color: var(--ink) !important; }
+  .glossary .term dd { color: var(--ink-soft) !important; }
+  pre.code { background: #f3f5f8 !important; color: #121821 !important; border: 1px solid #ccd; white-space: pre-wrap; }
+  pre.code .c, pre.code .k, pre.code .s, pre.code .a { color: inherit !important; }
+  section { page-break-inside: avoid; }
+}
+
+/* ---------- 整合版：模式列、圖卡帶、燈箱 ---------- */
+.modebar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; padding: 10px var(--gutter); background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--paper-shadow); font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.modebar .brand { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.modebar .left { display: flex; align-items: center; gap: 14px; }
+.modebar .homelink { font-size: 12px; font-weight: 600; color: var(--ink-mute); text-decoration: none; }
+.modebar .homelink:hover { color: var(--primary); text-decoration: underline; }
+.modebar .switch { display: flex; gap: 6px; }
+.modebar button { font: inherit; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.modebar button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+.modebar button:focus-visible, .cardlabel .zoom:focus-visible, .lightbox .close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.modebar .canvaslink { font-size: 12px; color: var(--ink-mute); }
+.cardband { max-width: 1600px; margin: 4px auto 40px; padding: 0 var(--gutter); }
+.cardlabel { display: flex; align-items: baseline; gap: 14px; padding: 0 2px 8px; font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.cardlabel .n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--warm); }
+.cardlabel .zoom { margin-left: auto; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--paper-shadow); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; font-size: 16px; color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(18, 24, 33, 0.86); display: none; align-items: center; justify-content: center; padding: 24px; }
+.lightbox.open { display: flex; }
+.lightbox .frame { border: none; border-radius: 8px; max-width: none; width: auto; flex: none; }
+.lightbox .close { position: absolute; top: 14px; right: 18px; font: inherit; font-family: var(--font-sans); font-size: 13px; color: #FFFFFF; background: transparent; border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.faq { margin: 36px 0 8px; padding: 0; }
+.faq > div { padding: 18px 0; border-top: 1px solid var(--paper-shadow); }
+.faq > div:last-child { border-bottom: 1px solid var(--paper-shadow); }
+.faq dt { margin: 0 0 6px; font-weight: 700; font-size: 17px; color: var(--ink); }
+.faq dt::before { content: "問"; display: inline-block; margin-right: 10px; padding: 1px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; color: #FFFFFF; background: var(--primary); vertical-align: 2px; }
+.faq dd { margin: 0; font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+body.mode-cards section .prose { display: none; }
+body.mode-cards section.nocard { display: none; }
+body.mode-cards section { padding-block: 44px; }
+body.mode-cards .toc li.nocard { display: none; }
+@media (max-width: 768px) { .cardband { margin-bottom: 32px; } .modebar { font-size: 12px; } }
+@media print {
+  .modebar, .lightbox, .cardlabel .zoom { display: none !important; }
+  body.mode-cards section .prose { display: block !important; }
+  body.mode-cards section.nocard { display: block !important; }
+  section { page-break-inside: auto; }
+  .cardband, .story, .explain, .thought, .stat-grid, .values, .cards, .table-scroll { page-break-inside: avoid; }
+  .frame { height: auto !important; border: none; border-radius: 0; }
+  .frame > div { transform: none !important; zoom: 0.44; }
+}
+
+</style>
+</head>
+<body>
+<div class="modebar">
+  <div class="left"><a class="homelink" href="../../">← 首頁</a><span class="brand">ColBERT · 圖卡 + 教材</span></div>
+  <div class="switch" role="group" aria-label="閱讀模式">
+    <button type="button" data-mode="full" aria-pressed="true">圖卡＋詳解</button>
+    <button type="button" data-mode="cards" aria-pressed="false">只看圖卡</button>
+  </div>
+  <a class="canvaslink" href="cards.html">圖卡連續閱讀版</a>
+</div>
+<nav class="toc" aria-label="目錄">
+  <h5>目錄</h5>
+  <ol>
+    <li class="nocard"><a href="#prologue">為什麼在 RAG 這一講讀它</a></li>
+    <li><a href="#tradeoff">BERT 準但慢</a></li>
+    <li><a href="#paradigms">四種比對範式</a></li>
+    <li><a href="#related">相關工作的位置</a></li>
+    <li><a href="#maxsim">MaxSim 怎麼算分</a></li>
+    <li><a href="#encoders">查詢與文件編碼器</a></li>
+    <li><a href="#indexing">離線建索引</a></li>
+    <li><a href="#reranking">重排前 k 名</a></li>
+    <li><a href="#end-to-end">全庫端到端檢索</a></li>
+    <li class="nocard"><a href="#setup">實驗設定</a></li>
+    <li><a href="#rerank-results">重排：成本與效果</a></li>
+    <li><a href="#e2e-results">端到端：召回</a></li>
+    <li><a href="#ablation">消融實驗</a></li>
+    <li><a href="#takeaways">結論與代價</a></li>
+    <li class="nocard"><a href="#glossary">名詞速查</a></li>
+  </ol>
+</nav>
+<header class="hero">
+  <div class="container">
+    <div class="hero-meta">
+      <span>arXiv · 2020-04-27（v2 2020-06-04）</span>
+      <span>研究論文（Stanford，SIGIR 2020）</span>
+      <span>作者 Omar Khattab、Matei Zaharia</span>
+    </div>
+    <p class="eyebrow">COLBERT · LATE INTERACTION OVER BERT · 圖卡＋教材整合版</p>
+    <h1>把互動延到最後一步， BERT 也能即時檢索<span class="accent">ColBERT：查詢和文件各自編碼，最後才用 MaxSim 比對</span></h1>
+    <p class="lede">BERT 重排器讓段落檢索的準確度大幅提高，代價是每次查詢都要把上千份候選文件逐一和查詢接在一起送進 BERT，延遲以萬毫秒計。這篇論文提出 late interaction：查詢和文件各自編成一袋詞向量，文件那一側可以離線先算好；查詢來了，只讓每個查詢向量去找文件裡最像的向量，再把這些最大相似度加總。在 MS MARCO 上，它的重排效果和 BERT 相當、延遲少 170 倍以上，而且能用向量索引直接從 880 萬段落裡檢索。每章開頭先放一張圖解卡講重點，往下是詳細作法；想速讀就切到「只看圖卡」。</p>
+    <dl class="hero-keystat">
+      <div><dt>重排延遲</dt><dd>61<small>毫秒 · <span style="white-space:nowrap;">BERT-base</span> 是 10,700</small></dd></div>
+      <div><dt>每次查詢的 FLOPs</dt><dd>7B<small>· <span style="white-space:nowrap;">BERT-base</span> 是 97T，差 13,900 倍</small></dd></div>
+      <div><dt>全庫檢索 MRR@10</dt><dd>36.0<small>· Anserini 的 BM25 是 18.7</small></dd></div>
+      <div><dt>前 50 名召回</dt><dd>82.9<small>% · 官方 BM25 前 1000 名是 81.4%</small></dd></div>
+    </dl>
+  </div>
+</header>
+
+
+<section id="prologue" data-toc="為什麼在 RAG 這一講讀它" class="nocard">
+  <div class="container">
+    <p class="chapter">Prologue · 整理者的引言</p>
+    <h2>在 bi-encoder 與 cross-encoder 之間，還有 late interaction</h2>
+    <p class="lede">CS 329Z 第二週的 RAG 那一講，講 grounding 與幻覺、embedding 與向量庫、切塊、混合搜尋，也講 cross-encoder 與 late interaction。這篇 2020 年的論文，就是 late interaction 的出處。</p>
+
+    <p>RAG 的檢索器決定生成模型看得到哪些文字；沒被撈進候選的段落，後面的模型再強也用不上。課堂上常見的兩種檢索工具，剛好對到這篇論文圖 2 裡的兩種範式。一種是 bi-encoder：查詢和段落各自壓成一個向量存進向量庫，用相似度找近鄰，便宜但比對得粗。另一種是 cross-encoder：把查詢和段落接成一串送進同一個模型，準，但每一對候選都要重跑一次，所以只拿來重排另一個檢索器撈出的候選。ColBERT 走中間：每個詞保留一個向量，查詢和文件各自編碼，最後才用一個便宜的運算讓兩邊互動。</p>
+    <p>要先說清楚兩件事。第一，bi-encoder、cross-encoder 是今天的說法，論文用的是 representation-focused 與 all-to-all interaction，這裡的對應是整理者加的。第二，這篇論文講的是段落檢索（passage search），沒有提到 RAG；它和 RAG 的連結是課程安排與整理者的讀法，會在序章和結論章標明。</p>
+    <p>讀論文和讀部落格文章不一樣，這一頁的處理方式也不同。章節跟著論文的論證走，不跟著節號走：第 1 到 3 章是問題與定位，第 4 到 8 章是模型與三種用法（建索引、重排、全庫檢索），第 9 到 12 章是實驗，最後一章是結論與代價；方法裡的建索引（第 3.4 節）和實驗裡的建索引成本（第 4.5 節）併成同一章。頁面上的數字只用論文正文與表 1 到表 4 寫出來的；圖 1、圖 4 的點只標了名稱或 k，圖 5、圖 6 的長條沒有標數字，這裡都不替它們補數字。哪些歸納是整理者的，每張圖卡的腳註都會說。</p>
+
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>先把幾個名詞對齊</h4>
+      <ul>
+        <li><strong>段落檢索（passage search）</strong>：從幾百萬到上千萬段文字裡，找出和一條查詢最相關的前幾段。論文主要的資料集 MS MARCO 有 880 萬段落，查詢來自 Bing 的真實使用者。</li>
+        <li><strong>重排（re-ranking）與全庫檢索（end-to-end retrieval）</strong>：重排是拿另一個模型（通常是 BM25）撈出的前 1000 名重新排序；全庫檢索是自己從整個集合裡取前 k 名。</li>
+        <li><strong>MRR@10</strong>：看每條查詢的第一個相關段落排在第幾名，取倒數，前 10 名以外算 0，再對所有查詢平均。論文把它寫成百分比，例如 34.9。</li>
+        <li><strong>上下文向量（contextualized embedding）</strong>：BERT 為輸入的每個詞各產生一個向量，同一個詞在不同句子裡得到的向量不一樣。</li>
+        <li><strong>bi-encoder／cross-encoder</strong>（整理者加的對應）：前者查詢和文件各自編碼、各一個向量；後者把兩者接在一起送進同一個模型打分。</li>
+      </ul>
+    </div>
+
+    <div class="pullquote">
+      文件越早算好越便宜，互動越晚發生越便宜；ColBERT 兩件事都做到，代價是每個詞都要存一個向量。
+      <cite>整理者的引言</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="tradeoff" data-toc="BERT 準但慢">
+  <div class="container head">
+    <p class="chapter">Chapter 01 · Introduction</p>
+    <h2>BERT 把排序變準，也讓每次查詢慢了上萬毫秒</h2>
+    <p class="lede">在 MS MARCO 上，BERT 重排器比先前最好的方法高出將近 7% 的 MRR@10；但它得把每一份候選和查詢一起送進 BERT，單張 V100 上重排一次查詢要一萬多毫秒。</p>
+    
+  </div>
+  <div class="cardband" id="card-02"><div class="cardlabel"><span class="n">圖卡 02 / 13</span><span class="t">BERT 準但慢：兩條量尺上的位置</span><button type="button" class="zoom" data-card="02">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">BERT 把排序變準，也把延遲拉到上萬毫秒</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 1：重排 MS MARCO 官方 BM25 的前 1000 名。上列是效果（MRR@10，Dev），下列是單張 V100 上的重排延遲（對數量尺）</div>
+
+  <div style="position:absolute; left:60px; top:150px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#6B7380;"></div>BM25（被重排的候選來源）</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>非 BERT 的神經重排器</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>BERT 重排器</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>ColBERT</div>
+    <div style="color:#8A93A0;">fT = fastText</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:226px; font-size:18px; font-weight:700; color:#1C2431;">效果</div>
+  <div style="position:absolute; left:60px; top:252px; font-size:12px; color:#8A93A0;">MRR@10（Dev）</div>
+  <div style="position:absolute; left:180px; top:196px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:233px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:270px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+
+  <div style="position:absolute; left:261px; top:261px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:286px; top:260px; font-size:13px; color:#2B3340;">BM25 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">16.7</span></div>
+  <div style="position:absolute; left:424px; top:261px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:449px; top:260px; font-size:13px; color:#2B3340;">KNRM <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">19.8</span></div>
+  <div style="position:absolute; left:662px; top:261px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:687px; top:260px; font-size:13px; color:#2B3340;">Duet <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">24.3</span></div>
+  <div style="position:absolute; left:910px; top:261px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:935px; top:260px; font-size:13px; color:#2B3340;">fT+ConvKNRM <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">29.0</span></div>
+  <div style="position:absolute; left:1211px; top:224px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:996px; top:223px; width:208px; text-align:right; font-size:13px; color:#2B3340;">BERT-base 原版 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">34.7</span></div>
+  <div style="position:absolute; left:1222px; top:261px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1247px; top:260px; font-size:13px; font-weight:700; color:#2E7B4F;">ColBERT <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">34.9</span></div>
+  <div style="position:absolute; left:1280px; top:187px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1305px; top:186px; font-size:13px; color:#2B3340;">BERT-base 本文訓練 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">36.0</span></div>
+  <div style="position:absolute; left:1306px; top:224px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1331px; top:223px; font-size:13px; color:#2B3340;">BERT-large <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">36.5</span></div>
+
+  <div style="position:absolute; left:180px; top:296px; width:1320px; height:40px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:307px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">15</div>
+  <div style="position:absolute; left:432px; top:307px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">20</div>
+  <div style="position:absolute; left:696px; top:307px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">25</div>
+  <div style="position:absolute; left:960px; top:307px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">30</div>
+  <div style="position:absolute; left:1224px; top:307px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">35</div>
+  <div style="position:absolute; left:1466px; top:307px; width:30px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">40</div>
+
+  <div style="position:absolute; left:60px; top:386px; font-size:18px; font-weight:700; color:#1C2431;">延遲</div>
+  <div style="position:absolute; left:60px; top:412px; font-size:12px; color:#8A93A0;">重排毫秒數（對數）</div>
+  <div style="position:absolute; left:180px; top:382px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:419px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+
+  <div style="position:absolute; left:297px; top:410px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:322px; top:409px; font-size:13px; color:#2B3340;">KNRM <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">3</span></div>
+  <div style="position:absolute; left:525px; top:373px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:550px; top:372px; font-size:13px; color:#2B3340;">Duet <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">22</span></div>
+  <div style="position:absolute; left:553px; top:410px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:578px; top:409px; font-size:13px; color:#2B3340;">fT+ConvKNRM <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">28</span></div>
+  <div style="position:absolute; left:642px; top:373px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:667px; top:372px; font-size:13px; font-weight:700; color:#2E7B4F;">ColBERT <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">61</span></div>
+  <div style="position:absolute; left:1235px; top:410px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1260px; top:409px; font-size:13px; color:#2B3340;">BERT-base <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">10,700</span></div>
+  <div style="position:absolute; left:1364px; top:373px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1389px; top:372px; font-size:13px; color:#2B3340;">BERT-large <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">32,900</span></div>
+
+  <div style="position:absolute; left:180px; top:444px; width:1320px; height:40px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:455px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:432px; top:455px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">10</div>
+  <div style="position:absolute; left:692px; top:455px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">100</div>
+  <div style="position:absolute; left:950px; top:455px; width:44px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">1,000</div>
+  <div style="position:absolute; left:1210px; top:455px; width:52px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">10,000</div>
+  <div style="position:absolute; left:1434px; top:455px; width:60px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">100,000</div>
+
+  <div style="position:absolute; left:60px; top:506px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">只用表 1 的數字。BM25 是被重排的候選來源，表 1 沒有它的重排延遲；BERT-base 有兩列：Nogueira 與 Cho 的原版，以及作者改用 ColBERT 的損失函數重訓的版本，兩者的延遲相同。</div>
+
+  <div style="position:absolute; left:60px; top:590px; width:470px; height:200px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">BERT：準，但要一萬多毫秒</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">從 2017 年的 KNRM 到 2019 年的 BERT，MRR@10 提高超過 16%；BERT-base 每次查詢 97T FLOPs、10,700 毫秒，<span style="white-space:nowrap;">BERT-large</span> 要 32,900 毫秒。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文引用的研究：多 100 毫秒就會傷到使用者體驗與營收。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:590px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">ColBERT：34.9，61 毫秒</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">效果不輸原版 BERT-base 的 34.7，延遲少 170 倍以上、FLOPs 少 13,900 倍，也勝過所有非 BERT 的重排器。</div>
+    <div style="font-size:13px; color:#8A93A0;">它的 7B FLOPs 甚至比 Duet、fT+ConvKNRM 少。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:590px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">差距從哪裡來</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">BERT 對 1000 份候選各跑一次完整的 BERT；ColBERT 的文件向量事先算好，查詢只編碼一次，最後用 MaxSim 比。</div>
+    <div style="font-size:13px; color:#8A93A0;">機制在第 5 到 8 卡，隨 k 擴大的差距在第 10 卡。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：原文圖 1 畫的是加上 BM25 檢索時間後的延遲，點上沒有標數字；這張卡改畫表 1 的重排延遲，兩列各自一條量尺。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>論文先交代背景。過去幾年 IR 社群出現了一批神經排序模型，例如 DRMM、KNRM、Duet。它們不再依賴人工設計的特徵，而是用詞向量表示查詢和文件，直接建模兩者內容之間的局部互動。接著出現的做法是微調預訓練語言模型（ELMo、BERT）來估計相關度：語言模型為查詢與文件這一對算出深層的上下文表示，縮小查詢用詞和文件用詞對不上的問題。短短幾個月內，好幾個基於 BERT 的排序模型在多個檢索基準上拿到最好的成績，Google 與 Bing 也都把 BERT 用進了自家的搜尋服務。</p>
+    <p>代價是計算量。作者引用 Hofstätter 與 Hanbury、MacAvaney 等人的觀察：文獻裡的 BERT 排序模型比先前的模型貴 100 到 1000 倍。圖 1 把這個取捨畫在 MS MARCO 上，橫軸是 MRR@10，縱軸是每次查詢的平均延遲（對數尺度）。BERT 讓 MRR@10 比先前最好的方法高出將近 7%，即使用高階 GPU，延遲也多了最多上萬毫秒。作者引用 Kohavi 等人的研究說明這為什麼嚴重：查詢回應時間只要多 100 毫秒，就會影響使用者體驗，甚至可以量到營收下降。</p>
+
+    <div class="stat-grid">
+      <div class="stat-card"><div class="big">10,700<small>毫秒</small></div><div class="label">BERT-base 重排一次查詢</div><div class="note">表 1：單張 V100，重排 BM25 的前 1000 名</div></div>
+      <div class="stat-card bronze"><div class="big">61<small>毫秒</small></div><div class="label">ColBERT 在同樣條件下</div><div class="note">MRR@10 34.9，原版 BERT-base 是 34.7</div></div>
+      <div class="stat-card"><div class="big">100<small>毫秒</small></div><div class="label">就足以影響使用者體驗</div><div class="note">原文引用 Kohavi 等人 2013 年的線上實驗研究</div></div>
+    </div>
+
+    <p>已經有人試著用 NLU 技術去增強傳統的 BM25，而不是整個換成 BERT。doc2query 在建索引之前，用模型為每份文件生成可能的查詢、接到文件後面；DeepCT 用 BERT 估計每個詞的重要性，取代 BM25 原本的詞頻。這些做法確實把延遲壓了下來，但相對 BERT，精準度明顯掉了一截。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>怎麼讀圖 1</h4>
+      <p>圖 1 的點分成五類：詞袋模型（BM25）、用 NLU 增強的詞袋模型（doc2query、DeepCT、docTTTTTquery）、神經比對模型（KNRM、Duet、fT+ConvKNRM）、深度語言模型（BERT-base、BERT-large），以及 ColBERT 的兩種用法。ColBERT（重排）、神經比對模型與 BERT 都是重排 MS MARCO 官方 BM25 的前 1000 名；其他方法，包括 ColBERT（全庫檢索），是直接從整個集合取前 1000 名。圖上的點沒有標數字，而且畫的是加上 BM25 檢索時間之後的延遲，所以圖卡改畫表 1 裡只算重排的延遲，兩列各自一條量尺。</p>
+    </div>
+
+    <p>圖卡把這張圖拆成「效果」與「延遲」兩列來看：在效果那一列，ColBERT 和 BERT 擠在右邊；在延遲那一列，它和非 BERT 的模型擠在左邊。接下來三章講它憑什麼做得到：第 2 章是想法，第 3 章是它在文獻裡的位置，第 4 章是分數的算法。</p>
+  </div>
+</section>
+
+
+<section id="paradigms" data-toc="四種比對範式">
+  <div class="container head">
+    <p class="chapter">Chapter 02 · Introduction: the late interaction paradigm</p>
+    <h2>查詢和文件分開編碼，把互動延到最後一步</h2>
+    <p class="lede">互動型模型比得細、效果好，表示型模型能把文件先算好、查詢時省計算。作者的觀察是兩者可以兼得：保留互動，但把它延後到最後，而且做得很便宜。</p>
+    
+  </div>
+  <div class="cardband" id="card-03"><div class="cardlabel"><span class="n">圖卡 03 / 13</span><span class="t">四種比對範式：延後但保留互動</span><button type="button" class="zoom" data-card="03">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">互動可以延後，但不能拿掉</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 2 的四種比對範式：表示型能先算好文件，但比得太粗；互動型比得細，卻得每一對重算。late interaction 兩邊都要</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:300px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">範式</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">查詢和文件在哪裡相遇</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">文件表示能離線先算？</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">詞對詞的細粒度比對？</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">能用索引直接從全庫取？</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">(a) 表示型</div><div style="font-size:13px; color:#8A93A0;">例：DSSM、SNRM</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">各自壓成一個向量，比一次相似度</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2E7B4F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">可以，這是它的長處</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C8501F" stroke-width="3" stroke-linecap="round" style="flex-shrink:0;"><path d="M6 6l12 12M18 6L6 18"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">一個向量要裝下整份文件</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2E7B4F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">SNRM 用倒排索引做到</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:306px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">(b) 查詢-文件互動</div><div style="font-size:13px; color:#8A93A0;">例：DRMM、KNRM、Conv-KNRM</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">詞和詞兩兩算相似度，再交給 CNN 或 kernel</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C8501F" stroke-width="3" stroke-linecap="round" style="flex-shrink:0;"><path d="M6 6l12 12M18 6L6 18"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">每一對都要跑比對網路</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2E7B4F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">詞對詞的互動矩陣</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C8501F" stroke-width="3" stroke-linecap="round" style="flex-shrink:0;"><path d="M6 6l12 12M18 6L6 18"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">只能重排別人撈的候選</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:402px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">(c) 全對全互動</div><div style="font-size:13px; color:#8A93A0;">例：BERT 重排器</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">接成一串，一起過 BERT 的每一層</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C8501F" stroke-width="3" stroke-linecap="round" style="flex-shrink:0;"><path d="M6 6l12 12M18 6L6 18"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">每份候選重跑整個 BERT</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2E7B4F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">兩邊內外同時互動</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C8501F" stroke-width="3" stroke-linecap="round" style="flex-shrink:0;"><path d="M6 6l12 12M18 6L6 18"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">只能重排別人撈的候選</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:498px; width:1480px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:0px 0px 8px 8px; display:grid; grid-template-columns:300px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#2E7B4F;">(d) late interaction</div><div style="font-size:13px; color:#8A93A0;">ColBERT</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">各自編成一袋向量，最後才用 MaxSim</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2E7B4F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">文件向量離線編好</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2E7B4F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">每個查詢向量找最像的文件向量</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2E7B4F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">MaxSim 能剪枝，接 faiss</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">表示型：快，但比得太粗</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">整份文件壓成一個向量，查詢裡每個詞在意的地方被攤平。第 12 卡的單一向量版本 [A] 明顯不如 ColBERT。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">SNRM 用稀疏向量接倒排索引，效果被大幅超過。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">互動型：準，但每一對都要重算</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">要同時看到查詢和文件才能開始算，文件沒辦法事先準備；BERT 還要對每份候選跑完 12 層。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">原文：互動型在 IR 任務上通常比較好。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">late interaction：延後，但保留</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">文件離線編好；查詢來了只編查詢，再讓每個查詢向量去找文件裡最像的那一個，把分數加總。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">MaxSim 便宜又能剪枝：見第 5、9 卡。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：四欄的 ✓／✗ 是整理者依第 1、2 節的描述歸納的；原文的圖 2 只畫結構，沒有打勾。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>作者用圖 2 的四張示意圖，說明神經排序模型讓查詢和文件在哪裡相遇。(a) 到 (c) 是既有的做法，架構一個比一個有表現力；(d) 是這篇提出的做法：</p>
+
+    <div class="values">
+      <div class="value-card"><span class="tag">(a) 表示型</span><h4>各自一個向量</h4><p>查詢和文件各自算出一個向量，相關度就是這兩個向量的相似度。圖上的例子是 DSSM 與 SNRM。</p></div>
+      <div class="value-card"><span class="tag">(b) 查詢-文件互動</span><h4>先建互動矩陣</h4><p>算出查詢每個詞和文件每個詞的相似度矩陣，再交給 CNN、MLP 或 kernel 找配對訊號。例子是 DRMM、KNRM、Conv-KNRM。</p></div>
+      <div class="value-card"><span class="tag">(c) 全對全互動</span><h4>接成一串進 BERT</h4><p>查詢和文件一起送進 transformer，詞與詞的互動同時發生在兩者內部與兩者之間。例子是 BERT 重排器。</p></div>
+      <div class="value-card"><span class="tag">(d) late interaction</span><h4>各自編碼，最後互動</h4><p>兩邊各用 BERT 編成一袋上下文向量，每個查詢向量透過 MaxSim 和所有文件向量互動，再把結果加總。這是 ColBERT。</p></div>
+    </div>
+
+    <p>這幾種設計彼此拉扯。互動型的 (b)、(c) 在 IR 任務上通常比較好；表示型的 (a) 把查詢和文件的計算隔開，文件的表示就能離線先算，每次查詢的負擔大幅減少。作者的關鍵觀察是兩者的優點可以結合，做法是保留互動、但把它延後：</p>
+
+    <div class="quote-en">
+      "retaining yet judiciously delaying the query–document interaction"
+      <span class="zh">「保留查詢與文件的互動，但審慎地把它延後」：第 1 節對 late interaction 的描述。</span>
+    </div>
+
+    <p>延後之後有三個好處。第一，文件的編碼可以搬到離線。第二，查詢只需要編碼一次，這個成本分攤到所有被排序的文件上。第三，MaxSim 這種互動可以搭配向量相似度索引，直接從大型集合取前 k 名；和只重排詞袋模型撈出的結果相比，召回會好很多。ColBERT 這個名字也由此而來：contextualized late interaction over BERT。</p>
+    <p>第 3 節開頭再補了一句定位：late interaction 的框架不限於 BERT，CNN、RNN 或其他 transformer 都能套。作者選 BERT，是因為它效果最好，計算也最貴，最需要這個框架。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>和今天的名詞對起來</h4>
+      <p>整理者的對應：(a) 的單一向量模型，就是現在向量庫背後常見的 bi-encoder；(c) 就是課程說的 cross-encoder，常用來重排。(d) 保留每個詞一個向量，位置在兩者之間。論文寫於 2020 年，沒有用這兩個名詞；第 12 章的消融實驗 [A] 其實就是一個 BERT 版的單一向量模型，可以直接看它和 late interaction 差多少。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="related" data-toc="相關工作的位置">
+  <div class="container head">
+    <p class="chapter">Chapter 03 · Related Work</p>
+    <h2>準的模型只能重排，能全庫檢索的模型不夠準</h2>
+    <p class="lede">BERT 重排器最準但最慢；非 BERT 的神經模型和同期的 TK 便宜一些，一樣只能重排；doc2query、DeepCT 這類把計算搬到離線、最後交給 BM25，快卻不夠準。ColBERT 要占的是剩下那一格。</p>
+    
+  </div>
+  <div class="cardband" id="card-04"><div class="cardlabel"><span class="n">圖卡 04 / 13</span><span class="t">相關工作：準的只能重排</span><button type="button" class="zoom" data-card="04">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">準的只能重排，能全庫檢索的不夠準</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2 節提到的方法，依「能不能直接從全庫檢索」與「效果到不到 BERT 的水準」分成四格；ColBERT 要占的是右上那一格</div>
+
+  <div style="position:absolute; left:60px; top:166px; font-size:13px; font-weight:700; color:#6B7380;">BERT 級</div>
+  <div style="position:absolute; left:60px; top:526px; font-size:13px; font-weight:700; color:#6B7380;">非 BERT 級</div>
+  <div style="position:absolute; left:180px; top:578px; font-size:13px; font-weight:700; color:#6B7380;">只能重排</div>
+  <div style="position:absolute; left:900px; top:578px; font-size:13px; font-weight:700; color:#6B7380;">能從全庫檢索</div>
+  <div style="position:absolute; left:180px; top:606px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.1em; color:#8A93A0;">Y = MS MARCO 上的效果 &#183; X = 能不能直接從全庫檢索</div>
+
+  <div style="position:absolute; left:180px; top:170px; width:400px; height:180px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:10px; padding:20px 22px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">BERT 級 &#215; 只能重排</div>
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">BERT 重排器 &#183; duoBERT</div>
+    <div style="font-size:14px; color:#6B7380; line-height:1.5;">查詢和文件接成一串過 BERT，[CLS] 接 MLP 打分；duoBERT 再拿兩份文件互比</div>
+    <div style="margin-top:auto; align-self:flex-start; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">每次查詢上萬毫秒</div>
+  </div>
+  <div style="position:absolute; left:596px; top:170px; width:400px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:20px 22px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">BERT 級 &#215; 能從全庫檢索</div>
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">ColBERT</div>
+    <div style="font-size:14px; color:#6B7380; line-height:1.5;">文件離線編好；MaxSim 能剪枝，接 faiss 直接從全庫取；MRR@10 最高 36%</div>
+    <div style="margin-top:auto; align-self:flex-start; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">本文</div>
+  </div>
+  <div style="position:absolute; left:180px; top:366px; width:400px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:10px; padding:20px 22px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">非 BERT 級 &#215; 只能重排</div>
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">KNRM &#183; Duet &#183; ConvKNRM &#183; TK</div>
+    <div style="font-size:14px; color:#6B7380; line-height:1.5;">詞層級的互動矩陣加 kernel 或 CNN；同期的 TK 先加 Transformer 編碼</div>
+    <div style="margin-top:auto; align-self:flex-start; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">重排 BM25 的候選</div>
+  </div>
+  <div style="position:absolute; left:596px; top:366px; width:400px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:10px; padding:20px 22px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">非 BERT 級 &#215; 能從全庫檢索</div>
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">文件擴充 &#183; 稀疏表示</div>
+    <div style="font-size:14px; color:#6B7380; line-height:1.5;">doc2query、DeepCT、docTTTTTquery 最後交給 BM25；SNRM 接倒排索引</div>
+    <div style="margin-top:auto; align-self:flex-start; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">快，但精準度明顯不如 BERT</div>
+  </div>
+
+  <div style="position:absolute; left:1080px; top:170px; width:460px; height:396px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:16px;">
+    <div style="font-size:18px; font-weight:700; color:#1C2431;">怎麼讀這張圖</div>
+    <div style="display:flex; gap:14px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F; margin-top:2px;">01</div><div style="font-size:15px; color:#2B3340; line-height:1.6;">左欄是第 10 卡表 1 比的重排器，右欄是第 11 卡表 2 比的全庫檢索器；ColBERT 在兩張表各出現一次。</div></div>
+    <div style="display:flex; gap:14px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F; margin-top:2px;">02</div><div style="font-size:15px; color:#2B3340; line-height:1.6;">往上走，要付的是每次查詢都跑 BERT 的延遲；往右走，要的是能事先建成索引的表示。</div></div>
+    <div style="display:flex; gap:14px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F; margin-top:2px;">03</div><div style="font-size:15px; color:#2B3340; line-height:1.6;">壓縮、蒸餾、剪枝 BERT 仍留在左上：通用的最佳化，加速遠小於重新設計，激進時還會掉品質。</div></div>
+    <div style="margin-top:auto; font-size:13px; color:#8A93A0; line-height:1.6;">ColBERT 同時往上、往右：保留 BERT 的表示，把互動換成能剪枝的 MaxSim。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:636px; width:470px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">TK：非 BERT 最好，仍只能重排</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">在 KNRM 的 kernel pooling 前加 Transformer 做上下文編碼；最好的非集成 MRR@10 是 31%。</div>
+    <div style="font-size:13px; color:#8A93A0;">ColBERT 最高 36%，還能做 TK 不支援的端到端檢索。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:636px; width:470px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">文件擴充：NLU 搬到離線</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">doc2query 為文件生成查詢接在後面，DeepCT 用 BERT 估詞頻，docTTTTTquery 改用 T5；最後都交給 BM25。</div>
+    <div style="font-size:13px; color:#8A93A0;">第 11 卡的表 2 和它們正面比。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:636px; width:470px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">SNRM：稀疏向量接倒排索引</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">每份文件一個稀疏的高維「潛在詞」向量，能放進倒排索引做端到端檢索；效果被大幅超過。</div>
+    <div style="font-size:13px; color:#8A93A0;">ColBERT 放掉稀疏這個假設。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩條軸與四格的分法是整理者畫的；原文的相關工作分四段敘述，沒有這張圖。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M150 560V162" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M160 566H1012" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 2 節分四段回顧文獻。第一段是實驗會拿來比的神經比對模型：KNRM 在查詢和文件的互動矩陣上做可微分的 kernel pooling，抽出配對訊號；Duet 同時用精確比對和詞向量相似度兩種訊號；2018 年的 ConvKNRM 學著比對查詢與文件裡的 n-gram；fastText+ConvKNRM（簡稱 fT+ConvKNRM）改用子詞向量，處理一般詞向量表裡沒有的罕見詞。</p>
+    <p>同一段也提到 2018 年的 SNRM。它屬於表示型：每條查詢和每份文件各編成一個稀疏的高維「潛在詞」向量。向量是稀疏的，文件就能放進傳統的倒排索引，做到快速的端到端檢索。但在它評估過的資料集上，SNRM 的效果被當時最好的模型大幅超過。ColBERT 放掉稀疏這個假設；第 12 章的消融會拿一個稠密的、基於 BERT 的表示型模型和它比。</p>
+    <p>第二段是把預訓練語言模型用在 IR。常見的做法是把查詢和文件接成一對送進 BERT，在 [CLS] 輸出上接一個 MLP 產生相關分數；Nogueira 等人在 MS MARCO 與 TREC CAR 上就是這麼做的。後續的 duoBERT 讓 BERT 比較兩份文件哪一份更相關，MS MARCO 的 MRR@10 多了 1%，成本至少多 1.4 倍。第三段是 NLU 領域對 BERT 的蒸餾、壓縮與剪枝：作者認為它們是通用的最佳化，加速幅度遠小於為 IR 重新設計的架構，比較激進的做法還常常掉品質。</p>
+    <p>第四段是把昂貴的 NLU 計算搬到離線。doc2query 用 seq2seq 模型為每份文件生成固定數量的合成查詢、接到文件後面，再建 BM25 索引；DeepCT 用 BERT 依上下文估計 BM25 的詞頻成分；docTTTTTquery 和 doc2query 相同，只是生成查詢的模型換成預訓練的 T5。最後，和這篇同時發表的 TK（Transformer-Kernel）在 KNRM 的 kernel pooling 之前加上 Transformer，替查詢和文件做上下文編碼，在 MS MARCO Dev 上刷新了非 BERT 模型的紀錄；它最好的非集成 MRR@10 是 31%，ColBERT 最高到 36%。作者也指出，ColBERT 因為離線索引文件表示、用 MaxSim 互動，可以做 TK 不支援的端到端檢索。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>相關工作</th><th>代表</th><th>神經計算在哪裡做</th><th>原文對它的評價</th></tr></thead>
+        <tbody>
+          <tr><td>神經比對模型</td><td>KNRM、Duet、ConvKNRM、fT+ConvKNRM</td><td>查詢時，對每份候選</td><td>表 1 的 MRR@10 在 19.8 到 29.0 之間</td></tr>
+          <tr><td>稀疏表示</td><td>SNRM</td><td>建索引時；接倒排索引</td><td>能端到端檢索，效果被大幅超過</td></tr>
+          <tr><td>BERT 重排器</td><td>BERT-base、BERT-large、duoBERT</td><td>查詢時，每份候選跑一次 BERT</td><td>最準；比先前模型貴 100 到 1000 倍</td></tr>
+          <tr><td>壓縮 BERT</td><td>蒸餾、壓縮、剪枝</td><td>查詢時</td><td>加速遠小於重新設計，激進時掉品質</td></tr>
+          <tr><td>離線 NLU 加 BM25</td><td>doc2query、DeepCT、docTTTTTquery</td><td>建索引時；最後交給 BM25</td><td>延遲低，精準度明顯不如 BERT</td></tr>
+          <tr><td>Transformer-Kernel</td><td>TK</td><td>重排</td><td>非 BERT 最好的 31%，不支援端到端</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>圖卡把這些方法放進兩條軸：能不能直接從全庫檢索，以及效果到不到 BERT 的水準。兩條軸是整理者畫的，原文是分段敘述。這樣畫的好處是能對上後面的兩張結果表：左欄的重排器就是第 10 章表 1 比較的對象，右欄的全庫檢索器是第 11 章表 2 的對象；ColBERT 在兩張表裡各出現一次。</p>
+  </div>
+</section>
+
+
+<section id="maxsim" data-toc="MaxSim 怎麼算分">
+  <div class="container head">
+    <p class="chapter">Chapter 04 · Architecture &amp; Late Interaction</p>
+    <h2>相關度等於每個查詢向量的最佳匹配加總</h2>
+    <p class="lede">ColBERT 由查詢編碼器、文件編碼器與 late interaction 三塊組成。分數只有一行算式：每個查詢向量到文件的所有向量裡找最大相似度，再把這些最大值加起來。</p>
+    
+  </div>
+  <div class="cardband" id="card-05"><div class="cardlabel"><span class="n">圖卡 05 / 13</span><span class="t">MaxSim：每列取最大再加總</span><button type="button" class="zoom" data-card="05">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">每個查詢向量找最像的一格，再加總</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.1、3.3 節：分數是每個查詢向量對文件所有向量取最大相似度，再把這些最大值相加；互動這一步沒有要訓練的參數</div>
+
+  <div style="position:absolute; left:200px; top:150px; font-size:13px; font-weight:700; color:#4B5866;">文件 E<sub>d</sub>：每個詞一個向量（標點已濾掉） →</div>
+  <div style="position:absolute; left:60px; top:176px; width:128px; text-align:right; font-size:13px; font-weight:700; color:#4B5866;">查詢 E<sub>q</sub> ↓</div>
+
+  <div style="position:absolute; left:200px; top:178px; width:62px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">d1</div>
+  <div style="position:absolute; left:266px; top:178px; width:62px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">d2</div>
+  <div style="position:absolute; left:332px; top:178px; width:62px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">d3</div>
+  <div style="position:absolute; left:398px; top:178px; width:62px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">d4</div>
+  <div style="position:absolute; left:464px; top:178px; width:62px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">d5</div>
+  <div style="position:absolute; left:530px; top:178px; width:62px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">d6</div>
+  <div style="position:absolute; left:596px; top:178px; width:62px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">d7</div>
+  <div style="position:absolute; left:662px; top:178px; width:62px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">d8</div>
+
+  <div style="position:absolute; left:60px; top:212px; width:128px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">q1</div>
+  <div style="position:absolute; left:60px; top:258px; width:128px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">q2</div>
+  <div style="position:absolute; left:60px; top:304px; width:128px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">q3</div>
+  <div style="position:absolute; left:60px; top:350px; width:128px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">q4</div>
+  <div style="position:absolute; left:60px; top:396px; width:128px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2E7B4F;">[mask] 補位</div>
+  <div style="position:absolute; left:60px; top:442px; width:128px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2E7B4F;">[mask] 補位</div>
+
+  <div style="position:absolute; left:200px; top:200px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:266px; top:200px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:332px; top:200px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; font-weight:600; color:#FFFFFF;">max</div>
+  <div style="position:absolute; left:398px; top:200px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:464px; top:200px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:530px; top:200px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#D5DAE1;"></div>
+  <div style="position:absolute; left:596px; top:200px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:662px; top:200px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#EEF1F5;"></div>
+
+  <div style="position:absolute; left:200px; top:246px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:266px; top:246px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:332px; top:246px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:398px; top:246px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:464px; top:246px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#D5DAE1;"></div>
+  <div style="position:absolute; left:530px; top:246px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; font-weight:600; color:#FFFFFF;">max</div>
+  <div style="position:absolute; left:596px; top:246px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:662px; top:246px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+
+  <div style="position:absolute; left:200px; top:292px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#D5DAE1;"></div>
+  <div style="position:absolute; left:266px; top:292px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; font-weight:600; color:#FFFFFF;">max</div>
+  <div style="position:absolute; left:332px; top:292px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:398px; top:292px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:464px; top:292px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:530px; top:292px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:596px; top:292px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:662px; top:292px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+
+  <div style="position:absolute; left:200px; top:338px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:266px; top:338px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:332px; top:338px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:398px; top:338px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#D5DAE1;"></div>
+  <div style="position:absolute; left:464px; top:338px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:530px; top:338px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; font-weight:600; color:#FFFFFF;">max</div>
+  <div style="position:absolute; left:596px; top:338px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:662px; top:338px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#EEF1F5;"></div>
+
+  <div style="position:absolute; left:200px; top:384px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:266px; top:384px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:332px; top:384px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:398px; top:384px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:464px; top:384px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:530px; top:384px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#D5DAE1;"></div>
+  <div style="position:absolute; left:596px; top:384px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; font-weight:600; color:#FFFFFF;">max</div>
+  <div style="position:absolute; left:662px; top:384px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#EEF1F5;"></div>
+
+  <div style="position:absolute; left:200px; top:430px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:266px; top:430px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:332px; top:430px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; font-weight:600; color:#FFFFFF;">max</div>
+  <div style="position:absolute; left:398px; top:430px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:464px; top:430px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:530px; top:430px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:596px; top:430px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#D5DAE1;"></div>
+  <div style="position:absolute; left:662px; top:430px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE;"></div>
+
+  <div style="position:absolute; left:764px; top:176px; font-size:13px; font-weight:700; color:#4B5866;">每列最大值</div>
+  <div style="position:absolute; left:764px; top:207px; width:70px; height:28px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; color:#2E7B4F;">列 1</div>
+  <div style="position:absolute; left:764px; top:253px; width:70px; height:28px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; color:#2E7B4F;">列 2</div>
+  <div style="position:absolute; left:764px; top:299px; width:70px; height:28px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; color:#2E7B4F;">列 3</div>
+  <div style="position:absolute; left:764px; top:345px; width:70px; height:28px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; color:#2E7B4F;">列 4</div>
+  <div style="position:absolute; left:764px; top:391px; width:70px; height:28px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; color:#2E7B4F;">列 5</div>
+  <div style="position:absolute; left:764px; top:437px; width:70px; height:28px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; color:#2E7B4F;">列 6</div>
+
+  <div style="position:absolute; left:910px; top:308px; width:60px; height:60px; box-sizing:border-box; border-radius:50%; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:26px; font-weight:700; color:#1C2431;">Σ</div>
+  <div style="position:absolute; left:1000px; top:308px; width:170px; height:60px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:17px; font-weight:600; color:#FFFFFF;">S(q, d)</div><div style="margin-top:2px; font-size:12px; color:rgba(255,255,255,0.75);">這份文件的分數</div></div></div>
+
+  <div style="position:absolute; left:1210px; top:150px; width:330px; height:322px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 24px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-size:17px; font-weight:700; color:#1C2431;">怎麼讀這張表</div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">01</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">列是查詢的向量：實驗裡固定 32 個，這裡只畫 6 個，後兩列是補位的 [mask]。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">02</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">格子越深，內積越大；綠格是這一列的最大值，也就是這個查詢詞在文件裡最好的匹配。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">03</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">同一個文件詞可以被好幾個查詢詞選中：d6 是第 2、4 列的最大值。</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:496px; width:1110px; font-size:13px; color:#8A93A0; line-height:1.6;">式 3 的文字版：S(q, d)＝把每個查詢向量和文件所有向量的最大內積加起來。向量先正規化成長度 1，所以內積就是餘弦相似度；作者也試了平方 L2 距離。</div>
+
+  <div style="position:absolute; left:60px; top:590px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">便宜：只有內積和取最大</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">表裡每一格是一次 128 維的內積，沒有神經網路、沒有要學的權重；昂貴的部分都在編碼器裡。</div>
+    <div style="font-size:13px; color:#8A93A0;">第 10 卡用 FLOPs 量這件事。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:590px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">能剪枝：高分文件有亮格</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">分數是各列最大值的和，高分文件多半含有和某些查詢向量很像的向量；所以能先用向量索引找近鄰，跳過其他文件。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文：取平均之類的替代比較不利於剪枝。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:590px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">訓練：一條查詢，一正一負</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">每筆資料是查詢、一份相關文件、一份不相關文件；兩份各自算分，用成對的 softmax 交叉熵讓相關的分數高。</div>
+    <div style="font-size:13px; color:#8A93A0;">要訓練的是 BERT、線性層、[Q] 與 [D] 的嵌入。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：方格的深淺與綠格的位置是整理者的示意，不是論文的數字；實驗裡每個查詢固定 32 個向量、每個向量 128 維。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M730 221H760" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M730 267H760" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M730 313H760" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M730 359H760" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M730 405H760" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M730 451H760" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M836 221L912 323" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M836 267L909 329" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M836 313L908 335" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M836 359L908 341" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M836 405L909 347" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M836 451L912 353" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M972 338H998" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>圖 3 是整體架構。查詢編碼器 f<sub>Q</sub> 把查詢 q 編成一袋固定大小的向量 E<sub>q</sub>，文件編碼器 f<sub>D</sub> 把文件 d 編成另一袋 E<sub>d</sub>；兩袋裡的每個向量都帶著它在查詢或文件裡的上下文。編碼器的細節留到下一章，這一章先看分數怎麼算。論文把它寫成式 3，用文字說就是三步：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>兩兩算相似度</strong>E<sub>q</sub> 的每個向量和 E<sub>d</sub> 的每個向量算餘弦相似度。向量事先都正規化成長度 1，所以餘弦就是內積。作者也評估了平方 L2 距離。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>每個查詢向量取最大（MaxSim）</strong>對每個查詢向量，只留它在文件裡最像的那一個向量的分數。直覺上，這是拿這個查詢詞（帶著它在查詢裡的上下文）到文件裡做一次「軟搜尋」，用最好的匹配代表它在文件裡找到的證據。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>加總</strong>把所有查詢向量的最大值加起來，就是這份文件對這條查詢的相關分數 S<sub>q,d</sub>。</div></div>
+    </div>
+
+    <p>比 MaxSim 更複雜的比對當然做得到，互動型模型常用深層的卷積或注意力層。作者選「最大值加總」有兩個理由。第一，它特別便宜，第 10 章會用 FLOPs 量這件事。第二，也是作者認為更重要的一點，它適合剪枝：做全庫的前 k 名檢索時，可以用向量相似度演算法跳過大部分文件，不必為每份文件算出完整的互動矩陣，甚至不必一份一份單獨看。其他便宜的選擇也有，例如把最大值換成平均值，但作者說很多替代做法比較不利於剪枝；第 12 章的消融實驗直接比了 MaxSim 和平均。</p>
+
+    <div class="explain bronze">
+      <span class="label">實作提示</span>
+      <h4>整個模型怎麼訓練</h4>
+      <p>ColBERT 從頭到尾可微分。BERT 編碼器做微調；線性層和 [Q]、[D] 兩個記號的嵌入從頭訓練，用 Adam 最佳化。互動那一步沒有任何可訓練的參數。每筆訓練資料是一個三元組：查詢 q、一份相關文件 d⁺、一份不相關文件 d⁻。兩份文件各自用 ColBERT 算分，再對這兩個分數做成對的 softmax 交叉熵，讓相關的那一份分數比較高。</p>
+    </div>
+
+    <div class="story">
+      <div class="label">關鍵觀念 · 一</div>
+      <h4>分數就是一張表的每列最大值相加</h4>
+      <p>把 E<sub>q</sub> 和 E<sub>d</sub> 的所有內積排成一張表，列是查詢向量、欄是文件向量，ColBERT 的分數就是這張表每一列的最大值相加。第 7 章會看到，重排時 GPU 實際上就是一次算出 k 張這樣的表，再沿著文件那一軸做 max-pool、沿著查詢那一軸加總。</p>
+      <p>這也說明了它為什麼便宜：表裡每一格只是一次內積（實驗裡是 128 維），沒有神經網路，也沒有要學的權重。昂貴的部分都在編碼器裡，而文件那一側的編碼器可以離線跑。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="encoders" data-toc="查詢與文件編碼器">
+  <div class="container head">
+    <p class="chapter">Chapter 05 · Query &amp; Document Encoders</p>
+    <h2>查詢和文件共用一個 BERT，差在記號與補位</h2>
+    <p class="lede">兩個編碼器共用同一個 BERT，靠開頭的 [Q] 與 [D] 記號區分。查詢會用 [mask] 補到固定長度，文件會濾掉標點；兩邊都接一層線性層降維，再正規化。</p>
+    
+  </div>
+  <div class="cardband" id="card-06"><div class="cardlabel"><span class="n">圖卡 06 / 13</span><span class="t">查詢與文件編碼器</span><button type="button" class="zoom" data-card="06">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">同一個 BERT，查詢和文件各編成一袋向量</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.2 節：兩個編碼器共用一個 BERT，靠開頭的 [Q]、[D] 記號分辨；之後都接一層線性層降維，再正規化成長度 1</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">QUERY ENCODER &#183; f_Q</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">查詢編碼器：補 [mask] 到固定長度</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">DOCUMENT ENCODER &#183; f_D</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">文件編碼器：不補 [mask]，濾掉標點</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:175px; top:222px; width:64px; height:34px; box-sizing:border-box; border-radius:6px; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#4B5866;">[CLS]</div>
+  <div style="position:absolute; left:247px; top:222px; width:48px; height:34px; box-sizing:border-box; border-radius:6px; background-color:#1F2A3A; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">[Q]</div>
+  <div style="position:absolute; left:303px; top:222px; width:44px; height:34px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">q1</div>
+  <div style="position:absolute; left:355px; top:222px; width:44px; height:34px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">q2</div>
+  <div style="position:absolute; left:407px; top:222px; width:44px; height:34px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">q3</div>
+  <div style="position:absolute; left:459px; top:222px; width:70px; height:34px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px dashed #2E7B4F; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">[mask]</div>
+  <div style="position:absolute; left:537px; top:222px; width:70px; height:34px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px dashed #2E7B4F; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">[mask]</div>
+  <div style="position:absolute; left:615px; top:222px; width:30px; height:34px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#8A93A0;">…</div>
+  <div style="position:absolute; left:60px; top:262px; width:700px; text-align:center; font-size:12.5px; color:#6B7380;">補到 N<sub>q</sub>＝32 個位置；太長就截斷</div>
+
+  <div style="position:absolute; left:200px; top:306px; width:420px; height:46px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">BERT（兩邊共用同一個模型）</div>
+  <div style="position:absolute; left:200px; top:374px; width:420px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">線性層（無激活）→ 128 維</div>
+  <div style="position:absolute; left:200px; top:442px; width:420px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">正規化：每個向量長度 1</div>
+  <div style="position:absolute; left:632px; top:455px; font-size:13px; font-weight:700; color:#2E7B4F;">→ E<sub>q</sub>：32 個向量</div>
+
+  <div style="position:absolute; left:989px; top:222px; width:64px; height:34px; box-sizing:border-box; border-radius:6px; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#4B5866;">[CLS]</div>
+  <div style="position:absolute; left:1061px; top:222px; width:48px; height:34px; box-sizing:border-box; border-radius:6px; background-color:#1F2A3A; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">[D]</div>
+  <div style="position:absolute; left:1117px; top:222px; width:44px; height:34px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">d1</div>
+  <div style="position:absolute; left:1169px; top:222px; width:44px; height:34px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">d2</div>
+  <div style="position:absolute; left:1221px; top:222px; width:36px; height:34px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#C8501F;">,</div>
+  <div style="position:absolute; left:1265px; top:222px; width:44px; height:34px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">d3</div>
+  <div style="position:absolute; left:1317px; top:222px; width:36px; height:34px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#C8501F;">.</div>
+  <div style="position:absolute; left:1361px; top:222px; width:30px; height:34px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#8A93A0;">…</div>
+  <div style="position:absolute; left:840px; top:262px; width:700px; text-align:center; font-size:12.5px; color:#6B7380;">不補 [mask]；標點也照樣送進 BERT</div>
+
+  <div style="position:absolute; left:980px; top:306px; width:420px; height:46px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">BERT（兩邊共用同一個模型）</div>
+  <div style="position:absolute; left:980px; top:374px; width:420px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">線性層 → 128 維，再正規化</div>
+  <div style="position:absolute; left:980px; top:442px; width:420px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">過濾：丟掉標點位置的向量</div>
+  <div style="position:absolute; left:1412px; top:455px; font-size:13px; font-weight:700; color:#2E7B4F;">→ E<sub>d</sub>：存起來</div>
+
+  <div style="position:absolute; left:60px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">query augmentation：[mask] 的位置也會產生和這條查詢有關的向量，一起參與 MaxSim，讓模型學著擴充查詢或重新加權原本的詞。</div>
+  <div style="position:absolute; left:840px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">標點過濾是為了減少每份文件要存的向量數；作者假設標點的向量即使帶了上下文，對效果也沒有幫助。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">查詢端：每次查詢跑一次</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">查詢短，又補到固定的 32 個位置，BERT 只處理這一條短序列；向量維度對查詢編碼的成本影響很小。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">拿掉 [mask] 補位，MRR@10 明顯下降（第 12 卡）。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">文件端：只在建索引時跑</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">每份文件編一次就存起來；線性層把維度壓到 128，決定索引有多大，也決定重排時要搬多少資料上 GPU。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">MS MARCO 全庫 27 到 286 GiB，看維度與位元組數（第 7 卡）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：原文式 1、式 2 把線性層寫成 CNN，正文的描述是沒有激活函數的線性層；[Q]、[D] 的嵌入與線性層從頭訓練。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M410 284V304" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M410 352V372" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M410 420V440" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1190 284V304" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1190 352V372" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1190 420V440" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>在 late interaction 之前，ColBERT 先用 BERT 把查詢和文件各自編成一袋向量。兩個編碼器共用一個 BERT 模型，差別在輸入序列的開頭：查詢在 BERT 的序列起始記號 [CLS] 後面放一個特殊記號 [Q]，文件則放 [D]。</p>
+    <p><strong>查詢編碼器。</strong>先把查詢切成 BERT 的 WordPiece 詞片，前面接上 [CLS] 和 [Q]。如果查詢不到預先定好的長度 N<sub>q</sub>，就用 BERT 的特殊記號 [mask] 補到 N<sub>q</sub>；超過就截斷，只留前 N<sub>q</sub> 個。實驗裡 N<sub>q</sub> 是 32。補好的序列送進 BERT，為每個位置算出上下文表示。</p>
+
+    <div class="story">
+      <div class="label">關鍵觀念 · 二</div>
+      <h4>補上的 [mask] 會參與比對</h4>
+      <p>作者把用 [mask] 補位的步驟叫做 query augmentation（查詢擴增）。BERT 在這些 [mask] 的位置，也會產生和這條查詢有關的向量，這些向量一樣會進入 MaxSim。設計意圖是讓它成為一種軟性的、可微分的機制：模型可以學著用這些位置把新的詞加進查詢，或依比對時的重要性重新加權原本的詞。</p>
+      <p>第 12 章的消融實驗顯示，拿掉 query augmentation 之後 MRR@10 明顯下降。作者把它列為 ColBERT 有效的關鍵設計之一。</p>
+    </div>
+
+    <p><strong>線性層與正規化。</strong>BERT 每個位置的輸出，接著經過一層沒有激活函數的線性層，把維度降到 m。作者通常讓 m 遠小於 BERT 的隱藏維度，實驗用 128。這個維度對查詢編碼的效率影響不大，卻決定了兩件事：文件向量要佔多少空間（第 6 章的表 4），以及重排時把文件向量從主記憶體搬上 GPU 要花多久。第 7 章會看到，收集、堆疊、搬移文件向量可能是重排裡最貴的一步。最後每個向量都正規化成 L2 長度 1，任兩個向量的內積就等於它們的餘弦相似度，落在 −1 到 1 之間。</p>
+    <p><strong>文件編碼器。</strong>結構幾乎一樣：切詞，前面接 [CLS] 和 [D]，但不補 [mask]。經過 BERT 與線性層之後，文件編碼器會依一份預先定義的清單，把標點符號位置的向量濾掉。作者的假設是，標點的向量即使帶著上下文，對效果也沒有幫助；濾掉它們能減少每份文件要存的向量數。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>面向</th><th>查詢編碼器 f<sub>Q</sub></th><th>文件編碼器 f<sub>D</sub></th></tr></thead>
+        <tbody>
+          <tr><td>開頭記號</td><td>[CLS] [Q]</td><td>[CLS] [D]</td></tr>
+          <tr><td>長度處理</td><td>用 [mask] 補到 N<sub>q</sub>＝32，過長就截斷</td><td>不補</td></tr>
+          <tr><td>BERT</td><td>共用同一個模型</td><td>共用同一個模型</td></tr>
+          <tr><td>線性層與正規化</td><td>降到 m＝128 維，長度 1</td><td>同左</td></tr>
+          <tr><td>最後一步</td><td>無</td><td>濾掉標點的向量</td></tr>
+          <tr><td>什麼時候跑</td><td>每次查詢一次</td><td>建索引時一次（第 6 章）</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>論文用式 1、式 2 把兩條流程各寫成一行巢狀函式：查詢是「正規化（線性層（BERT（[Q] 加上查詢的詞與補位的 [mask]）））」，文件是「過濾（正規化（線性層（BERT（[D] 加上文件的詞））））」。式子裡把線性層寫成 CNN，正文的描述則是沒有激活函數的線性層。</p>
+  </div>
+</section>
+
+
+<section id="indexing" data-toc="離線建索引">
+  <div class="container head">
+    <p class="chapter">Chapter 06 · Offline Indexing · Indexing Throughput &amp; Footprint</p>
+    <h2>每份文件只過一次 BERT，全庫約三小時編完</h2>
+    <p class="lede">ColBERT 把查詢和文件之間幾乎所有計算隔開，文件的表示就能離線先算好存起來。作者加了幾個提高吞吐量的小優化；MS MARCO 全庫約三小時編完，空間從 27 到 286 GiB。</p>
+    
+  </div>
+  <div class="cardband" id="card-07"><div class="cardlabel"><span class="n">圖卡 07 / 13</span><span class="t">離線建索引：每份文件一次</span><button type="button" class="zoom" data-card="07">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">每份文件只過一次 BERT，全庫三小時</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.4、4.5 節：建索引是離線的一次性工作，作者仍加了幾個提高吞吐量的優化；向量存進磁碟，之後直接載入或建成向量索引</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　分組、依長度排序</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.5;">每組 B 份（例如 100,000）</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">依長度分桶</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　長度相近的湊一批</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.5;">每批 b 份（例如 128）</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">只補到批內最長</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　多核心平行斷詞</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.5;">WordPiece 前處理分到各核心</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">多核心前處理</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　多張 GPU 平行編碼</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.5;">f_D：BERT、線性層、正規化、濾標點</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">多 GPU</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　存到磁碟</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">每一維 32 或 16 位元；<br>每份文件一個向量矩陣</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:300px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">之後怎麼用</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">重排時直接從磁碟載入記憶體，每份文件一個矩陣（第 8 卡）；全庫檢索時把所有向量建進 faiss，並記下每個向量屬於哪份文件（第 9 卡）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:446px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:468px; font-size:20px; font-weight:700; color:#1C2431;">建索引的兩筆成本，和它省下的東西</div>
+
+  <div style="position:absolute; left:60px; top:510px; width:470px; height:222px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">時間：約三小時</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">MS MARCO 的 880 萬段落，一台四張 GPU 的伺服器大約三小時編完。圖 6 是上面四個優化逐一疊上去時的吞吐量。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">圖 6 的長條沒有標數字，這裡不畫。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:510px; width:470px; height:222px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">空間：27 到 286 GiB</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">128 維、每維 4 位元組要 286 GiB；降到 24 維、每維 2 位元組只要 27 GiB，MRR@10 只低 1%（34.9 到 33.9）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">表 4；全庫檢索的設定（128 維、每維 2 位元組）是 154 GiB。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:510px; width:470px; height:222px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">每份文件只付一次</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">任何用 BERT 的模型都至少要處理每份文件一次，ColBERT 剛好只處理一次；BERT 重排器卻是每條查詢都對上百份候選重做類似的計算。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">這就是把文件的成本搬到離線的意思。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：五格是整理者依第 3.4 節排的資料流，B、b 是原文舉的例子；圖 6 疊加優化的順序是多 GPU、批內最長、分桶、多核心。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M1345 262L1345 296" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>建索引的流程本身很直接：把集合裡的文件分批，每一批跑一次文件編碼器 f<sub>D</sub>，把每份文件的輸出向量存起來。雖然這是離線的工作，作者還是做了幾個簡單的優化來提高吞吐量，依第 4.5 節圖 6 疊加的順序是：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>多張 GPU 平行</strong>有多張 GPU 時，把不同批次的文件同時送去編碼。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>只補到這一批的最大長度</strong>同一批裡的文件，補齊到這批裡最長那一份的長度。作者提到，他們看過的公開 BERT 實作都直接補到一個預先定好的長度。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>依長度分桶</strong>為了讓上一步更有效，一次拿 B 份文件（例如 100,000 份）依長度排序，再把每 b 份（例如 128 份）長度相近的文件湊成一批送進編碼器。有些函式庫把這種做法叫做 BucketIterator。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>CPU 多核心平行前處理</strong>大部分計算在 GPU 上，但作者發現相當一部分時間花在文字前處理，主要是 BERT 的 WordPiece 斷詞。每份文件的前處理彼此獨立，所以分到所有 CPU 核心平行做。</div></div>
+    </div>
+
+    <p>向量最後寫到磁碟，每一維用 32 位元或 16 位元。之後有兩種用法：重排時直接從磁碟載入（第 7 章）；做全庫檢索時，再把所有向量建成向量相似度索引（第 8 章）。</p>
+    <p>第 4.5 節量了這些優化的效果。圖 6 是在基本的批次索引上逐一疊加上面四個優化時，每分鐘能處理多少份文件；長條上沒有標數字，這裡不重畫。依這些吞吐量，ColBERT 大約三小時就能把 MS MARCO 編完。作者提醒，任何基於 BERT 的模型都至少要把每份文件處理一次；ColBERT 剛好只處理一次，既有的 BERT 重排器則是每一條查詢都要對可能上百份文件重做類似的計算。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 4 · 設定</th><th>維度 m</th><th>每維位元組</th><th>空間（GiB）</th><th>MRR@10（Dev）</th></tr></thead>
+        <tbody>
+          <tr><td>重排 · 餘弦</td><td>128</td><td>4</td><td>286</td><td>34.9</td></tr>
+          <tr><td>全庫檢索 · L2</td><td>128</td><td>2</td><td>154</td><td>36.0</td></tr>
+          <tr><td>重排 · L2</td><td>128</td><td>2</td><td>143</td><td>34.8</td></tr>
+          <tr><td>重排 · 餘弦</td><td>48</td><td>4</td><td>54</td><td>34.4</td></tr>
+          <tr><td>重排 · 餘弦</td><td>24</td><td>2</td><td>27</td><td>33.9</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>表 4 看的是空間：把向量維度降低、每一維的位元組變少，MS MARCO 全庫要的空間跟著縮小，MRR@10 卻掉得不多。作者特別點出，最省空間的設定（24 維、每維 2 位元組的餘弦重排）只要 27 GiB，MRR@10 只比最佔空間的設定低 1%。這也呼應了第 5 章的說法：線性層的維度 m 是控制文件端空間的那個旋鈕。</p>
+
+    <div class="thought">
+      <span class="label">思考題 · 01</span>
+      <h4>286 GiB 對 27 GiB，MRR@10 差 1%，你的系統會選哪一個？</h4>
+      <p>假設你的集合是 MS MARCO 的十倍，而且希望文件向量能放進一台機器的記憶體。</p>
+      <p class="hint">表 4 的重排數字是重排 BM25 候選時量的；維度也會影響重排時搬上 GPU 的時間（第 7 章）。全庫檢索的設定在表 4 是 154 GiB，而且第一段還需要 faiss 的索引。先確定你只要重排還是要全庫檢索，再用空間與延遲的預算去挑維度和位元組數。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="reranking" data-toc="重排前 k 名">
+  <div class="container head">
+    <p class="chapter">Chapter 07 · Top-k Re-ranking with ColBERT</p>
+    <h2>重排的時間多半花在搬資料，不在計算</h2>
+    <p class="lede">k 不大（例如 1000）時，ColBERT 把 k 份文件的向量疊成一個張量搬上 GPU，一次算完所有 MaxSim。算的部分很便宜：61 毫秒的延遲裡，查詢編碼加互動只佔 13 毫秒。</p>
+    
+  </div>
+  <div class="cardband" id="card-08"><div class="cardlabel"><span class="n">圖卡 08 / 13</span><span class="t">重排：時間花在搬資料</span><button type="button" class="zoom" data-card="08">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">重排的時間花在搬資料，不在計算</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.5 節：k 小（例如 1000）時，把 k 份文件的向量疊成一個張量搬上 GPU，窮舉算完所有 MaxSim；延遲數字來自第 4.2 節</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　載入文件向量</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.5;">建好的索引事先放進記憶體</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">離線就緒</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　編碼查詢</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.5;">只跑一次 BERT，長度是 |q|</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">和 Step 3 同時做</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　搬上 GPU</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.5;">收集 k 份、補齊長度、疊成張量 D</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">主要成本</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　批次內積</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">E<sub>q</sub> 對 D 做批次內積，<br>得到 k 張 cross-match 表</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　取最大、加總、排序</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">每列 max-pool、跨查詢詞加總，<br>依總分排出前 k 名</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:300px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">只過一次 BERT</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">BERT 重排器要把 k 份「查詢＋文件」各送進 BERT 一次，長度是 |q|＋|d|，注意力的成本是長度的平方；ColBERT 只送一條長度 |q| 的查詢。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:446px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:468px; font-size:20px; font-weight:700; color:#1C2431;">61 毫秒花在哪裡</div>
+
+  <div style="position:absolute; left:60px; top:510px; width:470px; height:222px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">61 毫秒裡，13 毫秒在算</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">查詢編碼加上互動只要 13 毫秒；其餘時間花在收集、堆疊、把文件向量從記憶體搬到 GPU。計算已經很便宜，成本在資料搬移。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">所以比非 BERT 重排器（3 到 28 毫秒）慢了幾十毫秒。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:510px; width:470px; height:222px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">向量維度決定要搬多少</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">線性層把每個向量壓到 128 維；維度對查詢編碼的成本影響很小，卻直接影響把文件向量搬上 GPU 的時間。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者點名的加速也包括更小的維度與量化。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:510px; width:470px; height:222px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">k 很大就不窮舉</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">這套窮舉只適合 k 小的重排。要從上千萬份文件直接檢索，先用向量索引撈出 K 份候選，再對它們跑這一套。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">兩段式檢索在下一張卡。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：延遲在單張 V100 上量、重排 BM25 的前 1000 名；ColBERT 的延遲含搬資料，基準模型的延遲不含 CPU 前處理。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M1345 262L1345 296" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>重排是測試與部署神經排序模型最常見的情境：先用 BM25 這類詞袋模型撈出前 k 份，再用神經模型重新排序。因為 k 小，ColBERT 直接用批次計算把每份文件完整算一遍（第 8 章的全庫檢索就不這樣做）。服務查詢的子系統事先把所有建好索引的文件表示載入記憶體，每份文件是一個向量矩陣。一條查詢進來之後：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>編碼查詢，同時收集文件</strong>算出查詢的向量 E<sub>q</sub>（式 1）；同時把這 k 份文件的矩陣收集起來。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>補齊、疊成張量、搬上 GPU</strong>k 份文件補到其中最長的長度，疊成一個三維張量 D，搬到 GPU 的記憶體。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>批次內積</strong>在 GPU 上把 E<sub>q</sub> 和 D 做批次內積，必要時分成幾個小批次；結果是 k 張查詢對文件的 cross-match 矩陣。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>取最大、加總</strong>每張矩陣沿著文件詞那一軸做 max-pool（也就是窮舉版的 MaxSim），再沿著查詢詞那一軸加總，得到每份文件的分數。</div></div>
+      <div class="cascade-step"><div class="n">5</div><div class="t"><strong>排序</strong>依總分把 k 份文件排好。</div></div>
+    </div>
+
+    <p>作者說，相對於既有的神經排序器，這個計算便宜到成本主要來自收集和搬移事先算好的向量。第 4.2 節量到的數字對得上這句話：ColBERT 重排一條查詢的延遲是 61 毫秒，其中查詢編碼加上互動只佔 13 毫秒，其餘時間花在收集、堆疊、把文件向量搬到 GPU。它比 KNRM、Duet 這些非 BERT 重排器慢了幾十毫秒，原因也在這裡。</p>
+    <p>算的部分為什麼這麼便宜？用典型的 BERT 重排器排 k 份文件，要把 k 個不同的輸入送進 BERT，每個輸入的長度是查詢長度加上文件長度，而注意力的成本和序列長度成平方。ColBERT 只把一條短得多的序列送進 BERT，長度就是查詢的長度。所以它不只便宜，k 變大時也擴展得比較好，第 10 章會看到實際的數字。</p>
+
+    <div class="explain bronze">
+      <span class="label">實作提示</span>
+      <h4>作者點名、但沒有做的四種加速</h4>
+      <p>第 4.2 節說 ColBERT 的延遲與 FLOPs 還能大幅降低：把查詢補到更短的長度、用更小的向量維度（第 6 章的表 4 量了它對 MRR@10 的影響）、把文件向量量化、記憶體夠的話把向量直接放在 GPU 上。這些方向都留給後續研究。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="end-to-end" data-toc="全庫端到端檢索">
+  <div class="container head">
+    <p class="chapter">Chapter 08 · End-to-end Top-k Retrieval with ColBERT</p>
+    <h2>全庫檢索分兩段：先撈候選，再精排</h2>
+    <p class="lede">集合有上千萬份文件時不能窮舉。ColBERT 讓每個查詢向量各自到 faiss 索引裡找最近的文件向量，換成文件、去掉重複，只對這些候選算完整的 MaxSim。</p>
+    
+  </div>
+  <div class="cardband" id="card-09"><div class="cardlabel"><span class="n">圖卡 09 / 13</span><span class="t">全庫檢索：先撈候選再精排</span><button type="button" class="zoom" data-card="09">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">32 個查詢向量各撈一次，合併後再精排</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.6 節：全庫有上千萬份文件時不能窮舉。第一段讓每個查詢向量到 faiss 找近鄰、換成文件；第二段只對這 K 份候選算完整的 MaxSim</div>
+
+  <div style="position:absolute; left:560px; top:150px; width:480px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">查詢 → E<sub>q</sub>：N<sub>q</sub>＝32 個向量</div><div style="margin-top:3px; font-size:12.5px; color:rgba(255,255,255,0.75);">同一條查詢只跑一次 BERT</div></div></div>
+
+  <div style="position:absolute; left:80px; top:262px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.1em; color:#8A93A0;">第一段 &#183; 近似過濾</div>
+
+  <div style="position:absolute; left:80px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">向量 1 → faiss 近鄰</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">取最近的 k′ 個文件向量</div></div>
+  <div style="position:absolute; left:460px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">向量 2 → faiss 近鄰</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">32 次搜尋同時發出</div></div>
+  <div style="position:absolute; left:840px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">向量 3 → faiss 近鄰</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">只搜最近的 p 個分區</div></div>
+  <div style="position:absolute; left:1160px; top:326px; width:40px; text-align:center; font-size:20px; color:#8A93A0;">⋯</div>
+  <div style="position:absolute; left:1220px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">向量 32 → faiss 近鄰</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">每個查詢向量各自一次</div></div>
+
+  <div style="position:absolute; left:560px; top:440px; width:480px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">換成來源文件、去掉重複</div><div style="margin-top:3px; font-size:12.5px; color:rgba(255,255,255,0.75);">N<sub>q</sub> × k′ 個文件編號，其中 K 份不重複</div></div></div>
+
+  <div style="position:absolute; left:60px; top:530px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F; letter-spacing:0.08em;">第二段 &#183; 精排</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">只對這 K 份候選做第 8 卡那套窮舉重排：完整的 MaxSim、加總、排序，取前 k 名。兩段用的都是 ColBERT 的分數。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:620px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">IVFPQ：只搜最近的分區</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">k-means 把向量空間切成 P 區，查詢向量只搜最近的 p 區；每個向量切成 s 段、每段 1 位元組，在壓縮後的空間算相似度。</div>
+    <div style="font-size:13px; color:#8A93A0;">實驗：P＝2,000、p＝10、s＝16、k′＝k＝1000。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:620px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">第一段只過濾，第二段才排名</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">撈到的文件多半含有和某個查詢向量很像的向量；第二段對它們算完整的 MaxSim，決定名次。</div>
+    <div style="font-size:13px; color:#8A93A0;">能這樣剪，靠的是第 5 卡說的 MaxSim 性質。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:620px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">要多準備兩樣東西</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">建索引的最後，記下每個向量屬於哪份文件，再把所有文件向量建進 faiss；第二段用的向量每一維 16 位元。</div>
+    <div style="font-size:13px; color:#8A93A0;">表 4：全庫檢索的設定要 154 GiB。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：工作者畫四格是示意，實際是 32 個查詢向量各一次搜尋；k′ 在方法一節舉例為 k/2，實驗設定為 k′＝k＝1000。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c09" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M680 216L230 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M760 216L610 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M840 216L990 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M920 216L1370 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M230 386L680 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M610 386L760 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M990 386L840 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M1370 386L920 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M800 506V528" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>late interaction 的運算子是特地為全庫檢索設計的，主要目的是讓召回比只靠詞袋模型撈候選更好。這一節處理的是文件多到不可能每份都完整算一遍的情況：從 N 份文件（例如一千萬份）裡直接取前 k 名，而且 k 遠小於 N。</p>
+    <p>做法是利用 MaxSim 對剪枝友善的性質。與其讓一個查詢向量和一份文件的所有向量做 MaxSim，不如用快速的向量相似度資料結構，讓這個查詢向量一次和整個集合的所有文件向量比。作者用的是 Facebook 的現成函式庫 faiss：離線建索引的最後，保留一份「每個向量屬於哪份文件」的對照表，然後把所有文件向量建進 faiss。查詢時分兩段，兩段用的都是 ColBERT 的分數：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>第一段：近似的過濾</strong>對 E<sub>q</sub> 的 N<sub>q</sub> 個向量，同時各發一次向量相似度查詢到 faiss，每次取回和它最近的 k′ 個文件向量（方法一節舉例 k′＝k/2）。把這些向量換成它們所屬的文件，得到 N<sub>q</sub> × k′ 個文件編號，其中不重複的有 K 份。這 K 份文件很可能含有一個以上和查詢向量非常相似的向量。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>第二段：精排</strong>只對這 K 份文件做第 7 章那一套窮舉重排：完整的 MaxSim、加總、排序，取前 k 名。</div></div>
+    </div>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>IVFPQ：分區加上乘積量化</h4>
+      <p>faiss 的索引用的是 IVFPQ（inverted file with product quantization）。它先用 k-means 把向量空間切成 P 個區（方法一節舉例 1000），每個文件向量分到最近的區；查詢時，一個查詢向量只搜最近的 p 個區（例如 10）。為了省記憶體，每個向量切成 s 段（例如 16），每段用 1 個位元組表示，相似度直接在壓縮後的空間裡算，所以算得更便宜、搜得更快。實驗實際用的是 P＝2,000、p＝10、s＝16、k′＝k＝1000，見第 9 章。</p>
+    </div>
+
+    <div class="thought">
+      <span class="label">思考題 · 02</span>
+      <h4>每個查詢向量各自找近鄰，為什麼不太會漏掉好文件？</h4>
+      <p>第一段只看文件「有沒有某個向量很像某個查詢向量」，第二段才算完整的分數。</p>
+      <p class="hint">想想分數怎麼組成：每個查詢向量貢獻的是它在文件裡的最大值。一份高分的文件，至少要在一些查詢向量上有很高的最大值，也就是含有離那些查詢向量很近的文件向量，近鄰搜尋就容易撈到它。如果分數改成取平均，一份文件可能靠很多中等相似的向量拿到高分，近鄰搜尋就不一定找得到。這段推論是整理者的，原文只說平均這類替代做法比較不利於剪枝。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="setup" data-toc="實驗設定" class="nocard">
+  <div class="container">
+    <p class="chapter">Chapter 09 · Experimental Evaluation: Methodology</p>
+    <h2>兩個資料集都大到足以訓練深度模型</h2>
+    <p class="lede">實驗回答四個問題：重排能不能兼顧效果與效率、能不能直接全庫檢索、每個元件貢獻多少、建索引要付多少成本。資料是 MS MARCO 與 TREC CAR，延遲在單張 GPU 上量。</p>
+
+    <p>第 4 節用四個研究問題組織實驗，這一頁把它們分到不同章：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>RQ1 · 重排</strong>在典型的重排設定裡，ColBERT 能不能填起高效率模型與高效果模型之間的落差？見第 10 章。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>RQ2 · 全庫檢索</strong>除了重排，它能不能有效地直接從大型集合裡檢索？見第 11 章。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>RQ3 · 元件</strong>late interaction、query augmentation 這些元件，各自對品質貢獻多少？見第 12 章。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>RQ4 · 索引成本</strong>離線計算與記憶體的負擔有多大？見第 6 章。</div></div>
+    </div>
+
+    <p>兩個資料集都是當時新的資料集，都提供了足以訓練和評估深度神經網路的大規模訓練資料：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>面向</th><th>MS MARCO</th><th>TREC CAR</th></tr></thead>
+        <tbody>
+          <tr><td>來源</td><td>Microsoft 2016 年推出的閱讀理解資料集，2018 年改作檢索用</td><td>Dietz 等人 2017 年推出，以維基百科合成</td></tr>
+          <tr><td>規模</td><td>880 萬段落，來自 Bing 對 100 萬條真實查詢的結果</td><td>約 2,900 萬段落</td></tr>
+          <tr><td>標註</td><td>稀疏：每條查詢只有一份或少數幾份標為相關，沒有明確標為不相關的</td><td>查詢是頁面標題接上某個章節標題，那個章節的段落算相關</td></tr>
+          <tr><td>訓練與評估</td><td>Dev 與 Eval 各約 7,000 條查詢；Eval 的答案不公開，只能投稿給主辦方評分</td><td>五個 fold 的前四個訓練、第五個驗證（約 300 萬條查詢）；測試用 TREC 2017 CAR 的 2,254 條</td></tr>
+          <tr><td>指標</td><td>MRR@10</td><td>MAP</td></tr>
+          <tr><td>BERT 起點</td><td>Google 官方的 BERT-base，訓練 20 萬次迭代</td><td>Nogueira 與 Cho 另外預訓練的 BERT-large，訓練 12.5 萬次迭代</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>MS MARCO 另外附了約 5.5 萬條帶標註的查詢，當作額外的驗證資料。作者從中隨機抽 5,000 條（不在開發集或訓練集裡）當作「local」評估集，第 11 章的全庫檢索實驗用它和官方開發集一起測。這樣做是為了避免同時投稿同一個模型的多個變體，主辦方不鼓勵同一個團隊投太多次；主要的重排模型則有投稿，拿到了 Eval 的成績。</p>
+    <p>TREC CAR 為什麼不用官方的 BERT？官方 BERT 是在維基百科上預訓練的，而 TREC CAR 的訓練集與測試集都來自維基百科，直接用會把測試資料洩漏進訓練。所以作者照先前的做法，改用 Nogueira 與 Cho 從隨機初始化、只在 TREC CAR 訓練子集對應的維基頁面上預訓練的 BERT-large。微調它比 BERT-base 慢得多，所以只訓練 12.5 萬次迭代。</p>
+
+    <div class="stat-grid">
+      <div class="stat-card"><div class="big">32</div><div class="label">每條查詢的向量數 N<sub>q</sub></div><div class="note">補 [mask] 或截斷到這個長度</div></div>
+      <div class="stat-card"><div class="big">128<small>維</small></div><div class="label">向量維度 m</div><div class="note">表 4 另外試了 48 維與 24 維</div></div>
+      <div class="stat-card"><div class="big">3×10⁻⁶</div><div class="label">學習率</div><div class="note">批次大小 32，和 Nogueira 與 Cho 相同</div></div>
+    </div>
+
+    <p>其他設定：模型用 Python 3、PyTorch 1 與 HuggingFace 的 transformers 函式庫實作。重排實驗除非特別註明，每一維用 4 個位元組、相似度用餘弦；全庫檢索改用平方 L2 距離，因為作者發現 faiss 做 L2 檢索比較快。faiss 索引切成 P＝2,000 個區，每個查詢向量搜最近的 p＝10 個區、取回 k′＝k＝1000 個文件向量；每個向量切成 s＝16 段、每段 1 個位元組。第二段精排用的向量，每一維用 16 位元。</p>
+    <p>硬體方面，重排延遲在一張 32 GiB 的 Tesla V100 上量，這台伺服器有兩顆 Intel Xeon Gold 6132 與 469 GiB 記憶體。以 CPU 為主的全庫檢索實驗與建索引實驗，用另一台 CPU 與記憶體規格相同、裝了四張 12 GiB Titan V 的伺服器。所有實驗裡，有神經計算的方法每條查詢只用一張 GPU；建索引時最多用四張。</p>
+  </div>
+</section>
+
+
+<section id="rerank-results" data-toc="重排：成本與效果">
+  <div class="container head">
+    <p class="chapter">Chapter 10 · Quality–Cost Tradeoff: Top-k Re-ranking</p>
+    <h2>效果和 BERT 相當，FLOPs 少了四個數量級</h2>
+    <p class="lede">重排 MS MARCO 的 BM25 前 1000 名，ColBERT 的 MRR@10 是 34.9，不輸原版 BERT-base 的 34.7；延遲 61 毫秒對 10,700 毫秒，FLOPs 7B 對 97T。候選越多，差距越大。</p>
+    
+  </div>
+  <div class="cardband" id="card-10"><div class="cardlabel"><span class="n">圖卡 10 / 13</span><span class="t">重排結果：FLOPs 少四個數量級</span><button type="button" class="zoom" data-card="10">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">準確度相當，FLOPs 少了四個數量級</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4.2 節：重排 MS MARCO 的 BM25 前 k 名。BERT 對每份候選都跑一次完整的 BERT；ColBERT 只編碼查詢一次，k 份文件只做 MaxSim</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ BERT 重排器：每份候選跑一次</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ ColBERT：查詢只跑一次</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:250px; top:200px; width:320px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">查詢 q ＋ BM25 的 k 份候選</div>
+  <div style="position:absolute; left:95px; top:300px; width:190px; height:64px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#C8501F;">BERT（q, d₁）</div><div style="margin-top:2px; font-size:12px; color:#6B7380;">12 層 · 長度 |q|＋|d|</div></div></div>
+  <div style="position:absolute; left:315px; top:300px; width:190px; height:64px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#C8501F;">BERT（q, d₂）</div><div style="margin-top:2px; font-size:12px; color:#6B7380;">12 層 · 長度 |q|＋|d|</div></div></div>
+  <div style="position:absolute; left:505px; top:318px; width:30px; text-align:center; font-size:18px; color:#8A93A0;">⋯</div>
+  <div style="position:absolute; left:535px; top:300px; width:190px; height:64px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#C8501F;">BERT（q, dₖ）</div><div style="margin-top:2px; font-size:12px; color:#6B7380;">12 層 · 長度 |q|＋|d|</div></div></div>
+  <div style="position:absolute; left:250px; top:420px; width:320px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#1C2431;">[CLS] 接 MLP → k 個分數</div>
+  <div style="position:absolute; left:250px; top:480px; width:320px; text-align:center; font-size:13px; font-weight:700; color:#C8501F;">k＝1000 時：1000 次完整的 BERT</div>
+  <div style="position:absolute; left:60px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">每份候選都要把查詢和文件接起來，過一次 12 層的 BERT；k 越大，BERT 要跑的次數就越多，每一次的注意力還是序列長度的平方。</div>
+
+  <div style="position:absolute; left:880px; top:200px; width:260px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">查詢 q</div>
+  <div style="position:absolute; left:880px; top:290px; width:260px; height:56px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">BERT（q）只跑一次</div><div style="margin-top:2px; font-size:12px; color:rgba(255,255,255,0.8);">長度 |q|，補到 32 個位置</div></div></div>
+  <div style="position:absolute; left:1240px; top:290px; width:260px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">k 份文件的向量</div><div style="margin-top:2px; font-size:12px; color:#6B7380;">離線算好，重排前載入</div></div></div>
+  <div style="position:absolute; left:1010px; top:400px; width:360px; height:60px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">MaxSim × k</div><div style="margin-top:2px; font-size:12px; color:#6B7380;">內積、每列取最大、加總，再排序</div></div></div>
+  <div style="position:absolute; left:1010px; top:480px; width:360px; text-align:center; font-size:13px; font-weight:700; color:#2E7B4F;">k＝1000 時：1 次 BERT，加上 1000 次 MaxSim</div>
+  <div style="position:absolute; left:840px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">查詢只過一次 BERT，文件向量早就算好；k 越大，多出來的只是便宜的內積與取最大。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#C8501F;">k＝1000：97T FLOPs、10,700 毫秒</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">BERT-base 的 MRR@10 是 34.7（原版）或 36.0（作者用同一個損失重訓）；BERT-large 36.5，要 340T FLOPs、32,900 毫秒。</div>
+    <div style="font-size:13px; color:#8A93A0;">表 1，MS MARCO Dev，單張 V100。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#2E7B4F;">k＝1000：7B FLOPs、61 毫秒</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">MRR@10 34.9，不輸原版 BERT-base。FLOPs 的差距在 k＝10 時將近 180 倍，k＝1000 是 13,900 倍，k＝2000 是 23,000 倍。</div>
+    <div style="font-size:13px; color:#8A93A0;">TREC CAR 也一樣：BM25＋ColBERT 的 MAP 31.3，BM25＋BERT-base 31.0。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：FLOPs 倍數來自圖 4 的正文，圖上的點只標了 k；圖 4 重排的是 Anserini 的 BM25 結果，所以 k＝1000 的 MRR@10 略高於表 1。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M330 252L190 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M410 252L410 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M490 252L630 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M190 366L330 418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M410 366L410 418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M630 366L490 418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M1010 252L1010 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M1010 348L1120 398" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M1370 348L1260 398" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>這是測試與部署神經排序模型最典型的設定。比較對象有三群：先前在 MS MARCO 上測過的 KNRM、Duet、fT+ConvKNRM；Nogueira 與 Cho 把 BERT 用在排序的自然做法，包括 BERT-base 與更深的 BERT-large；以及作者自己訓練的「BERT-base（本文訓練）」。最後這一個沿用 Nogueira 與 Cho 的 base 模型與超參數，但改用和 ColBERT 相同的損失函數訓練 20 萬次迭代，讓比較更直接。</p>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>延遲和 FLOPs 是怎麼量的</h4>
+      <p>重排延遲在單張 Tesla V100 上量。ColBERT 的延遲包含全部步驟：收集文件向量、搬上 GPU、斷詞並編碼查詢、算互動。基準模型只量 GPU 上的打分計算，不含 CPU 上的文字前處理，理由是它們原則上可以把大部分前處理（例如文件斷詞）離線做掉，剩下的分散到各文件平行處理。每次查詢的 FLOPs 用 torchprofile 函式庫估計。</p>
+    </div>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 1</th><th>MRR@10（Dev）</th><th>MRR@10（Eval）</th><th>重排延遲（毫秒）</th><th>每次查詢 FLOPs</th></tr></thead>
+        <tbody>
+          <tr><td>BM25（官方）</td><td>16.7</td><td>16.5</td><td>–</td><td>–</td></tr>
+          <tr><td>KNRM</td><td>19.8</td><td>19.8</td><td>3</td><td>592M（0.085×）</td></tr>
+          <tr><td>Duet</td><td>24.3</td><td>24.5</td><td>22</td><td>159B（23×）</td></tr>
+          <tr><td>fT+ConvKNRM</td><td>29.0</td><td>27.7</td><td>28</td><td>78B（11×）</td></tr>
+          <tr><td>BERT-base（Nogueira 與 Cho）</td><td>34.7</td><td>–</td><td>10,700</td><td>97T（13,900×）</td></tr>
+          <tr><td>BERT-base（本文訓練）</td><td>36.0</td><td>–</td><td>10,700</td><td>97T（13,900×）</td></tr>
+          <tr><td>BERT-large（Nogueira 與 Cho）</td><td>36.5</td><td>35.9</td><td>32,900</td><td>340T（48,600×）</td></tr>
+          <tr><td>ColBERT（BERT-base）</td><td>34.9</td><td>34.9</td><td>61</td><td>7B（1×）</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>先看趨勢。從 2017 年的 KNRM 到 2019 年的 BERT 模型，MRR@10 提高超過 16%，計算成本也一路往上。成本越高、效果越好的關係幾乎是單調的，看起來像是在說高品質的排序一定需要昂貴的模型。</p>
+    <p>ColBERT 打破了這個趨勢。它的效果不輸 Nogueira 與 Cho 原版的 BERT-base，只比 BERT-large 和本文訓練的 BERT-base 略低；延遲卻少了 170 倍以上，FLOPs 少了 13,900 倍（引言與結論把它寫成約 14,000 倍）。作者認為這說明了 late interaction 的表現力，尤其是搭配 BERT 這種強大的預訓練語言模型時。和非 BERT 的重排器相比，它慢了幾十毫秒，作者的解釋是那段時間花在收集、堆疊、搬移文件向量上；查詢編碼加上互動只要 13 毫秒。</p>
+
+    <div class="story">
+      <div class="label">關鍵觀念 · 三</div>
+      <h4>FLOPs 比 Duet 少，延遲卻比 Duet 長</h4>
+      <p>表 1 的最後一欄有個容易漏看的細節。ColBERT 每次查詢 7B FLOPs，比 Duet 的 159B、fT+ConvKNRM 的 78B 都少，只比 KNRM 的 592M 多；但它 61 毫秒的延遲，比這三個模型的 3 到 28 毫秒都長。</p>
+      <p>兩欄量的是不同的東西。FLOPs 只數計算，ColBERT 的延遲還包含把事先算好的文件向量從記憶體搬上 GPU，基準模型的延遲則不含前處理。這就是第 7 章說的，重排的時間多半花在搬資料。</p>
+    </div>
+
+    <p>圖 4 再往前推一步：在 MS MARCO Dev 上把重排深度 k 從 10 一路加到 2000，比較 ColBERT 和本文訓練的 BERT-base 的 FLOPs 與 MRR@10。因為官方的前 1000 名沒有 BM25 的順序（也沒有第 1000 名以後的文件），這個實驗改成重排 Anserini 工具包的 BM25 結果，所以 k＝1000 時兩者的 MRR@10 都比表 1 略高。結果是 ColBERT 在同樣的模型大小（12 層的 base 編碼器）下便宜得多，k 變大時也擴展得比較好，部分原因是不管要評估多少文件，它都只處理查詢一次。</p>
+
+    <div class="stat-grid">
+      <div class="stat-card"><div class="big">180<small>倍</small></div><div class="label">k＝10 時 BERT 多用的 FLOPs</div><div class="note">圖 4 的正文；原文寫「將近」180 倍</div></div>
+      <div class="stat-card"><div class="big">13,900<small>倍</small></div><div class="label">k＝1000</div><div class="note">和表 1 相同</div></div>
+      <div class="stat-card"><div class="big">23,000<small>倍</small></div><div class="label">k＝2000</div><div class="note">候選越多，差距越大</div></div>
+    </div>
+
+    <p>作者還提到一個非正式的觀察：這麼大的 FLOPs 差距，讓 ColBERT 整個在 CPU 上跑也變得可行，不過 CPU 重排不在這篇論文的範圍內。TREC CAR 的官方指標是 MAP，表 3 除了重排的基準，也列了 BM25、doc2query、DeepCT 這幾個重要的基準；結果和 MS MARCO 的完全一致。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 3 · TREC CAR</th><th>MAP</th><th>MRR@10</th></tr></thead>
+        <tbody>
+          <tr><td>BM25（Anserini）</td><td>15.3</td><td>–</td></tr>
+          <tr><td>doc2query</td><td>18.1</td><td>–</td></tr>
+          <tr><td>DeepCT</td><td>24.6</td><td>33.2</td></tr>
+          <tr><td>BM25＋BERT-base</td><td>31.0</td><td>–</td></tr>
+          <tr><td>BM25＋BERT-large</td><td>33.5</td><td>–</td></tr>
+          <tr><td>BM25＋ColBERT</td><td>31.3</td><td>44.3</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+
+<section id="e2e-results" data-toc="端到端：召回">
+  <div class="container head">
+    <p class="chapter">Chapter 11 · End-to-end Top-k Retrieval</p>
+    <h2>直接從全庫檢索，比只重排 BM25 的候選更準</h2>
+    <p class="lede">每個方法都直接從 880 萬段落取前 1000 名。ColBERT 端到端的 MRR@10 是 36.0，比同一個模型只重排的 34.8 高，原因是召回變好：它前 50 名的召回率，已經高於官方 BM25 前 1000 名的召回率。</p>
+    
+  </div>
+  <div class="cardband" id="card-11"><div class="cardlabel"><span class="n">圖卡 11 / 13</span><span class="t">全庫檢索結果：召回決定排名</span><button type="button" class="zoom" data-card="11">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">同一個模型，全庫檢索比只重排更準</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 2：每個方法都直接從 880 萬段落取前 1000 名。上列 MRR@10（Dev），下列 Recall@1000；只重排 BM25 的 ColBERT，召回被候選鎖在 81.4</div>
+
+  <div style="position:absolute; left:60px; top:150px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#6B7380;"></div>BM25</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>先改寫文件，再用 BM25</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>ColBERT 只重排 BM25 的候選</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>ColBERT 全庫檢索</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:226px; font-size:18px; font-weight:700; color:#1C2431;">效果</div>
+  <div style="position:absolute; left:60px; top:252px; font-size:12px; color:#8A93A0;">MRR@10（Dev）</div>
+  <div style="position:absolute; left:180px; top:233px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:270px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+
+  <div style="position:absolute; left:261px; top:261px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:286px; top:260px; font-size:13px; color:#2B3340;">BM25 官方 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">16.7</span></div>
+  <div style="position:absolute; left:366px; top:224px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:391px; top:223px; font-size:13px; color:#2B3340;">Anserini <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">18.7</span></div>
+  <div style="position:absolute; left:514px; top:261px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:539px; top:260px; font-size:13px; color:#2B3340;">doc2query <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">21.5</span></div>
+  <div style="position:absolute; left:662px; top:224px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:687px; top:223px; font-size:13px; color:#2B3340;">DeepCT <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">24.3</span></div>
+  <div style="position:absolute; left:842px; top:261px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:867px; top:260px; font-size:13px; color:#2B3340;">docTTTTTquery <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">27.7</span></div>
+  <div style="position:absolute; left:1216px; top:224px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1000px; top:223px; width:208px; text-align:right; font-size:13px; color:#2B3340;">ColBERT 只重排 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">34.8</span></div>
+  <div style="position:absolute; left:1280px; top:261px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1305px; top:260px; font-size:13px; font-weight:700; color:#2E7B4F;">ColBERT 全庫 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">36.0</span></div>
+
+  <div style="position:absolute; left:180px; top:296px; width:1320px; height:40px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:307px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">15</div>
+  <div style="position:absolute; left:432px; top:307px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">20</div>
+  <div style="position:absolute; left:696px; top:307px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">25</div>
+  <div style="position:absolute; left:960px; top:307px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">30</div>
+  <div style="position:absolute; left:1224px; top:307px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">35</div>
+  <div style="position:absolute; left:1466px; top:307px; width:30px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">40</div>
+
+  <div style="position:absolute; left:60px; top:386px; font-size:18px; font-weight:700; color:#1C2431;">召回</div>
+  <div style="position:absolute; left:60px; top:412px; font-size:12px; color:#8A93A0;">Recall@1000 %</div>
+  <div style="position:absolute; left:180px; top:382px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:419px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+
+  <div style="position:absolute; left:263px; top:410px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:288px; top:409px; font-size:13px; color:#2B3340;">BM25 官方 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">81.4</span></div>
+  <div style="position:absolute; left:263px; top:373px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:288px; top:372px; font-size:13px; color:#2B3340;">ColBERT 只重排 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">81.4</span></div>
+  <div style="position:absolute; left:547px; top:410px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:572px; top:409px; font-size:13px; color:#2B3340;">Anserini <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">85.7</span></div>
+  <div style="position:absolute; left:772px; top:373px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:797px; top:372px; font-size:13px; color:#2B3340;">doc2query <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">89.1</span></div>
+  <div style="position:absolute; left:897px; top:410px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:922px; top:409px; font-size:13px; color:#2B3340;">DeepCT <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">91</span></div>
+  <div style="position:absolute; left:1141px; top:373px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:1166px; top:372px; font-size:13px; color:#2B3340;">docTTTTTquery <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">94.7</span></div>
+  <div style="position:absolute; left:1280px; top:410px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1305px; top:409px; font-size:13px; font-weight:700; color:#2E7B4F;">ColBERT 全庫 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">96.8</span></div>
+
+  <div style="position:absolute; left:180px; top:444px; width:1320px; height:40px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:455px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">80</div>
+  <div style="position:absolute; left:498px; top:455px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">85</div>
+  <div style="position:absolute; left:828px; top:455px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">90</div>
+  <div style="position:absolute; left:1158px; top:455px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">95</div>
+  <div style="position:absolute; left:1462px; top:455px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">100</div>
+
+  <div style="position:absolute; left:60px; top:506px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">表 2 還有 Recall@50：ColBERT 全庫檢索是 82.9，已經高於官方 BM25 的 Recall@1000（81.4），也高於 docTTTTTquery 以外所有方法的 Recall@200。DeepCT 的召回率引自它的原論文。</div>
+
+  <div style="position:absolute; left:60px; top:590px; width:470px; height:210px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">MRR@10 36.0，高於只重排的 34.8</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">同一個模型，差別只在候選從哪裡來；直接從全庫撈，能找回 BM25 前 1000 名裡根本沒有的相關段落。</div>
+    <div style="font-size:13px; color:#8A93A0;">Local Eval 上是 36.7 對 36.4。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:590px; width:470px; height:210px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">前 50 名勝過 BM25 的前 1000 名</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">Recall@50 82.9，對官方 BM25 的 Recall@1000 81.4。改寫文件的方法裡最好的 docTTTTTquery，MRR@10 比 BM25 高 9%，仍只有 27.7。</div>
+    <div style="font-size:13px; color:#8A93A0;">其他方法裡，只有它的 Recall@200（86.9）比 82.9 高。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:590px; width:470px; height:210px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">代價：458 毫秒</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">BM25 系列是 62 到 87 毫秒的單執行緒延遲；ColBERT 全庫檢索 458 毫秒，含 faiss 過濾與重排，faiss 用上所有 CPU 核心。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文：BM25 系列把索引分片平行還能更快。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：只用表 2 的數字；這張表的 ColBERT 用平方 L2 距離（faiss 做 L2 比較快），所以只重排是 34.8，和表 1 的 34.9 不同。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>除了便宜的重排，ColBERT 也能直接從完整的集合檢索前 k 名。表 2 讓每個模型直接從 MS MARCO 的 880 萬份文件裡，為每條查詢取前 1000 名；除了 MRR@10 與延遲，還列出 Recall@50、Recall@200、Recall@1000。對全庫檢索模型來說，召回率是重要的指標，因為它的工作就是替每條查詢把一個大集合過濾成一小批。</p>
+    <p>比較對象是 BM25（MS MARCO 官方的 BM25 排名，以及用 Anserini 工具包調好的 BM25），以及 doc2query、DeepCT、docTTTTTquery。作者說他們不知道有哪個傳統模型明顯勝過 Anserini 的 BM25。後面三個最後都用詞袋模型（主要是 BM25）檢索，差別在建 BM25 索引之前先改寫文件：重新估計每個詞的頻率，或為文件擴充新的詞。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 2</th><th>MRR@10（Dev）</th><th>MRR@10（Local Eval）</th><th>延遲（毫秒）</th><th>Recall@50</th><th>Recall@200</th><th>Recall@1000</th></tr></thead>
+        <tbody>
+          <tr><td>BM25（官方）</td><td>16.7</td><td>–</td><td>–</td><td>–</td><td>–</td><td>81.4</td></tr>
+          <tr><td>BM25（Anserini）</td><td>18.7</td><td>19.5</td><td>62</td><td>59.2</td><td>73.8</td><td>85.7</td></tr>
+          <tr><td>doc2query</td><td>21.5</td><td>22.8</td><td>85</td><td>64.4</td><td>77.9</td><td>89.1</td></tr>
+          <tr><td>DeepCT</td><td>24.3</td><td>–</td><td>62（估計）</td><td>69</td><td>82</td><td>91</td></tr>
+          <tr><td>docTTTTTquery</td><td>27.7</td><td>28.4</td><td>87</td><td>75.6</td><td>86.9</td><td>94.7</td></tr>
+          <tr><td>ColBERT L2（重排）</td><td>34.8</td><td>36.4</td><td>–</td><td>75.3</td><td>80.5</td><td>81.4</td></tr>
+          <tr><td>ColBERT L2（端到端）</td><td>36.0</td><td>36.7</td><td>458</td><td>82.9</td><td>92.3</td><td>96.8</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>延遲的量法要先看清楚。Anserini 的 BM25、doc2query、docTTTTTquery 用原作者基於 Anserini 的實作；它支援多執行緒，但只在不同查詢之間平行，所以表上報的是單執行緒延遲，作者也說把索引分片平行處理，就能再降低這些本來就很低的延遲。DeepCT 只重新估計 BM25 的詞頻、沒有改動索引的其他部分，所以延遲用 BM25 的來估計（表上標「估計」），召回率則引自 DeepCT 的原論文。ColBERT 在這裡用 L2 版本，以負的平方 L2 距離當相似度；它的延遲包含 faiss 的候選過濾與之後的重排，faiss 用上所有 CPU 核心。</p>
+    <p>再看結果。Anserini 的 BM25 是 18.7，延遲很低：詞袋運算本身便宜，又有幾十年的詞袋檢索最佳化（Anserini 建在 Lucene 上）。doc2query、DeepCT、docTTTTTquery 各自明顯提高了效果，延遲幾乎沒有增加，因為最後仍然是 BM25 檢索；其中最好的 docTTTTTquery 靠微調 T5，比原始 BM25 高出 9%。ColBERT 端到端的 MRR@10 則大幅勝過所有端到端的基準。更有意思的是，同一個 ColBERT，端到端比重排還準（36.0 對 34.8），原因是召回變好了。Recall@k 在 k 為 50、200、1000 時都大幅領先；例如它的 Recall@50 超過官方 BM25 的 Recall@1000，也超過 docTTTTTquery 以外所有方法的 Recall@200。</p>
+
+    <div class="story">
+      <div class="label">關鍵觀念 · 四</div>
+      <h4>重排救不回候選裡沒有的段落</h4>
+      <p>表 2 裡有兩個 81.4：官方 BM25 的 Recall@1000，和「ColBERT L2（重排）」的 Recall@1000。這不是巧合。重排只能改變候選的順序，候選是 BM25 撈的，所以前 1000 名的召回率一點都不會變。</p>
+      <p>端到端的版本自己從全庫撈候選，Recall@1000 到 96.8。第 12 章的消融把這件事說得更直接：直接從全庫檢索，ColBERT 能把 BM25 前 1000 名裡根本沒有的相關段落排進前 10 名。放到 RAG 的脈絡，這就是「第一段檢索的召回決定上限」的具體例子；這句連結是整理者加的。</p>
+    </div>
+
+    <div class="thought">
+      <span class="label">思考題 · 03</span>
+      <h4>全庫檢索每條查詢 458 毫秒，值不值得？</h4>
+      <p>BM25 系列是 62 到 87 毫秒（單執行緒），MRR@10 最高 27.7；ColBERT 端到端是 36.0。</p>
+      <p class="hint">先看檢索之後還接了什麼：如果後面還有一個要跑好幾秒的生成模型，幾百毫秒的檢索未必是瓶頸；如果檢索就是整個服務，就要比較 BM25 系列分片平行之後的延遲，以及「BM25 撈、ColBERT 重排」這個折衷（表 2 的 34.8，Recall@1000 停在 81.4）夠不夠用。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="ablation" data-toc="消融實驗">
+  <div class="container head">
+    <p class="chapter">Chapter 12 · Ablation Studies</p>
+    <h2>細粒度互動、MaxSim、查詢補位，三個都拿不掉</h2>
+    <p class="lede">為了省訓練成本，消融實驗改用只留前 5 層 BERT 的 ColBERT 當對照。單一向量、改取平均、拿掉 query augmentation，三個變體的 MRR@10 都比較差。</p>
+    
+  </div>
+  <div class="cardband" id="card-12"><div class="cardlabel"><span class="n">圖卡 12 / 13</span><span class="t">消融：三個設計都拿不掉</span><button type="button" class="zoom" data-card="12">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">三個設計，拿掉任何一個分數都掉</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4.4 節（圖 5，MS MARCO Dev）：消融都和只留前 5 層 BERT 的 ColBERT [D] 比；圖上的長條沒有標數字，原文只寫出主模型 [E] 的 34.9%</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:410px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:18px; font-weight:700; color:#FFFFFF;">引言的總結（第 1 節）</div>
+  <div style="position:absolute; left:60px; top:198px; width:410px; height:288px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:20px 24px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:17px; font-weight:700; color:#1C2431;">ColBERT 有效，靠三件事</div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:16px; color:#2B3340;">細粒度的 late interaction</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:16px; color:#2B3340;">用 MaxSim 實作互動</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:16px; color:#2B3340;">編碼器的設計：查詢補 [mask]</div></div>
+    <div style="margin-top:auto; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">5 層 BERT &#183; 各訓練 20 萬次迭代</div>
+    <div style="margin-top:2px; font-size:13px; color:#8A93A0;">↑ 這是作者的主張，右邊是對應的三個檢查</div>
+  </div>
+
+  <div style="position:absolute; left:580px; top:150px; font-size:20px; font-weight:700; color:#1C2431;">三個消融，都和 5 層的完整版 [D] 比</div>
+  <div style="position:absolute; left:580px; top:190px; width:960px; height:92px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:16px 24px; display:flex; align-items:flex-start; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#C8501F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">1</div>
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:20px; font-weight:700; color:#1C2431;">[A] 拿掉細粒度互動</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">單一向量</div></div>
+      <div style="font-size:14px; color:#6B7380;">[CLS] 各出一個向量，線性層擴到 4096 維（＝32×128），用內積打分 → 原文：明顯較差</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:292px; width:960px; height:92px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:16px 24px; display:flex; align-items:flex-start; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#C8501F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">2</div>
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:20px; font-weight:700; color:#1C2431;">[B] MaxSim 換成平均</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">平均相似度</div></div>
+      <div style="font-size:14px; color:#6B7380;">每個查詢向量對文件所有向量取平均 → 較差：查詢詞要盯住文件裡特定的詞</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:394px; width:960px; height:92px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:16px 24px; display:flex; align-items:flex-start; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#C8501F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">3</div>
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:20px; font-weight:700; color:#1C2431;">[C] 不補 [mask]</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">無查詢擴增</div></div>
+      <div style="font-size:14px; color:#6B7380;">拿掉 query augmentation，查詢不再補到 32 個位置 → MRR@10 明顯下降</div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:530px; width:480px; height:140px; box-sizing:border-box; background-color:#1F2A3A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:20px; font-weight:700; color:#FFFFFF;">判定：三個主張都成立</div>
+    <div style="font-size:14px; color:rgba(255,255,255,0.78); line-height:1.65;">三個變體都輸給同樣 5 層的完整版 [D]；每拿掉一個設計，MRR@10 就往下掉。</div>
+  </div>
+  <div style="position:absolute; left:580px; top:530px; width:960px; height:140px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">另外兩條長條</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">[E] 是 12 層的主模型，MRR@10 34.9%。[F] 再加上全庫檢索，MRR@10 更高：它能把 BM25 前 1000 名裡根本沒有的文件排進前 10 名。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:686px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:704px; font-size:20px; font-weight:700; color:#1C2431;">整理者的三句讀法</div>
+  <div style="position:absolute; left:60px; top:742px; font-size:16px; color:#2B3340;">① 單一向量把整份文件壓成一點，查詢裡每個詞各自要找的證據被攤平了。</div>
+  <div style="position:absolute; left:60px; top:772px; font-size:16px; color:#2B3340;">② 取最大讓每個查詢詞各自找到最好的證據；取平均會被不相關的詞稀釋。</div>
+  <div style="position:absolute; left:60px; top:802px; font-size:16px; color:#2B3340;">③ [mask] 位置是模型可以學著用來擴充查詢的空位，不只是補長度。</div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：[A]、[B]、[C] 的分數原文沒有寫出，這裡只寫原文的定性描述；三句讀法是整理者的，不是原文的結論。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c12" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M482 338L558 338" stroke="#9AA3AE" stroke-width="2" marker-end="url(#ag-c12)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 10 章的結果顯示，ColBERT 的互動機制又便宜又簡單，效果卻很好。為了找出效果從哪裡來，作者檢查了互動與編碼器架構裡幾個重要的細節，報告 MS MARCO 驗證集上的 MRR@10（圖 5）。主要的重排模型標為 [E]，MRR@10 是 34.9%。</p>
+    <p>每個模型都很貴，不可能全部用 12 層訓練。所以作者訓練了一個只保留 BERT 12 層裡前 5 層的主模型副本 [D]，所有消融模型也都用 5 層、同樣訓練 20 萬次迭代。圖 5 的長條沒有標數字，下面只寫原文的描述：</p>
+
+    <div class="values">
+      <div class="value-card"><span class="tag">[A] 單一向量</span><h4>細粒度互動有沒有必要</h4><p>用 BERT 的 [CLS] 上下文向量為查詢和文件各產生一個向量，經線性層擴到 4096 維（等於 N<sub>q</sub> × 128 ＝ 32 × 128），用內積估計相關度；作者發現單一向量重排時內積比餘弦好。結果明顯不如 ColBERT。</p></div>
+      <div class="value-card"><span class="tag">[B] 改取平均</span><h4>MaxSim 是否比簡單的替代好</h4><p>把最大相似度換成平均相似度。結果較差，說明查詢裡的每個詞要特別注意文件裡特定的詞，而不是把整份文件平均起來看。</p></div>
+      <div class="value-card"><span class="tag">[C] 不補 [mask]</span><h4>query augmentation 的作用</h4><p>拿掉查詢擴增，也就是不再用 [mask] 把查詢補到 32 個位置。ColBERT 的 MRR@10 明顯下降。</p></div>
+      <div class="value-card"><span class="tag">[F] 加上全庫檢索</span><h4>12 層、端到端</h4><p>全庫檢索的影響不只在召回，也在 MRR@10：它能把 BM25 前 1000 名裡完全沒出現的文件排進前 10 名。</p></div>
+    </div>
+
+    <p>這組結果和引言的總結對得上：late interaction、它用 MaxSim 的實作方式、以及 BERT 編碼器裡的關鍵設計，都是 ColBERT 有效的必要條件。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>為什麼要跟 5 層的 [D] 比</h4>
+      <p>[D] 和 [E] 的差別只在 BERT 的層數。[A]、[B]、[C] 都是 5 層，和同樣 5 層的 [D] 比，才是只改一個變數的比較；拿它們和 12 層的 [E] 比，會把層數的影響也算進去。這一段是整理者的提醒，原文沒有另外討論 [D] 和 [E] 的差距。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="takeaways" data-toc="結論與代價">
+  <div class="container head">
+    <p class="chapter">Chapter 13 · Conclusions</p>
+    <h2>把 BERT 級排序變便宜的，是延後而保留的互動</h2>
+    <p class="lede">結論一節只有一段：查詢和文件獨立編碼成細粒度的表示，再用便宜、可剪枝的計算互動，ColBERT 保留了深度語言模型的表現力，也讓全庫的神經檢索可行。</p>
+    
+  </div>
+  <div class="cardband" id="card-13"><div class="cardlabel"><span class="n">圖卡 13 / 13</span><span class="t">結論：三個設計與五個方向</span><button type="button" class="zoom" data-card="13">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">BERT 級排序變便宜，靠的是三個設計</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">結論：比既有的 BERT 排序模型快 170 倍以上、FLOPs 少約 14,000 倍，效果只小幅受影響，並勝過所有非 BERT 的基準</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:310px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#C8501F;">原則 01</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.35;">互動可以晚，<br>但不能省</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">查詢和文件各自編碼，最後才用 MaxSim 互動；這一步沒有參數，卻留住了詞對詞的比對。單一向量版本明顯較差（第 12 卡）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 一個向量裝整份文件<br>✓ 每個詞一個向量，最後才比</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:310px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#2E7B4F;">原則 02</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.35;">文件的成本搬到離線，<br>只付一次</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">文件向量離線編好存起來，MS MARCO 全庫約三小時；查詢時只編碼查詢，重排從 10,700 毫秒降到 61 毫秒（第 2、10 卡）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">代價是空間：MS MARCO 全庫 27 到 286 GiB。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:310px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#1F2A3A;">原則 03</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.35;">選一個能剪枝的互動，<br>才能從全庫取</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">MaxSim 讓每個查詢向量各自到 faiss 找近鄰，撈出候選再精排；全庫檢索的召回高過 BM25，MRR@10 也從 34.8 升到 36.0（第 9、11 卡）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">代價是延遲：每條查詢 458 毫秒。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:504px; font-size:20px; font-weight:700; color:#1C2431;">論文點名、但沒有做實驗的五個方向</div>
+  <div style="position:absolute; left:60px; top:544px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">01</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">查詢補短一點</div>
+  </div>
+  <div style="position:absolute; left:360px; top:544px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">02</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">向量維度更小</div>
+  </div>
+  <div style="position:absolute; left:660px; top:544px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">03</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">文件向量量化</div>
+  </div>
+  <div style="position:absolute; left:960px; top:544px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">04</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">向量放在 GPU 上</div>
+  </div>
+  <div style="position:absolute; left:1260px; top:544px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">05</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">整個在 CPU 上重排</div>
+  </div>
+  <div style="position:absolute; left:60px; top:634px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">前四項出自第 4.2 節對延遲與 FLOPs 的說明；第五項是圖 4 討論裡作者的非正式觀察，明確列在範圍外。五格沒有先後順序。</div>
+
+  <div style="position:absolute; left:60px; top:680px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">一句話</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">能先做的都搬到離線，非做不可的互動留到最後，而且讓它便宜到可以剪枝。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三條原則是整理者從摘要與結論歸納的；170 倍與約 14,000 倍是結論的說法，表 1 的 FLOPs 倍數是 13,900。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>作者的結論是：ColBERT 用 contextualized late interaction 把深度語言模型（這裡是 BERT）用在有效率的檢索上。把查詢和文件各自編碼成細粒度的表示，再透過便宜、可剪枝的計算讓它們互動，就能保留深度語言模型的表現力，同時大幅加快查詢處理；這也讓 ColBERT 可以直接從大型文件集合做端到端的神經檢索。量化的結果是比既有的 BERT 排序模型快 170 倍以上、每次查詢的 FLOPs 少約 14,000 倍，效果只受到很小的影響，並勝過所有非 BERT 的基準。</p>
+    <p>論文沒有獨立的限制一節，但正文裡散落著幾筆要付的成本，放在一起比較好判斷：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>建索引</strong>每份文件要過一次 BERT；MS MARCO 用一台四張 GPU 的伺服器約三小時（第 6 章）。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>空間</strong>每個詞存一個向量，MS MARCO 全庫要 27 到 286 GiB，看維度與每維的位元組數（表 4）。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>重排延遲</strong>61 毫秒，比非 BERT 重排器多幾十毫秒，多半花在搬資料（第 7、10 章）。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>全庫檢索延遲</strong>458 毫秒，BM25 系列是 62 到 87 毫秒的單執行緒延遲（第 11 章）。</div></div>
+    </div>
+
+    <p>作者在正文點名、但沒有做實驗的方向有五個：把查詢補到更短、用更小的向量維度、把文件向量量化、把向量放在 GPU 上，以及整個在 CPU 上跑重排。前四個出自第 4.2 節對延遲的說明，最後一個是作者的非正式觀察，明確列在範圍之外。</p>
+
+    <div class="explain">
+      <span class="label">整理者的讀法</span>
+      <h4>放回 RAG 的檢索器</h4>
+      <p>論文沒有提到 RAG，下面是整理者的連結。RAG 的檢索器決定生成模型看得到什麼，這篇論文給的兩種用法都能直接放進檢索管線：把 ColBERT 當第二段的重排器，接在 BM25 或向量檢索後面（第 7、10 章）；或讓它自己當第一段檢索器，從全庫撈候選（第 8、11 章）。後者換來的是召回，代價是每個詞一個向量的儲存，以及比 BM25 長的檢索延遲。</p>
+    </div>
+
+    <dl class="faq">
+      <div><dt>ColBERT 一定要用 GPU 嗎？</dt><dd>論文的重排延遲在一張 V100 上量；全庫檢索的實驗以 CPU 為主，faiss 用上所有核心。作者非正式地發現 FLOPs 的差距大到可以整個在 CPU 上重排，但沒有正式評估。</dd></div>
+      <div><dt>一定要用 BERT 嗎？</dt><dd>不一定。第 3 節說 late interaction 的框架可以套在 CNN、RNN、transformer 等各種架構上；這篇選 BERT，是因為它效果最好、計算也最貴。</dd></div>
+      <div><dt>索引要多大？</dt><dd>看維度與每維的位元組數。MS MARCO 的 880 萬段落，128 維、每維 4 位元組要 286 GiB；24 維、每維 2 位元組只要 27 GiB，MRR@10 只低 1%（表 4）。</dd></div>
+    </dl>
+
+    <div class="pullquote bronze">
+      能先做的都搬到離線，非做不可的互動留到最後，而且讓它便宜到可以剪枝。
+      <cite>整理自第 1、3、5 節</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="glossary" class="nocard glossary" data-toc="名詞速查">
+  <div class="wide">
+    <p class="eyebrow">Reference · 名詞速查</p>
+    <h2>關鍵名詞與它們在論文裡的位置</h2>
+    <p class="lede">先列模型與架構的名詞，再列檢索流程的，最後是資料集與指標。</p>
+    <dl class="glossary-grid">
+      <div class="term"><dt>late interaction</dt><span class="zh-name">延後互動</span><dd>查詢和文件各自編碼成一袋向量，最後才用便宜的計算互動；ColBERT 的核心範式（第 1、3.1 節）。</dd></div>
+      <div class="term"><dt>MaxSim</dt><span class="zh-name">最大相似度</span><dd>一個查詢向量對文件所有向量取最大的相似度；ColBERT 的分數是所有查詢向量的 MaxSim 加總。</dd></div>
+      <div class="term"><dt>bag of embeddings</dt><span class="zh-name">一袋向量</span><dd>每個詞一個上下文向量的集合；查詢的叫 E<sub>q</sub>，文件的叫 E<sub>d</sub>。</dd></div>
+      <div class="term"><dt>query augmentation</dt><span class="zh-name">查詢擴增</span><dd>用 [mask] 把查詢補到 N<sub>q</sub>＝32 個位置，讓 BERT 在這些位置產生可以擴充或重新加權查詢的向量；拿掉它 MRR@10 明顯下降。</dd></div>
+      <div class="term"><dt>[Q] / [D]</dt><span class="zh-name">查詢／文件記號</span><dd>放在 [CLS] 後面的特殊記號，讓共用的 BERT 分辨輸入是查詢還是文件；它們的嵌入從頭訓練。</dd></div>
+      <div class="term"><dt>representation-focused</dt><span class="zh-name">表示型排序器</span><dd>查詢和文件各自算一個向量，比一次相似度，例如 DSSM、SNRM；今天常說的 bi-encoder（整理者的對應）。</dd></div>
+      <div class="term"><dt>interaction-focused</dt><span class="zh-name">互動型排序器</span><dd>先建查詢詞與文件詞的互動矩陣，再用神經網路找配對訊號，例如 DRMM、KNRM、Conv-KNRM。</dd></div>
+      <div class="term"><dt>all-to-all interaction</dt><span class="zh-name">全對全互動</span><dd>查詢和文件接成一串進 BERT，詞與詞在兩者內外同時互動；今天常說的 cross-encoder（整理者的對應）。</dd></div>
+      <div class="term"><dt>re-ranking</dt><span class="zh-name">重排</span><dd>對另一個模型（通常是 BM25）撈出的前 k 名重新排序；k 小時 ColBERT 窮舉計算，召回被候選鎖住。</dd></div>
+      <div class="term"><dt>end-to-end retrieval</dt><span class="zh-name">全庫端到端檢索</span><dd>直接從整個集合取前 k 名；ColBERT 用 faiss 撈候選、再用 MaxSim 精排。</dd></div>
+      <div class="term"><dt>pruning-friendly</dt><span class="zh-name">對剪枝友善</span><dd>可以用向量相似度索引跳過大部分文件，不必逐份算完整分數；MaxSim 有這個性質，原文說取平均之類的替代比較沒有。</dd></div>
+      <div class="term"><dt>faiss</dt><span class="zh-name">向量相似度搜尋函式庫</span><dd>Facebook 的大規模向量搜尋函式庫；ColBERT 全庫檢索的第一段用它。</dd></div>
+      <div class="term"><dt>IVFPQ</dt><span class="zh-name">分區加乘積量化</span><dd>faiss 的一種索引：k-means 切 P 個區、查詢時只搜最近的 p 個區，每個向量切成 s 段、每段 1 個位元組。</dd></div>
+      <div class="term"><dt>BM25</dt><span class="zh-name">詞袋排序函數</span><dd>傳統的詞頻式排序；實驗裡既是重排的候選來源，也是全庫檢索的基準（Anserini 版 MRR@10 18.7）。</dd></div>
+      <div class="term"><dt>doc2query / docTTTTTquery</dt><span class="zh-name">文件擴充</span><dd>用 seq2seq 模型（後者用 T5）為文件生成可能的查詢接在後面，再建 BM25 索引。</dd></div>
+      <div class="term"><dt>DeepCT</dt><span class="zh-name">上下文詞權重</span><dd>用 BERT 依上下文估計 BM25 的詞頻成分；最後仍用 BM25 檢索。</dd></div>
+      <div class="term"><dt>TK</dt><span class="zh-name">Transformer-Kernel</span><dd>和 ColBERT 同期的非 BERT 模型，在 KNRM 前加 Transformer 編碼；MRR@10 最好 31%，不支援端到端檢索。</dd></div>
+      <div class="term"><dt>MRR@10</dt><span class="zh-name">前 10 名平均倒數排名</span><dd>第一個相關結果排名的倒數取平均，前 10 名以外算 0；MS MARCO 的官方指標。</dd></div>
+      <div class="term"><dt>Recall@k</dt><span class="zh-name">前 k 名召回率</span><dd>相關文件出現在前 k 名裡的比例；表 2 列了 k 為 50、200、1000。</dd></div>
+      <div class="term"><dt>MAP</dt><span class="zh-name">平均精確率均值</span><dd>TREC CAR 的官方指標；表 3 裡 BM25＋ColBERT 是 31.3。</dd></div>
+      <div class="term"><dt>MS MARCO</dt><span class="zh-name">段落排序資料集</span><dd>880 萬段落、100 萬條 Bing 真實查詢，標註稀疏；主要的實驗資料。</dd></div>
+      <div class="term"><dt>TREC CAR</dt><span class="zh-name">複雜答案檢索資料集</span><dd>以維基百科合成，約 2,900 萬段落；查詢是頁面標題接章節標題，測試集 2,254 條。</dd></div>
+      <div class="term"><dt>FLOPs</dt><span class="zh-name">浮點運算次數</span><dd>論文用 torchprofile 估計每次查詢的計算量；重排時 ColBERT 7B，BERT-base 97T。</dd></div>
+    </dl>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>資料來源：arXiv，〈ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT〉，Omar Khattab、Matei Zaharia（Stanford），2020-04-27（v2 2020-06-04；SIGIR 2020）。<br><a href="https://arxiv.org/abs/2004.12832">arxiv.org/abs/2004.12832</a></p>
+    <p class="credit">整理於 2026-09-23</p>
+    <p class="disclaimer">本頁為學習用的重述與整理，不是原文逐句翻譯。觀點與著作權屬於原作者。程式片段為教學用精簡版，實際用法請以原文與官方文件為準。</p>
+  </div>
+</footer>
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="圖卡大圖"><button type="button" class="close">關閉（Esc）</button><div class="frame"></div></div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fitFrames() {
+    var frames = document.querySelectorAll('.cardband .frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  var KEY = 'rearranged-article-mode';
+  function setMode(m, save) {
+    document.body.classList.toggle('mode-cards', m === 'cards');
+    var btns = document.querySelectorAll('.modebar button[data-mode]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-mode') === m ? 'true' : 'false');
+    }
+    if (save) { try { localStorage.setItem(KEY, m); } catch (e) {} }
+    fitFrames();
+  }
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  setMode(saved === 'cards' ? 'cards' : 'full', false);
+
+  var box = document.getElementById('lightbox');
+  var boxFrame = box.querySelector('.frame');
+  function fitLightbox() {
+    if (!box.classList.contains('open')) return;
+    var root = boxFrame.firstElementChild;
+    if (!root) return;
+    var s = Math.min(1, (window.innerWidth - 48) / W, (window.innerHeight - 48) / H);
+    root.style.transform = 'scale(' + s + ')';
+    boxFrame.style.width = Math.round(W * s) + 'px';
+    boxFrame.style.height = Math.round(H * s) + 'px';
+  }
+  function openLightbox(num) {
+    var bandEl = document.getElementById('card-' + num);
+    if (!bandEl) return;
+    var root = bandEl.querySelector('.frame > div');
+    boxFrame.innerHTML = '';
+    var clone = root.cloneNode(true);
+    clone.style.transform = '';
+    boxFrame.appendChild(clone);
+    box.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    fitLightbox();
+  }
+  function closeLightbox() {
+    box.classList.remove('open');
+    boxFrame.innerHTML = '';
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var b = t.closest('.modebar button[data-mode]');
+    if (b) { setMode(b.getAttribute('data-mode'), true); return; }
+    var z = t.closest('.cardlabel .zoom');
+    if (z) { openLightbox(z.getAttribute('data-card')); return; }
+    if (t.closest('.lightbox') && !t.closest('.lightbox .frame')) { closeLightbox(); }
+  });
+  document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') closeLightbox(); });
+  window.addEventListener('resize', function () { fitFrames(); fitLightbox(); });
+  window.addEventListener('load', fitFrames);
+  fitFrames();
+})();
+</script>
+</body>
+</html>
