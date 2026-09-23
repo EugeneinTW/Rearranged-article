@@ -1,6 +1,33 @@
 window.ARTICLES = {
   "articles": [
     {
+      "slug": "effective-agents",
+      "path": "articles/effective-agents/index.html",
+      "title": "Building Effective Agents：先找最簡單的解，需要時才把它做成 agent",
+      "summary": "Anthropic 工程團隊 2024 年底的建議：最成功的 LLM agent 用的是簡單、可組合的模式。從擴增型 LLM 出發，五種工作流各配一張機制圖，再到 agent 的迴圈、工具的提示工程與三條原則。每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "Anthropic Engineering · Erik Schluntz、Barry Zhang",
+        "url": "https://www.anthropic.com/engineering/building-effective-agents",
+        "date": "2024-12-19"
+      },
+      "date": "2026-09-23",
+      "tags": [
+        "agents",
+        "workflows",
+        "tool-design",
+        "anthropic"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/effective-agents/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "compound-ai-systems",
       "path": "articles/compound-ai-systems/index.html",
       "title": "複合式 AI 系統：把模型能力組成可靠的應用",
