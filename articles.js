@@ -25,6 +25,8 @@ window.ARTICLES = {
         "name": "CS 329Z",
         "week": 2,
         "kind": "必讀",
+        "section": "Foundations & Landscape",
+        "lecture": "LLMs for Builders",
         "url": "https://cs329z.stanford.edu/"
       },
       "extras": [
