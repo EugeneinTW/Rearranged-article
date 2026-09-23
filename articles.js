@@ -97,6 +97,8 @@ window.ARTICLES = {
         "name": "CS 329Z",
         "week": 1,
         "kind": "選讀",
+        "section": "Foundations & Landscape",
+        "lecture": "Introduction — What Are Agentic Systems?",
         "url": "https://cs329z.stanford.edu/"
       },
       "extras": [
