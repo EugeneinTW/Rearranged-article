@@ -1,0 +1,1630 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Effective Context Engineering</title>
+<meta name="description" content="Anthropic Applied AI 團隊 2025 年的工程文章：模型的注意力是有限的預算，做 agent 的功夫從寫好 prompt，轉向每一步挑出最小、訊號最強的一組 token。從 system prompt 的高度、工具與範例，到即時載入，再到長任務的壓縮、結構化筆記與子 agent，每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="context-engineering, agents, prompt-engineering, anthropic, cs329z">
+<meta name="source" content="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">
+<meta name="date" content="2026-09-23">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Theme: tech-modern 變體「測試報告語意色」
+   藍 = 主色 / 綠 = pass / 琥珀 = 注意 / 紅 = fail
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --paper: #ffffff;
+  --paper-soft: #f3f5f8;
+  --paper-shadow: #dde2e8;
+  --ink: #121821;
+  --ink-soft: #3b4450;
+  --ink-mute: #6b7481;
+  --primary: #1e56a8;
+  --primary-deep: #143a72;
+  --primary-bg: #e6eef9;
+  --accent: #157a52;
+  --accent-deep: #0d5236;
+  --accent-bg: #e1f3e9;
+  --warm: #b8620e;
+  --warm-deep: #7d4108;
+  --warm-bg: #fbeddc;
+  --danger: #b83228;
+  --danger-bg: #f9e3e0;
+  --stone: #5a6370;
+  --stone-bg: #eceff3;
+  --code-bg: #0f1720;
+  --code-ink: #e6edf3;
+  --code-mute: #8b98a8;
+  --code-blue: #7cc4ff;
+  --code-green: #7ee2b8;
+  --code-amber: #ffc46b;
+
+  --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-cjk: 'Noto Sans TC', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --content-width: 780px;
+  --wide-width: 1100px;
+  --gutter: 24px;
+}
+
+/* ---------- reset & 排版 ---------- */
+* { box-sizing: border-box; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+body {
+  margin: 0; padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-cjk);
+  font-size: 18px;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: var(--content-width); margin: 0 auto; padding: 0 var(--gutter); }
+.wide { max-width: var(--wide-width); margin: 0 auto; padding: 0 var(--gutter); }
+section { padding-block: 64px; }
+section + section { border-top: 1px solid var(--paper-shadow); }
+
+h1, h2, h3, h4 { font-family: var(--font-cjk); font-weight: 700; text-wrap: balance; }
+h1 { font-size: 56px; line-height: 1.14; margin: 0 0 24px; font-weight: 800; }
+h2 { font-size: 36px; line-height: 1.25; margin: 0 0 18px; letter-spacing: -0.01em; }
+h3 { font-size: 25px; line-height: 1.35; margin: 44px 0 14px; }
+h4 { font-size: 20px; line-height: 1.4; margin: 26px 0 10px; }
+p { margin: 0 0 18px; }
+ul, ol { padding-left: 26px; margin: 0 0 18px; }
+li { margin-bottom: 8px; }
+em { font-style: normal; color: var(--primary-deep); font-weight: 600; }
+strong { font-weight: 700; }
+a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+code {
+  font-family: var(--font-mono); font-size: 0.86em;
+  background: var(--stone-bg); color: var(--primary-deep);
+  padding: 2px 6px; border-radius: 4px;
+}
+.mono { font-family: var(--font-mono); }
+
+/* ---------- Hero ---------- */
+.hero {
+  padding-block: 84px 60px;
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-soft) 100%);
+  border-bottom: 2px solid var(--primary-deep);
+  position: relative;
+}
+.hero::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: linear-gradient(90deg,
+    var(--primary) 0%, var(--primary) 25%,
+    var(--accent) 25%, var(--accent) 50%,
+    var(--warm) 50%, var(--warm) 75%,
+    var(--danger) 75%, var(--danger) 100%);
+}
+.hero-meta {
+  display: flex; flex-wrap: wrap; gap: 10px 22px;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  margin-bottom: 32px;
+}
+.hero-meta span::before { content: "—"; margin-right: 10px; color: var(--paper-shadow); }
+.hero-meta span:first-child::before { content: ""; margin: 0; }
+.hero h1 { font-size: 60px; font-weight: 800; word-break: keep-all; }
+.hero h1 .accent {
+  display: block; margin-top: 12px;
+  font-size: 0.55em; font-weight: 600; line-height: 1.3;
+  color: var(--primary-deep);
+}
+.hero .lede { font-size: 22px; max-width: 720px; }
+.hero-keystat {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 28px; margin: 44px 0 0; padding-top: 34px;
+  border-top: 1px dashed var(--paper-shadow);
+}
+.hero-keystat dt {
+  font-family: var(--font-sans);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--ink-mute); margin-bottom: 6px;
+}
+.hero-keystat dd {
+  margin: 0; font-family: var(--font-mono);
+  font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1;
+}
+.hero-keystat dd small { font-family: var(--font-cjk); font-size: 14px; color: var(--ink-mute); font-weight: 400; margin-left: 6px; }
+
+/* ---------- Chapter / lede / eyebrow ---------- */
+.chapter {
+  font-family: var(--font-mono);
+  font-size: 12.5px; color: var(--primary);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 0 0 10px;
+}
+.chapter::before { content: "§ "; color: var(--paper-shadow); margin-right: 4px; }
+.lede {
+  font-size: 22px; line-height: 1.6; color: var(--ink-soft);
+  margin: 0 0 28px; font-weight: 400;
+}
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--primary); margin: 0 0 14px;
+}
+
+/* ---------- Pull quote ---------- */
+.pullquote {
+  margin: 48px -16px; padding: 32px 40px;
+  font-family: var(--font-cjk);
+  font-size: 27px; line-height: 1.5; font-weight: 600;
+  color: var(--primary-deep);
+  border-left: 5px solid var(--primary);
+  background: linear-gradient(90deg, var(--primary-bg) 0%, transparent 100%);
+}
+.pullquote.bronze {
+  color: var(--accent-deep); border-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-bg) 0%, transparent 100%);
+}
+.pullquote.terra {
+  color: var(--warm-deep); border-color: var(--warm);
+  background: linear-gradient(90deg, var(--warm-bg) 0%, transparent 100%);
+}
+.pullquote cite {
+  display: block; margin-top: 16px; font-style: normal; font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  letter-spacing: 0.06em;
+}
+.pullquote cite::before { content: "— "; }
+
+/* ---------- English quote ---------- */
+.quote-en {
+  margin: 28px 0;
+  font-family: var(--font-sans); font-style: italic;
+  font-size: 21px; line-height: 1.5; color: var(--ink);
+  padding-left: 20px; border-left: 3px solid var(--accent);
+}
+.quote-en .zh {
+  display: block; margin-top: 10px;
+  font-family: var(--font-cjk); font-style: normal;
+  font-size: 15px; color: var(--ink-soft); line-height: 1.6;
+}
+
+/* ---------- Story ---------- */
+.story {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 14px;
+  padding: 38px 44px; margin: 48px 0;
+  position: relative;
+}
+.story::before {
+  content: "❝"; position: absolute; top: -6px; left: 24px;
+  font-size: 72px; color: var(--warm); line-height: 1;
+  font-family: var(--font-sans);
+}
+.story .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.18em;
+  color: var(--warm); margin-bottom: 10px; padding-left: 42px;
+}
+.story h4 { margin: 0 0 16px; font-size: 22px; color: var(--warm-deep); }
+.story p { margin-bottom: 14px; font-size: 17px; line-height: 1.7; }
+.story p:last-child { margin-bottom: 0; }
+
+/* ---------- Explain ---------- */
+.explain {
+  background: var(--primary-bg);
+  border-left: 4px solid var(--primary);
+  border-radius: 4px;
+  padding: 26px 30px; margin: 36px 0;
+  font-family: var(--font-cjk); position: relative;
+}
+.explain.bronze { background: var(--accent-bg); border-color: var(--accent); }
+.explain.terra { background: var(--warm-bg); border-color: var(--warm); }
+.explain.stone { background: var(--stone-bg); border-color: var(--stone); }
+.explain .label {
+  position: absolute; top: -12px; left: 16px;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.15em; padding: 4px 12px;
+  border-radius: 3px; text-transform: uppercase;
+}
+.explain.bronze .label { background: var(--accent); }
+.explain.terra .label { background: var(--warm); }
+.explain.stone .label { background: var(--stone); }
+.explain h4 { margin: 4px 0 12px; font-size: 19px; color: var(--primary-deep); }
+.explain.bronze h4 { color: var(--accent-deep); }
+.explain.terra h4 { color: var(--warm-deep); }
+.explain.stone h4 { color: var(--ink); }
+.explain p { font-size: 16.5px; }
+.explain p:last-child { margin-bottom: 0; }
+.explain ul, .explain ol { margin: 8px 0 0; padding-left: 22px; }
+.explain li { margin-bottom: 6px; font-size: 16px; }
+.explain code { background: rgba(255,255,255,0.75); }
+
+/* ---------- Stat grid ---------- */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.stat-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 28px 24px; text-align: center;
+  border-top: 4px solid var(--primary);
+}
+.stat-card.bronze { border-color: var(--accent); }
+.stat-card.terra { border-color: var(--warm); }
+.stat-card.danger { border-color: var(--danger); }
+.stat-card .big {
+  font-family: var(--font-mono);
+  font-size: 46px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1; margin-bottom: 10px;
+}
+.stat-card.bronze .big { color: var(--accent-deep); }
+.stat-card.terra .big { color: var(--warm-deep); }
+.stat-card.danger .big { color: var(--danger); }
+.stat-card .big small { font-family: var(--font-cjk); font-size: 16px; opacity: 0.75; margin-left: 4px; font-weight: 500; }
+.stat-card .label {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.stat-card .note { margin-top: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.55; }
+
+/* ---------- Compare table ---------- */
+.table-scroll { overflow-x: auto; margin: 36px 0; }
+.compare {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-cjk); font-size: 15.5px;
+  background: var(--paper-soft);
+  border-radius: 10px; overflow: hidden;
+  min-width: 560px;
+}
+.compare th, .compare td {
+  padding: 15px 18px; text-align: left;
+  border-bottom: 1px solid var(--paper-shadow);
+  vertical-align: top; line-height: 1.6;
+}
+.compare th {
+  background: var(--primary-deep); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+}
+.compare tr:last-child td { border-bottom: none; }
+.compare td:first-child { font-weight: 700; color: var(--primary-deep); width: 24%; }
+.compare .id { font-family: var(--font-mono); font-size: 13px; display: block; color: var(--ink-mute); font-weight: 500; margin-bottom: 2px; }
+.compare .yes { color: var(--accent-deep); font-weight: 700; }
+.compare .no { color: var(--danger); font-weight: 700; }
+
+/* ---------- Value cards ---------- */
+.values {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.value-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 26px 24px;
+  border-top: 5px solid var(--primary);
+}
+.value-card:nth-child(2) { border-top-color: var(--accent); }
+.value-card:nth-child(3) { border-top-color: var(--warm); }
+.value-card:nth-child(4) { border-top-color: var(--primary-deep); }
+.value-card:nth-child(5) { border-top-color: var(--stone); }
+.value-card .num {
+  font-family: var(--font-mono);
+  font-size: 38px; font-weight: 700;
+  color: var(--primary); line-height: 1; margin-bottom: 12px;
+}
+.value-card:nth-child(2) .num { color: var(--accent); }
+.value-card:nth-child(3) .num { color: var(--warm); }
+.value-card:nth-child(4) .num { color: var(--primary-deep); }
+.value-card:nth-child(5) .num { color: var(--stone); }
+.value-card .tag {
+  display: inline-block; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--primary); margin-bottom: 10px;
+}
+.value-card:nth-child(2) .tag { color: var(--accent); }
+.value-card:nth-child(3) .tag { color: var(--warm); }
+.value-card:nth-child(4) .tag { color: var(--primary-deep); }
+.value-card h4 { margin: 0 0 10px; font-size: 19px; line-height: 1.4; }
+.value-card p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin: 0; }
+
+/* ---------- 擴充檢查卡（附成本標籤） ---------- */
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px; margin: 40px 0;
+}
+.card {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 12px;
+  padding: 24px 24px 22px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.card .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card h4 { margin: 0; font-size: 18.5px; line-height: 1.4; }
+.card p { margin: 0; font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); }
+.card .signal { font-family: var(--font-mono); font-size: 12.5px; color: var(--primary-deep); background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 6px; padding: 6px 10px; margin-top: 4px; overflow-x: auto; white-space: nowrap; }
+.pill {
+  flex: none; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px;
+}
+.pill.fast { background: var(--accent-bg); color: var(--accent-deep); }
+.pill.mid { background: var(--warm-bg); color: var(--warm-deep); }
+.pill.slow { background: var(--danger-bg); color: var(--danger); }
+
+/* ---------- Thought ---------- */
+.thought {
+  background: var(--accent-bg);
+  border-left: 4px solid var(--accent);
+  padding: 26px 30px; margin: 40px 0;
+  border-radius: 4px; position: relative;
+}
+.thought .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--accent-deep); margin-bottom: 10px;
+}
+.thought h4 { font-size: 19px; margin: 0 0 14px; color: var(--accent-deep); line-height: 1.45; }
+.thought p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin-bottom: 8px; }
+.thought .hint {
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px dashed rgba(13, 82, 54, 0.3);
+  font-size: 14px; color: var(--accent-deep);
+}
+.thought .hint::before { content: "建議方向："; font-weight: 700; }
+
+/* ---------- Code block ---------- */
+.codeblock { margin: 30px 0; }
+.codeblock .file {
+  display: inline-block; font-family: var(--font-mono);
+  font-size: 12px; color: var(--ink-mute);
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow); border-bottom: none;
+  border-radius: 8px 8px 0 0; padding: 7px 14px;
+}
+pre.code {
+  margin: 0; background: var(--code-bg); color: var(--code-ink);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65;
+  padding: 22px 24px; border-radius: 0 10px 10px 10px;
+  overflow-x: auto; tab-size: 2; white-space: pre;
+}
+pre.code.solo { border-radius: 10px; }
+pre.code .c { color: var(--code-mute); }
+pre.code .k { color: var(--code-blue); }
+pre.code .s { color: var(--code-green); }
+pre.code .a { color: var(--code-amber); font-weight: 700; }
+
+/* ---------- Flow（eval 迴圈圖） ---------- */
+.flow { display: flex; align-items: stretch; margin: 40px 0; }
+.flow-step {
+  flex: 1 1 0; min-width: 0;
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow);
+  border-radius: 10px; padding: 18px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.flow-step .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--primary); letter-spacing: 0.1em; }
+.flow-step strong { font-size: 17px; line-height: 1.3; }
+.flow-step span.d { font-size: 14px; line-height: 1.55; color: var(--ink-soft); }
+.flow-step.score { border-color: var(--accent); background: var(--accent-bg); }
+.flow-step.score .k { color: var(--accent-deep); }
+.flow-arrow { flex: none; width: 30px; position: relative; }
+.flow-arrow::before {
+  content: ""; position: absolute; top: 50%; left: 2px; right: 2px; height: 2px;
+  background: var(--primary); transform: translateY(-50%);
+}
+.flow-arrow::after {
+  content: ""; position: absolute; top: 50%; right: 4px; width: 9px; height: 9px;
+  border-top: 2px solid var(--primary); border-right: 2px solid var(--primary);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+/* ---------- Cascade（編號步驟） ---------- */
+.cascade { display: flex; flex-direction: column; gap: 14px; margin: 32px 0; }
+.cascade-step {
+  display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px;
+}
+.cascade-step .n {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-mono); font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.cascade-step .t { font-size: 16.5px; line-height: 1.65; }
+.cascade-step .t strong { display: block; margin-bottom: 2px; }
+
+/* ---------- Checklist ---------- */
+.checklist { list-style: none; padding: 0; margin: 32px 0; display: flex; flex-direction: column; gap: 12px; }
+.checklist li {
+  display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px; margin: 0;
+  font-size: 16.5px; line-height: 1.65;
+}
+.checklist .box {
+  width: 24px; height: 24px; margin-top: 3px;
+  border: 2px solid var(--accent); border-radius: 6px; background: var(--paper);
+}
+.checklist strong { display: block; }
+.checklist small { display: block; color: var(--ink-soft); font-size: 15px; }
+
+/* ---------- Glossary ---------- */
+.glossary { background: var(--primary-deep); color: var(--paper); padding-block: 64px; }
+.glossary h2 { color: var(--paper); margin-top: 0; }
+.glossary .eyebrow { color: var(--accent-bg); }
+.glossary .lede { color: var(--paper); opacity: 0.8; }
+.glossary-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 26px; margin: 42px 0 0;
+}
+.term { border-top: 2px solid var(--accent); padding-top: 16px; }
+.term:nth-child(3n+2) { border-color: var(--warm); }
+.term:nth-child(3n+3) { border-color: var(--paper); }
+.term dt {
+  font-family: var(--font-mono);
+  font-size: 14px; font-weight: 700;
+  color: var(--accent-bg); letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+.term .zh-name { font-family: var(--font-cjk); font-size: 16px; font-weight: 600; color: var(--paper); margin-bottom: 8px; display: block; }
+.term dd { margin: 0; font-family: var(--font-cjk); font-size: 14.5px; line-height: 1.65; color: rgba(255, 255, 255, 0.8); }
+
+/* ---------- TOC ---------- */
+.toc {
+  position: fixed; right: 24px; top: 50%; transform: translateY(-50%); z-index: 10;
+  font-family: var(--font-sans); font-size: 12px;
+  background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 10px;
+  padding: 18px 20px; max-width: 236px;
+  box-shadow: 0 4px 18px rgba(18, 24, 33, 0.08);
+}
+.toc h5 { margin: 0 0 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-mute); }
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc -1; }
+.toc li { margin-bottom: 6px; counter-increment: toc; font-size: 12px; line-height: 1.45; display: flex; gap: 8px; }
+.toc li::before { content: counter(toc, decimal-leading-zero); font-family: var(--font-mono); color: var(--ink-mute); font-size: 10.5px; padding-top: 2px; }
+.toc a { color: var(--ink-soft); text-decoration: none; }
+.toc a:hover { color: var(--primary); }
+@media (max-width: 1340px) { .toc { display: none; } }
+
+/* ---------- Footer ---------- */
+footer {
+  padding-block: 48px 64px;
+  background: var(--paper-soft);
+  text-align: center;
+  font-family: var(--font-cjk);
+  font-size: 13.5px; color: var(--ink-mute);
+}
+footer p { margin: 0 0 8px; }
+footer .credit { font-family: var(--font-sans); }
+footer .disclaimer { margin-top: 14px; font-size: 12px; opacity: 0.75; max-width: 640px; margin-inline: auto; }
+
+/* ---------- 響應式 ---------- */
+@media (max-width: 768px) {
+  body { font-size: 17px; }
+  .hero { padding-block: 56px 42px; }
+  .hero h1 { font-size: 36px; }
+  .hero .lede { font-size: 18px; }
+  h2 { font-size: 27px; }
+  h3 { font-size: 22px; }
+  section { padding-block: 46px; }
+  .lede { font-size: 19px; }
+  .pullquote { font-size: 21px; margin: 34px 0; padding: 24px; }
+  .story { padding: 30px 24px; }
+  .stat-card .big { font-size: 36px; }
+  .flow { flex-direction: column; }
+  .flow-arrow { width: auto; height: 30px; }
+  .flow-arrow::before { top: 2px; bottom: 2px; left: 50%; right: auto; width: 2px; height: auto; transform: translateX(-50%); }
+  .flow-arrow::after { top: auto; bottom: 4px; left: 50%; right: auto; transform: translateX(-50%) rotate(135deg); }
+  .compare td:first-child { width: auto; }
+}
+
+/* ---------- 列印 ---------- */
+@media print {
+  .toc { display: none; }
+  body { font-size: 12pt; }
+  .hero, .glossary {
+    color: var(--ink) !important; background: white !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .glossary h2, .glossary .term dt, .glossary .lede, .glossary .term .zh-name { color: var(--ink) !important; }
+  .glossary .term dd { color: var(--ink-soft) !important; }
+  pre.code { background: #f3f5f8 !important; color: #121821 !important; border: 1px solid #ccd; white-space: pre-wrap; }
+  pre.code .c, pre.code .k, pre.code .s, pre.code .a { color: inherit !important; }
+  section { page-break-inside: avoid; }
+}
+
+/* ---------- 整合版：模式列、圖卡帶、燈箱 ---------- */
+.modebar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; padding: 10px var(--gutter); background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--paper-shadow); font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.modebar .brand { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.modebar .left { display: flex; align-items: center; gap: 14px; }
+.modebar .homelink { font-size: 12px; font-weight: 600; color: var(--ink-mute); text-decoration: none; }
+.modebar .homelink:hover { color: var(--primary); text-decoration: underline; }
+.modebar .switch { display: flex; gap: 6px; }
+.modebar button { font: inherit; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.modebar button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+.modebar button:focus-visible, .cardlabel .zoom:focus-visible, .lightbox .close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.modebar .canvaslink { font-size: 12px; color: var(--ink-mute); }
+.cardband { max-width: 1600px; margin: 4px auto 40px; padding: 0 var(--gutter); }
+.cardlabel { display: flex; align-items: baseline; gap: 14px; padding: 0 2px 8px; font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.cardlabel .n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--warm); }
+.cardlabel .zoom { margin-left: auto; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--paper-shadow); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; font-size: 16px; color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(18, 24, 33, 0.86); display: none; align-items: center; justify-content: center; padding: 24px; }
+.lightbox.open { display: flex; }
+.lightbox .frame { border: none; border-radius: 8px; max-width: none; width: auto; flex: none; }
+.lightbox .close { position: absolute; top: 14px; right: 18px; font: inherit; font-family: var(--font-sans); font-size: 13px; color: #FFFFFF; background: transparent; border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.faq { margin: 36px 0 8px; padding: 0; }
+.faq > div { padding: 18px 0; border-top: 1px solid var(--paper-shadow); }
+.faq > div:last-child { border-bottom: 1px solid var(--paper-shadow); }
+.faq dt { margin: 0 0 6px; font-weight: 700; font-size: 17px; color: var(--ink); }
+.faq dt::before { content: "問"; display: inline-block; margin-right: 10px; padding: 1px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; color: #FFFFFF; background: var(--primary); vertical-align: 2px; }
+.faq dd { margin: 0; font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+body.mode-cards section .prose { display: none; }
+body.mode-cards section.nocard { display: none; }
+body.mode-cards section { padding-block: 44px; }
+body.mode-cards .toc li.nocard { display: none; }
+@media (max-width: 768px) { .cardband { margin-bottom: 32px; } .modebar { font-size: 12px; } }
+@media print {
+  .modebar, .lightbox, .cardlabel .zoom { display: none !important; }
+  body.mode-cards section .prose { display: block !important; }
+  body.mode-cards section.nocard { display: block !important; }
+  section { page-break-inside: auto; }
+  .cardband, .story, .explain, .thought, .stat-grid, .values, .cards, .table-scroll { page-break-inside: avoid; }
+  .frame { height: auto !important; border: none; border-radius: 0; }
+  .frame > div { transform: none !important; zoom: 0.44; }
+}
+
+</style>
+</head>
+<body>
+<div class="modebar">
+  <div class="left"><a class="homelink" href="../../">← 首頁</a><span class="brand">Context Engineering · 圖卡 + 教材</span></div>
+  <div class="switch" role="group" aria-label="閱讀模式">
+    <button type="button" data-mode="full" aria-pressed="true">圖卡＋詳解</button>
+    <button type="button" data-mode="cards" aria-pressed="false">只看圖卡</button>
+  </div>
+  <a class="canvaslink" href="cards.html">圖卡連續閱讀版</a>
+</div>
+<nav class="toc" aria-label="目錄">
+  <h5>目錄</h5>
+  <ol>
+    <li class="nocard"><a href="#prologue">從寫 prompt 到挑 context</a></li>
+    <li><a href="#prompt-vs-context">每一輪都在挑</a></li>
+    <li><a href="#attention-budget">注意力預算</a></li>
+    <li><a href="#system-prompt">剛好的高度</a></li>
+    <li><a href="#tools-examples">工具與範例</a></li>
+    <li><a href="#just-in-time">即時載入</a></li>
+    <li><a href="#long-horizon">長任務的三種技巧</a></li>
+    <li><a href="#compaction">壓縮</a></li>
+    <li><a href="#note-taking">結構化筆記</a></li>
+    <li><a href="#sub-agents">子 agent</a></li>
+    <li class="nocard"><a href="#takeaways">結論與動手做</a></li>
+    <li class="nocard"><a href="#glossary">名詞速查</a></li>
+  </ol>
+</nav>
+<header class="hero">
+  <div class="container">
+    <div class="hero-meta">
+      <span>Anthropic Engineering · 2025-09-29</span>
+      <span>工程實務建議</span>
+      <span>作者 Prithvi Rajasekaran、Ethan Dixon、Carly Ryan、Jeremy Hadfield</span>
+    </div>
+    <p class="eyebrow">Effective Context Engineering · 圖卡＋教材整合版</p>
+    <h1>Effective Context Engineering<span class="accent">context 是有限的資源 每一步都要重新挑</span></h1>
+    <p class="lede">用模型做事的功夫，正在從「找對 prompt 的措辭」移到「決定這一步要讓模型看到哪些 token」。Anthropic 的 Applied AI 團隊把這件事叫做 context engineering：模型的注意力是一份有限的預算，所以每一步都要找出最小、訊號最強的一組 token。本頁分十二章重述，從 system prompt、工具與範例，到跑的時候怎麼找資料，再到長任務怎麼撐過 context window 的上限。每章開頭先放一張圖解卡講重點，往下是詳細說明；想速讀就切到「只看圖卡」。</p>
+    <dl class="hero-keystat">
+      <div><dt>兩兩關係</dt><dd>n²<small>n 個 token 之間的組數</small></dd></div>
+      <div><dt>長任務技巧</dt><dd>3<small>壓縮、筆記、子 agent</small></dd></div>
+      <div><dt>子 agent 交回</dt><dd>1–2<small>千 token 的精煉摘要</small></dd></div>
+      <div><dt>壓縮後帶走</dt><dd>5<small>個最近存取的檔案</small></dd></div>
+    </dl>
+  </div>
+</header>
+
+<section id="prologue" data-toc="從寫 prompt 到挑 context" class="nocard">
+  <div class="container">
+    <p class="chapter">Prologue · 整理者的引言</p>
+    <h2>問題從「怎麼寫 prompt」變成「給模型看什麼」</h2>
+    <p class="lede">單次呼叫的年代，功夫花在措辭上；agent 要跑很多輪，真正要管的是每一輪送進模型的那一整包 token。</p>
+    <p>這篇是 Stanford CS 329Z 第 2 週的選讀。那一講（LLMs for Builders）談用模型做產品的基本功：API、結構化輸出、context engineering、怎麼選模型、成本與延遲；這篇負責其中 context engineering 的部分。</p>
+    <p>原文的起點是一個定義：context 就是從模型取樣時放進去的那一組 token。工程上的問題，是在模型本身的限制下讓這組 token 發揮最大用處，穩定地得到你要的結果。作者用「用 context 思考」形容這種習慣：隨時想著模型此刻手上有哪些東西，以及這些東西可能引出什麼行為。</p>
+    <p>全文的論證順序很清楚，本頁照著走：先分清楚 context engineering 和 prompt engineering，再解釋為什麼 context 是有限的資源；接著看寫的時候怎麼收緊（system prompt、工具、範例），跑的時候怎麼找資料（即時載入），最後是長任務的三種技巧：壓縮、結構化筆記、子 agent。</p>
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>先把五個名詞對齊</h4>
+      <ul>
+        <li><strong>Token</strong>：模型讀寫文字的最小單位；context 的長度用 token 數來算。</li>
+        <li><strong>Context window</strong>：模型一次能看到的 token 上限。system prompt、工具定義、對話歷史、工具結果全部擠在裡面。</li>
+        <li><strong>System prompt</strong>：放在最前面、告訴模型處境與規則的指示。</li>
+        <li><strong>Agent</strong>：原文採用的定義很短，就是模型在迴圈裡自主地使用工具。</li>
+        <li><strong>Context engineering</strong>：在推論時挑選、維護「最適合的那一組 token」的策略，範圍包含 prompt 以外所有會進到 context 的東西。</li>
+      </ul>
+    </div>
+    <div class="pullquote">
+      prompt 仍然要寫好，但它只是 context 的一部分；agent 每多跑一輪，要決定的就不只是措辭。
+      <cite>序章核心觀念</cite>
+    </div>
+  </div>
+</section>
+
+<section id="prompt-vs-context" data-toc="每一輪都在挑">
+  <div class="container head">
+    <p class="chapter">Chapter 01 · Context engineering vs. prompt engineering</p>
+    <h2>寫 prompt 做一次，挑 context 每一輪都要做</h2>
+    <p class="lede">範圍從指示擴大到所有會進入 context 的東西：system 指示、工具、MCP、外部資料、對話歷史。Anthropic 把它看成 prompt engineering 的自然延伸。</p>
+    
+  </div>
+  <div class="cardband" id="card-02"><div class="cardlabel"><span class="n">圖卡 02 / 10</span><span class="t">寫 prompt 與挑 context</span><button type="button" class="zoom" data-card="02">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">寫 prompt 做一次，挑 context 每一輪都要做</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">Context＝從模型取樣時放進去的那一組 token。agent 在迴圈裡跑，每一輪都產生可能有用的新資料，得一輪一輪篩過</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">PROMPT ENGINEERING</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">寫 prompt：一次寫好、調好的指示</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">CONTEXT ENGINEERING</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">挑 context：每一輪都重新挑選</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:80px; top:236px; width:300px; height:190px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:10px;"></div>
+  <div style="position:absolute; left:100px; top:250px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">CONTEXT WINDOW</div>
+  <div style="position:absolute; left:100px; top:280px; width:260px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 16px; display:flex; align-items:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">System prompt</div><div style="font-size:12.5px; color:#6B7380;">寫好、調好的指示</div></div></div>
+  <div style="position:absolute; left:100px; top:350px; width:260px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 16px; display:flex; align-items:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">使用者訊息</div><div style="font-size:12.5px; color:#6B7380;">這一次的輸入</div></div></div>
+  <div style="position:absolute; left:430px; top:306px; width:130px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">模型</div>
+  <div style="position:absolute; left:610px; top:303px; width:150px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">回應</div><div style="font-size:12.5px; color:#6B7380;">分類或一段文字</div></div></div>
+  <div style="position:absolute; left:80px; top:440px; width:680px; font-size:13px; color:#8A93A0;">context 裡只有指示和這一次的輸入；呼叫一次，得到一次輸出</div>
+  <div style="position:absolute; left:60px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">重點是「寫」：怎麼措辭、怎麼組織指示，尤其是 system prompt。早期除了聊天，多數用途是一次性的分類或文字生成。</div>
+
+  <div style="position:absolute; left:850px; top:226px; width:230px; height:250px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:10px; padding:14px 16px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:14px; font-weight:700; color:#1C2431;">可能放進 context 的資訊</div>
+    <div style="display:flex; flex-wrap:wrap; gap:7px;">
+      <div style="padding:4px 11px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#FFFFFF;">system 指示</div>
+      <div style="padding:4px 11px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#FFFFFF;">工具</div>
+      <div style="padding:4px 11px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#FFFFFF;">MCP</div>
+      <div style="padding:4px 11px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#FFFFFF;">外部資料</div>
+      <div style="padding:4px 11px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#FFFFFF;">對話歷史</div>
+      <div style="padding:4px 11px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#FFFFFF;">工具結果</div>
+    </div>
+    <div style="margin-top:auto; font-size:12.5px; color:#8A93A0; line-height:1.5;">agent 每跑一輪，<br>這個資訊池就再長大一點</div>
+  </div>
+  <div style="position:absolute; left:1100px; top:302px; width:88px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">每一輪</div>
+  <div style="position:absolute; left:1104px; top:326px; width:80px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">挑選</div>
+  <div style="position:absolute; left:1226px; top:226px; width:300px; height:176px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:10px; padding:12px 16px; display:flex; flex-direction:column; gap:7px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">CONTEXT WINDOW · 有限</div>
+    <div style="height:34px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 12px; display:flex; align-items:center; font-size:13.5px; color:#1C2431;">system 指示</div>
+    <div style="height:34px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 12px; display:flex; align-items:center; font-size:13.5px; color:#1C2431;">這一步要的工具與資料</div>
+    <div style="height:34px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 12px; display:flex; align-items:center; font-size:13.5px; color:#1C2431;">精簡過的歷史</div>
+  </div>
+  <div style="position:absolute; left:1306px; top:430px; width:140px; height:46px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">模型</div>
+  <div style="position:absolute; left:1110px; top:462px; font-size:12.5px; color:#6B7380;">行動與結果回到資訊池</div>
+  <div style="position:absolute; left:840px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">重點是「挑」：推論時維持最適合的一組 token，範圍包含 prompt 以外的一切。資訊池每一輪都在長，挑選每一輪都要再做一次。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">離散的任務：寫好就交出去</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">功夫在 system prompt 的措辭與結構；對一次性的分類或生成，一個調好的 prompt 就是大半的工作。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">prompt 仍然是 context 的一塊，寫法見第 04 卡。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">反覆的任務：每一輪都挑一次</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">每次決定要傳什麼給模型，就重新挑一次；對象是 system 指示、工具、MCP、外部資料、對話歷史的整體狀態。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">agent 跑得越多輪、越久，這件事越吃重。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：原文把 context engineering 看成 prompt engineering 的自然延伸；寫好 prompt 仍是其中一塊，所以這張不用 ✗／✓。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M380 331L428 331" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M560 331L608 331" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1080 351L1102 351" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1184 351L1224 351" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1376 402L1376 428" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1304 453L1082 453" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c02)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>prompt engineering 指的是怎麼寫、怎麼組織給模型的指示，讓結果最好，重心通常在 system prompt。context engineering 指的是在推論期間挑選並維持最適合的那一組 token 的策略；除了 prompt，還包含其他所有可能落進 context 的資訊。</p>
+    <p>兩者的差別來自用途的變化。早期用模型做事，除了日常聊天，大部分用途是一次性的分類或文字生成，一個調好的 prompt 就是工作的大半。現在要做的是能跑很多輪推論、持續更長時間的 agent，要管理的是整個 context 的狀態：system 指示、工具、MCP、外部資料、對話歷史。</p>
+    <p>agent 在迴圈裡跑，每一輪都會產生更多可能和下一輪推論有關的資料，這些資料得一輪一輪地篩過。原文借用 Karpathy 的說法（附了他的貼文連結），把 context engineering 形容成一門「藝術與科學」：從一個不斷長大的資訊池裡，挑出要放進那個有限視窗的東西。原文附圖的說明也強調同一點：寫 prompt 是一件離散的任務，context engineering 是反覆的，每一次決定要把什麼傳給模型，挑選就發生一次。</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>面向</th><th>Prompt engineering</th><th>Context engineering</th></tr></thead>
+        <tbody>
+          <tr><td>管的範圍</td><td>給模型的指示，尤其是 system prompt</td><td>推論時 context 裡的一切：指示、工具、MCP、外部資料、對話歷史</td></tr>
+          <tr><td>什麼時候做</td><td>寫好、調好，一次完成</td><td>每一次決定要傳什麼給模型時</td></tr>
+          <tr><td>典型用途</td><td>一次性的分類、文字生成</td><td>跑很多輪推論、長時間運作的 agent</td></tr>
+          <tr><td>核心問題</td><td>怎麼措辭、怎麼組織</td><td>哪一種 context 的組合最可能帶出想要的行為</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="explain stone">
+      <span class="label">補充說明</span>
+      <h4>「延伸」代表 prompt 仍在 context 裡</h4>
+      <p>原文用的詞是自然的延伸。system prompt 仍然要寫好，第 3 章整章都在講它；差別是它現在只是 context 的其中一塊，和工具、範例、對話歷史一起分用同一個有限的視窗。</p>
+    </div>
+  </div>
+</section>
+
+<section id="attention-budget" data-toc="注意力預算">
+  <div class="container head">
+    <p class="chapter">Chapter 02 · Why context engineering is important to building capable agents</p>
+    <h2>注意力是有限的預算，context 越長分得越薄</h2>
+    <p class="lede">token 越多，模型從 context 裡準確找回資訊的能力越差。每個模型都有這個現象，成因在架構與訓練方式，只是有的退得比較緩。</p>
+    
+  </div>
+  <div class="cardband" id="card-03"><div class="cardlabel"><span class="n">圖卡 03 / 10</span><span class="t">注意力是有限的預算</span><button type="button" class="zoom" data-card="03">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">注意力是預算，context 越長分得越薄</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">n 個 token 之間有 n² 組兩兩關係；context 變長，模型掌握這些關係的能力就被拉薄，關鍵資訊越來越難準確找回</div>
+
+  <div style="position:absolute; left:60px; top:140px; display:flex; gap:28px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:26px; height:0px; border-top:2px solid #1F2A3A;"></div>條的總長＝固定的注意力預算</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1;"></div>一般內容：指示、工具、對話、工具結果</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FCF1EA; border:1px solid #E6B49A;"></div>這一步真正需要的那段資訊</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:222px; font-size:16px; font-weight:700; color:#1C2431;">短 context</div>
+  <div style="position:absolute; left:180px; top:188px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">段少：每一段分到的注意力多</div>
+  <div style="position:absolute; left:180px; top:206px; width:300px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">system prompt</div>
+  <div style="position:absolute; left:480px; top:206px; width:260px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">工具定義</div>
+  <div style="position:absolute; left:740px; top:206px; width:220px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">任務說明</div>
+  <div style="position:absolute; left:960px; top:206px; width:320px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">關鍵資訊</div>
+  <div style="position:absolute; left:1280px; top:206px; width:220px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">最新訊息</div>
+  <div style="position:absolute; left:180px; top:286px; font-size:13px; color:#8A93A0;">內容少，每一段分到的注意力多；需要的那段資訊佔得寬，容易被準確找回</div>
+
+  <div style="position:absolute; left:60px; top:362px; font-size:16px; font-weight:700; color:#1C2431;">長 context</div>
+  <div style="position:absolute; left:180px; top:328px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#C8501F;">同一份預算分給更多段：每一段都變薄</div>
+  <div style="position:absolute; left:992px; top:324px; font-size:16px; color:#C8501F;">▼</div>
+  <div style="position:absolute; left:1012px; top:328px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#C8501F;">關鍵資訊</div>
+  <div style="position:absolute; left:180px; top:346px; width:120px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:12.5px; font-weight:700; color:#4B5866;">system</div>
+  <div style="position:absolute; left:300px; top:346px; width:100px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:12.5px; font-weight:700; color:#4B5866;">工具</div>
+  <div style="position:absolute; left:400px; top:346px; width:80px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:12.5px; font-weight:700; color:#4B5866;">任務</div>
+  <div style="position:absolute; left:480px; top:346px; width:90px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:12.5px; font-weight:700; color:#4B5866;">歷史</div>
+  <div style="position:absolute; left:570px; top:346px; width:110px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:12.5px; font-weight:700; color:#4B5866;">工具結果</div>
+  <div style="position:absolute; left:680px; top:346px; width:90px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:12.5px; font-weight:700; color:#4B5866;">歷史</div>
+  <div style="position:absolute; left:770px; top:346px; width:110px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:12.5px; font-weight:700; color:#4B5866;">工具結果</div>
+  <div style="position:absolute; left:880px; top:346px; width:90px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:12.5px; font-weight:700; color:#4B5866;">歷史</div>
+  <div style="position:absolute; left:970px; top:346px; width:60px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:12.5px; font-weight:700; color:#C8501F;">關鍵</div>
+  <div style="position:absolute; left:1030px; top:346px; width:110px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:12.5px; font-weight:700; color:#4B5866;">工具結果</div>
+  <div style="position:absolute; left:1140px; top:346px; width:90px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:12.5px; font-weight:700; color:#4B5866;">歷史</div>
+  <div style="position:absolute; left:1230px; top:346px; width:110px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:12.5px; font-weight:700; color:#4B5866;">工具結果</div>
+  <div style="position:absolute; left:1340px; top:346px; width:80px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:12.5px; font-weight:700; color:#4B5866;">歷史</div>
+  <div style="position:absolute; left:1420px; top:346px; width:80px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:12.5px; font-weight:700; color:#4B5866;">最新</div>
+  <div style="position:absolute; left:180px; top:426px; font-size:13px; color:#8A93A0;">n 個 token 有 n² 組兩兩關係；段數一多，每段都被拉薄，關鍵資訊只剩細細一段，越來越難準確找回</div>
+
+  <div style="position:absolute; left:60px; top:470px; width:1480px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F; letter-spacing:0.08em;">context rot</div>
+    <div style="font-size:15px; color:#2B3340;">是漸層，不是懸崖：長 context 下模型仍然很能幹，但檢索與長距推理的精準度下降；每個模型都有，只是有的退得比較緩</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:560px; width:470px; height:214px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.1em; color:#8A93A0;">成因 ① 架構</div>
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">n² 組兩兩關係</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">transformer 讓每個 token 都注意整段 context 的每一個 token；n 個 token 就有 n² 組關係，越長越照顧不過來。</div>
+    <div style="font-size:13px; color:#8A93A0;">context 的大小和注意力的集中，天生互相拉扯。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:560px; width:470px; height:214px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.1em; color:#8A93A0;">成因 ② 訓練</div>
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">短序列見得多，長依賴練得少</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">注意力模式從訓練資料學來，而資料裡短序列比長序列常見；跨整段 context 的依賴，模型經驗少、專門的參數也少。</div>
+    <div style="font-size:13px; color:#8A93A0;">注意力的樣子，是從資料分布學來的。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:560px; width:470px; height:214px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.1em; color:#8A93A0;">成因 ③ 延長手法</div>
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">位置編碼內插的代價</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">把長序列調整到原本訓練時的較短長度來處理，讓模型撐得住更長的輸入；代價是對 token 位置的理解變差。</div>
+    <div style="font-size:13px; color:#8A93A0;">三者加起來：表現逐步下滑，不會突然失效。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：分段條是整理者的示意畫法，原文沒有畫圖也沒有給數字；原文的結論是把 context 當成邊際效益遞減的有限資源。</div>
+</div></div></div>
+  <div class="container prose">
+    <p>作者觀察到，模型雖然處理得了越來越大量的資料，卻和人一樣，到某個程度就會失焦或混淆。大海撈針式的基準測試揭露了一個叫 context rot 的現象（原文連結到 Chroma 的研究）：context window 裡的 token 數增加，模型從中準確回想資訊的能力就下降。有些模型退化得比較平緩，但每個模型都有這個特性。</p>
+    <p>所以 context 要被當成一種邊際效益遞減的有限資源。人的工作記憶容量有限，模型則有一份「注意力預算」，讀大量 context 時就從這份預算裡支出；每多放進一個 token，預算就被用掉一些。這是要仔細挑選 token 的理由。原文接著從架構上解釋這份稀缺從哪裡來，一共三個因素。</p>
+    <div class="values">
+      <div class="value-card"><div class="num">01</div><h4>n² 組兩兩關係</h4><p>模型建立在 transformer 架構上，每個 token 都能注意整段 context 裡的每一個 token；n 個 token 就有 n² 組兩兩關係。context 越長，模型掌握這些關係的能力被拉得越薄，context 的大小和注意力的集中天生互相拉扯。</p></div>
+      <div class="value-card"><div class="num">02</div><h4>訓練資料以短序列居多</h4><p>模型的注意力模式是從訓練資料學來的，而資料裡短序列比長序列常見。結果是模型對跨越整段 context 的依賴關係，經驗比較少，專門處理它的參數也比較少。</p></div>
+      <div class="value-card"><div class="num">03</div><h4>位置編碼內插</h4><p>位置編碼內插這類技術，把較長的序列調整到模型原本訓練時的較短長度來處理，讓模型撐得住更長的輸入；代價是對 token 位置的理解會有些退化。</p></div>
+    </div>
+    <p>三個因素加起來，造成的是一道漸層，而不是一個懸崖。模型在長 context 下仍然很能幹，只是和短 context 相比，資訊檢索與長距離推理的精準度會降低。作者由此下結論：要做出能幹的 agent，用心的 context engineering 是必要的。</p>
+    <div class="pullquote terra">
+      多放一個 token 不是免費的：它會分走一點注意力，你真正需要的那段資訊就分到少一點。
+      <cite>整理自第二節</cite>
+    </div>
+  </div>
+</section>
+
+<section id="system-prompt" data-toc="剛好的高度">
+  <div class="container head">
+    <p class="chapter">Chapter 03 · The anatomy of effective context · system prompts</p>
+    <h2>System prompt 要寫在剛好的高度</h2>
+    <p class="lede">太低，是把脆弱的 if-else 寫死在 prompt 裡；太高，是空泛到給不出具體訊號。中間那一段夠具體、能引導行為，又留給模型用啟發法判斷的空間。</p>
+    
+  </div>
+  <div class="cardband" id="card-04"><div class="cardlabel"><span class="n">圖卡 04 / 10</span><span class="t">System prompt 的高度</span><button type="button" class="zoom" data-card="04">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">System prompt 要寫在剛好的高度</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">指導原則：用最小、訊號最強的一組 token 換到想要的行為。system prompt 的兩種常見失敗，剛好在光譜的兩端</div>
+
+  <div style="position:absolute; left:145px; top:136px; width:300px; text-align:center; font-size:13px; font-weight:700; color:#C8501F;">太具體 · 寫死的邏輯</div>
+  <div style="position:absolute; left:662px; top:136px; width:300px; text-align:center; font-size:13px; font-weight:700; color:#2E7B4F;">剛好的高度</div>
+  <div style="position:absolute; left:1179px; top:136px; width:300px; text-align:center; font-size:13px; font-weight:700; color:#C8501F;">太空泛 · 高層的指引</div>
+
+  <div style="position:absolute; left:60px; top:192px; width:470px; height:358px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">一端 · 太具體</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">把 if-else 寫進 prompt，<br>想逼出精確的行為</div>
+    <div style="background-color:#FFFFFF; border:1px solid #E6B49A; border-radius:6px; padding:9px 12px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#4B5866; line-height:1.6;">若問退款且訂單 ≤ 30 天 → 直接退；<br>若 31 到 45 天 → 先問原因；其餘 → 拒絕……</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.7;">把複雜又脆弱的判斷邏輯寫死在 prompt 裡，換一時的精確。規則越寫越多，系統越脆弱，維護也越來越複雜。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 脆弱；時間一久，維護成本一直往上</div>
+  </div>
+  <div style="position:absolute; left:577px; top:192px; width:470px; height:358px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">中間 · Goldilocks zone</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">夠具體能引導，<br>又夠彈性給啟發法</div>
+    <div style="background-color:#FFFFFF; border:1px solid #B4D5C0; border-radius:6px; padding:9px 12px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#4B5866; line-height:1.6;">&lt;instructions&gt; 先確認訂單狀態再回答；<br>確認不了，就說明還需要哪些資訊。</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.7;">用清楚、直接的語言給模型強的啟發法。分段寫：背景、指示、工具指引、輸出說明，用 XML 標籤或 Markdown 標題隔開。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✓ 用最少的資訊把期望行為講完整；最少不等於最短</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:192px; width:470px; height:358px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">另一端 · 太空泛</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">只給高層的方向，<br>或假設模型懂你</div>
+    <div style="background-color:#FFFFFF; border:1px solid #E6B49A; border-radius:6px; padding:9px 12px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#4B5866; line-height:1.6;">你是一個樂於助人的客服助理，<br>請好好回答客戶的問題。</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.7;">指引太模糊，模型拿不到產出該長什麼樣的具體訊號；或者寫的人誤以為模型和自己有共同的背景。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 沒有具體訊號，也沒有共同背景</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; font-size:20px; font-weight:700; color:#1C2431;">原文建議的寫法順序</div>
+  <div style="position:absolute; left:60px; top:630px; width:320px; height:72px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:rgba(255,255,255,0.6);">01</div>
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">寫一份最小的 prompt</div>
+  </div>
+  <div style="position:absolute; left:440px; top:630px; width:320px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">02</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">用手上最好的模型跑你的任務</div>
+  </div>
+  <div style="position:absolute; left:820px; top:630px; width:320px; height:72px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">03</div>
+    <div style="font-size:16px; font-weight:700; color:#C8501F;">記下初步測試的失敗模式</div>
+  </div>
+  <div style="position:absolute; left:1200px; top:630px; width:320px; height:72px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">04</div>
+    <div style="font-size:16px; font-weight:700; color:#2E7B4F;">針對失敗補清楚的指示與範例</div>
+  </div>
+  <div style="position:absolute; left:60px; top:722px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">「最少」是把期望行為完整講清楚所需的最少資訊，不是字數越少越好；prompt 的確切格式（XML 或 Markdown），會隨模型變強越來越不重要。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩端的失敗與中間的原則出自原文；卡內的 prompt 片段是整理者寫的示意，四步切成四格也是整理者的畫法。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ags-c04" markerWidth="10" markerHeight="10" refX="2" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M10 0L0 5L10 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M72 168H1552" stroke="#9AA3AE" stroke-width="1.5" marker-start="url(#ags-c04)" marker-end="url(#ag-c04)"></path>
+    <path d="M640 168H984" stroke="#2E7B4F" stroke-width="4"></path>
+    <path d="M295 161V175" stroke="#C8501F" stroke-width="2"></path>
+    <path d="M812 161V175" stroke="#2E7B4F" stroke-width="2"></path>
+    <path d="M1329 161V175" stroke="#C8501F" stroke-width="2"></path>
+    <path d="M404 658L416 666L404 674Z" fill="#9AA3AE"></path>
+    <path d="M784 658L796 666L784 674Z" fill="#9AA3AE"></path>
+    <path d="M1164 658L1176 666L1164 674Z" fill="#9AA3AE"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>既然注意力是有限的預算，原文替整個 context 定了一條指導原則：找出最小、訊號最強的一組 token，讓想要的結果出現的機率最大。作者也承認這說起來比做起來容易得多，所以接著把它落到 context 的各個組成上，第一個就是 system prompt。</p>
+    <p>system prompt 要非常清楚，用簡單直接的語言，而且寫在適合 agent 的「高度」。這個高度是兩種常見失敗之間的那一段。一端是工程師把複雜又脆弱的邏輯寫死在 prompt 裡，想逼出精確的 agent 行為；這讓系統越來越脆弱，維護也越來越複雜。另一端是只給模糊、高層的指引，模型拿不到產出該長什麼樣的具體訊號，或者寫的人誤以為模型和自己有共同的背景。剛好的高度同時做到兩件事：具體到能有效引導行為，又有足夠的彈性，給模型強的啟發法去應付各種情況。</p>
+    <p>結構上，作者建議把 prompt 分成幾個明確的區段，例如背景資訊、指示、工具指引、輸出說明，用 XML 標籤或 Markdown 標題把它們隔開。不過他們也說，隨著模型變強，prompt 的確切格式大概會越來越不重要。</p>
+    <div class="codeblock">
+      <span class="file">示意 · 一份分段的 system prompt（教學用骨架，非原文）</span>
+<pre class="code"><span class="k">&lt;background_information&gt;</span>
+你在協助一家線上書店處理客戶問題。      <span class="c"># 背景：模型需要知道的處境</span>
+<span class="k">&lt;/background_information&gt;</span>
+
+<span class="k">&lt;instructions&gt;</span>
+先確認訂單狀態再回答；確認不了時，說明還需要哪些資訊。  <span class="c"># 給啟發法，不寫 if-else</span>
+<span class="k">&lt;/instructions&gt;</span>
+
+<span class="k">## Tool guidance</span>
+查訂單用 <span class="s">lookup_order</span>；它只能查，不能改資料。
+
+<span class="k">## Output description</span>
+兩到四句，最後一句寫出下一步。</pre>
+    </div>
+    <p>不管用什麼格式，目標都是用最少的資訊把期望的行為完整描述出來。原文特別提醒，最少不等於最短：agent 一開始仍然需要足夠的資訊，才會照期望行動。建議的做法是先用手上最好的模型，測一份最小的 prompt 在你的任務上表現如何，再根據初步測試找到的失敗模式，補上清楚的指示與範例。</p>
+    <div class="explain bronze">
+      <span class="label">實作提示</span>
+      <h4>讓失敗決定 prompt 要長多長</h4>
+      <p>從最小的版本出發，每一條新加的指示都對應一個觀察到的失敗。這樣寫出來的 prompt 會停在「剛好夠」的地方，不會一開始就把所有想像得到的狀況都寫進去。這段是整理者依原文建議做的延伸。</p>
+    </div>
+  </div>
+</section>
+
+<section id="tools-examples" data-toc="工具與範例">
+  <div class="container head">
+    <p class="chapter">Chapter 04 · The anatomy of effective context · tools and examples</p>
+    <h2>工具與範例都要精選，不是塞滿</h2>
+    <p class="lede">工具決定 agent 拿得到什麼資訊、做得了什麼事；範例告訴模型行為該長什麼樣。兩者塞得太多，agent 都會在決策點上猶豫。</p>
+    
+  </div>
+  <div class="cardband" id="card-05"><div class="cardlabel"><span class="n">圖卡 05 / 10</span><span class="t">工具與範例要精選</span><button type="button" class="zoom" data-card="05">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">工具與範例要精選，不是塞滿</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">工具是 agent 和資訊空間、行動空間之間的契約；範例是模型最容易看懂的「圖」。兩者都佔 context，也都左右 agent 的決策</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 塞滿</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 精選</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:230px; top:200px; width:360px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">Agent：這一步該用哪個工具？</div>
+  <div style="position:absolute; left:110px; top:300px; width:170px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">搜尋文件</div><div style="font-size:12.5px; color:#6B7380;">找文件裡的段落</div></div></div>
+  <div style="position:absolute; left:325px; top:300px; width:170px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">搜尋檔案</div><div style="font-size:12.5px; color:#6B7380;">也能找段落</div></div></div>
+  <div style="position:absolute; left:540px; top:300px; width:170px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">萬用查詢</div><div style="font-size:12.5px; color:#6B7380;">查、改、匯出都做</div></div></div>
+  <div style="position:absolute; left:170px; top:420px; width:280px; height:50px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">兩個都能用：決策點模稜兩可</div>
+  <div style="position:absolute; left:510px; top:420px; width:230px; height:50px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">一個做太多：範圍太大</div>
+  <div style="position:absolute; left:60px; top:512px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">工具集涵蓋太多功能、彼此重疊，agent 每一步都要在模稜兩可的選項之間猶豫。prompt 裡再塞一長串邊界情況、想寫明每條規則，原文也明說不建議。</div>
+
+  <div style="position:absolute; left:1010px; top:200px; width:360px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">Agent：這一步該用哪個工具？</div>
+  <div style="position:absolute; left:1040px; top:290px; width:300px; height:50px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">最小可行的工具集</div>
+  <div style="position:absolute; left:912px; top:400px; width:176px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">讀檔</div><div style="font-size:12.5px; color:#6B7380;">用途單一，自成一體</div></div></div>
+  <div style="position:absolute; left:1102px; top:400px; width:176px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">搜尋</div><div style="font-size:12.5px; color:#6B7380;">回傳省 token 的結果</div></div></div>
+  <div style="position:absolute; left:1292px; top:400px; width:176px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">寫入</div><div style="font-size:12.5px; color:#6B7380;">參數清楚，不含糊</div></div></div>
+  <div style="position:absolute; left:905px; top:478px; font-size:13px; font-weight:500; color:#2E7B4F;">人能一口說出該用哪一個，agent 才可能選對</div>
+  <div style="position:absolute; left:840px; top:512px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">範例也一樣：挑一組多樣、典型的範例，畫出期望的行為；對模型來說，範例就是那張勝過千言萬語的圖。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#C8501F;">臃腫的工具集，讓決策點模糊</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">功能重疊、範圍太大，連人都說不出該用哪個；原文說這是他們最常看到的失敗。邊界情況的長清單，也是同一種塞法。</div>
+    <div style="font-size:13px; color:#8A93A0;">判準：人說不出用哪個，就別期待 agent 做得更好。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F;">最小可行的工具集＋典型範例</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">每個工具自成一體、能容錯、用途清楚，參數有描述性；回傳省 token 的資訊，引導 agent 有效率地做事。</div>
+    <div style="font-size:13px; color:#8A93A0;">工具少而清楚，長互動裡的 context 也比較好維護與修剪。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：原文仍然強烈建議給範例（few-shot）；反對的是把邊界情況列成長清單。圖中的工具名稱是示意。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+    </defs>
+    <path d="M410 250L195 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M410 250L410 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M410 250L625 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M195 356L270 418" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c05)"></path>
+    <path d="M410 356L350 418" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c05)"></path>
+    <path d="M625 356L625 418" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c05)"></path>
+    <path d="M1190 250L1190 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M1190 340V370H1000V398" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M1190 340L1190 398" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M1190 340V370H1380V398" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>工具讓 agent 能和環境互動，一邊做事一邊把新的 context 拉進來。因為工具界定了 agent 和它的資訊空間、行動空間之間的契約，原文要求工具促進效率：回傳的資訊要省 token，也要引導 agent 用有效率的方式做事。</p>
+    <p>作者引用自家另一篇談工具設計的文章，重申幾個條件。工具要讓模型容易理解，彼此的功能重疊要少；像設計良好的程式庫裡的函式一樣，每個工具自成一體、對錯誤有韌性、用途極度清楚。輸入參數也一樣，要有描述性、不含糊，並且發揮模型本來擅長的事。</p>
+    <p>他們最常看到的失敗，是臃腫的工具集：涵蓋太多功能，或讓 agent 在「該用哪個工具」上碰到模稜兩可的決策點。原文給了一個好用的判準：如果人類工程師都沒辦法明確說出某個情況該用哪個工具，就別期待 agent 做得更好。精選出一組最小可行的工具，在長時間的互動裡，context 的維護與修剪也會比較可靠。</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>對象</th><th>原文的要求</th><th>原文點名的失敗</th></tr></thead>
+        <tbody>
+          <tr><td>工具集</td><td>最小可行的一組，功能重疊少</td><td>臃腫：涵蓋太多功能，決策點模稜兩可（原文說這是最常見的失敗）</td></tr>
+          <tr><td>單一工具</td><td>自成一體、對錯誤有韌性、用途極度清楚；回傳省 token 的資訊</td><td>原文沒有另外點名</td></tr>
+          <tr><td>參數</td><td>有描述性、不含糊，發揮模型擅長的事</td><td>原文沒有另外點名</td></tr>
+          <tr><td>範例</td><td>一組多樣、典型的範例，畫出期望的行為</td><td>把一長串邊界情況塞進 prompt，想寫明每條規則（原文明說不建議）</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>範例的建議只有一段，立場卻很明確。給範例，也就是 few-shot prompting，是作者持續強烈建議的做法。問題出在很多團隊把一長串邊界情況塞進 prompt，想把模型在某個任務上該守的每條規則都寫出來；原文明說不建議這樣做。比較好的做法是精選一組多樣、典型的範例，有效地呈現 agent 該有的行為。原文的比喻是，對模型來說，範例就是那張勝過千言萬語的圖。</p>
+    <p>這一節最後把所有組成（system prompt、工具、範例、對話歷史）收成一句建議：用心安排，讓 context 資訊充分，但保持精簡。</p>
+    <div class="thought">
+      <span class="label">整理者的思考題 · 01</span>
+      <h4>你的 agent 手上的工具，你能一口說出每個該在什麼時候用嗎？</h4>
+      <p>把工具清單列出來，每個旁邊寫一句「什麼情況用它」。寫著寫著發現兩個工具的句子差不多，那裡就是原文說的模稜兩可的決策點。</p>
+      <p class="hint">先合併或刪掉重疊的那個，再看 agent 的行為有沒有變穩；人說不清楚的地方，模型也說不清楚。</p>
+    </div>
+  </div>
+</section>
+
+<section id="just-in-time" data-toc="即時載入">
+  <div class="container head">
+    <p class="chapter">Chapter 05 · Context retrieval and agentic search</p>
+    <h2>Agent 帶著識別碼，需要時才把資料載進來</h2>
+    <p class="lede">推論前把可能相關的資料全部檢索進 context 是常見做法；越來越多團隊改成只放輕量的參照，讓 agent 跑的時候用工具去拿。代價是比較慢，所以常見的答案是混合。</p>
+    
+  </div>
+  <div class="cardband" id="card-06"><div class="cardlabel"><span class="n">圖卡 06 / 10</span><span class="t">即時載入：帶著識別碼</span><button type="button" class="zoom" data-card="06">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">Agent 帶著識別碼，需要時才載入資料</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">許多 AI 原生應用在推論前先用 embedding 檢索、把結果放進 context；越來越多團隊加上「即時」策略：只留輕量的參照，跑的時候再用工具拿</div>
+
+  <div style="position:absolute; left:60px; top:196px; width:220px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">context 裡只放識別碼</div><div style="font-size:12.5px; color:#6B7380;">路徑、存好的查詢、網址</div></div></div>
+  <div style="position:absolute; left:60px; top:316px; width:220px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:17px; font-weight:700; color:#FFFFFF;">Agent</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">模型在迴圈裡用工具</div></div></div>
+  <div style="position:absolute; left:60px; top:436px; width:220px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">下一步看哪裡</div><div style="font-size:12.5px; color:#6B7380;">由這一輪帶回的線索決定</div></div></div>
+  <div style="position:absolute; left:60px; top:516px; width:220px; font-size:13px; color:#8A93A0; line-height:1.55; text-align:center;">只把必要的留在工作記憶；<br>要長期保存的寫成筆記</div>
+
+  <div style="position:absolute; left:470px; top:196px; font-size:13px; font-weight:700; color:#2B3340;">行動：glob、grep、寫查詢、用 head／tail 只看一部分</div>
+  <div style="position:absolute; left:470px; top:486px; font-size:13px; font-weight:700; color:#2B3340;">回饋：需要的那一片資料，加上 metadata 訊號</div>
+
+  <div style="position:absolute; left:840px; top:150px; width:700px; height:400px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #D5DAE1; border-radius:14px;"></div>
+  <div style="position:absolute; left:870px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">環境：資料留在原地</div>
+  <div style="position:absolute; left:870px; top:214px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">REFERENCES · 輕量的識別碼</div>
+  <div style="position:absolute; left:870px; top:236px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">檔案路徑</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">存好的查詢</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">網址連結</div>
+  </div>
+  <div style="position:absolute; left:870px; top:296px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">SIGNALS · metadata 本身就是線索</div>
+  <div style="position:absolute; left:870px; top:318px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">資料夾層級</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">命名慣例</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">時間戳</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">檔案大小</div>
+  </div>
+  <div style="position:absolute; left:870px; top:378px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">EXAMPLE · 同一個檔名，不同用途</div>
+  <div style="position:absolute; left:870px; top:400px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; color:#2B3340; background-color:#F7F8FA;">tests/test_utils.py</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; color:#2B3340; background-color:#F7F8FA;">src/core_logic/test_utils.py</div>
+  </div>
+  <div style="position:absolute; left:870px; top:460px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">HYBRID · Claude Code 的做法</div>
+  <div style="position:absolute; left:870px; top:482px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1.5px solid #B4D5C0; border-radius:999px; font-size:15px; color:#2E7B4F; background-color:#EEF6F0;">CLAUDE.md 一開始就放進 context</div>
+    <div style="padding:9px 16px; border:1.5px solid #B4D5C0; border-radius:999px; font-size:15px; color:#2E7B4F; background-color:#EEF6F0;">glob、grep 即時找檔</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; width:1480px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">漸進揭露：每一次互動帶回的 context，決定下一步要看哪裡；agent 一層一層組出理解，不一次吞下所有可能相關的資料</div>
+
+  <div style="position:absolute; left:60px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#C8501F;">代價：比預先檢索慢</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">跑的時候才探索，比讀預先算好的資料慢；沒有好的工具與啟發法，agent 會用錯工具、追進死路。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">要有主見、周到的工程設計。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#2E7B4F;">像人一樣靠索引找資料</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">人不背下整批資料，而是靠檔案系統、收件匣、書籤。Claude Code 用查詢加 head、tail 分析大型資料庫。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">識別碼的 metadata 本身也是線索。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">混合：先放一些，再自己找</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">先載入一部分資料換速度，其餘讓 agent 自己探索；變動少的內容，例如法律、金融，可能更適合。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">自主要放多少，看任務而定。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：模型越強，設計越會放手讓模型自己判斷，需要人預先挑選的越少；面板的四組分類是整理者依原文整理的。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ags-c06" markerWidth="10" markerHeight="10" refX="2" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M10 0L0 5L10 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+    </defs>
+    <path d="M170 262L170 314" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-start="url(#ags-c06)" marker-end="url(#ag-c06)"></path>
+    <path d="M170 382L170 434" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c06)"></path>
+    <path d="M280 334C520 334 620 226 836 226" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c06)"></path>
+    <path d="M838 470C620 470 520 366 284 366" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c06)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>這一節先回顧定義。Anthropic 在〈Building effective AI agents〉裡區分過工作流與 agent；之後他們越來越傾向一個簡單的定義（原文連結到 Simon Willison 的整理）：agent 就是模型在迴圈裡自主地使用工具。作者和客戶合作時看到整個領域正往這個簡單的樣子收斂；模型越強，agent 能承擔的自主程度就越高，能自己在細膩的問題空間裡找路，也能從錯誤中恢復。</p>
+    <p>這也改變了工程師替 agent 設計 context 的方式。今天許多 AI 原生應用會在推論之前用 embedding 做檢索，把重要的 context 找出來給 agent 推理。隨著領域轉向更 agentic 的做法，越來越多團隊在這類檢索系統之外，加上「即時」（just in time）的策略。</p>
+    <p>即時策略不預先處理所有相關資料，而是讓 agent 手上保留輕量的識別碼，例如檔案路徑、存好的查詢、網址，跑的時候再用工具把資料動態載入 context。Claude Code 用這個方法分析大型資料庫：模型寫出有針對性的查詢、把結果存起來，再用 <code>head</code>、<code>tail</code> 這類 Bash 指令看大量資料，完全不必把整份資料物件載進 context。原文說這很像人的做法：我們不背下整批資料，而是靠檔案系統、收件匣、書籤這類外部的組織與索引，需要時再去找。</p>
+    <div class="codeblock">
+      <span class="file">terminal · 即時載入的樣子（教學用示意，非原文指令）</span>
+<pre class="code"><span class="c"># 先看有哪些檔案、各多大，不讀內容</span>
+<span class="k">ls</span> <span class="k">-lh</span> data/exports/
+<span class="c"># 只看頭幾行，確認欄位</span>
+<span class="k">head</span> <span class="k">-n</span> 5 data/exports/orders_2025.csv
+<span class="c"># 只把符合條件的列帶回來</span>
+<span class="k">grep</span> <span class="s">"refund"</span> data/exports/orders_2025.csv | <span class="k">tail</span> <span class="k">-n</span> 20</pre>
+    </div>
+    <p>識別碼本身也帶著訊號。在檔案系統裡工作的 agent，看到 <code>tests</code> 資料夾裡的 <code>test_utils.py</code>，和看到 <code>src/core_logic/</code> 底下同名的檔案，會推斷出不同的用途。資料夾層級、命名慣例、時間戳，對人和 agent 都是判斷「怎麼用、什麼時候用」這份資訊的線索。</p>
+    <p>讓 agent 自己導航、自己取資料，還帶來漸進揭露（progressive disclosure）：agent 透過探索，一步一步發現相關的 context。每一次互動都會帶回下一個決定需要的線索：檔案大小暗示複雜度，命名暗示用途，時間戳可以拿來估計相關性。agent 一層一層建立理解，工作記憶裡只留必要的東西，要長期保存的就寫成筆記。這種自己管理的 context window，讓 agent 專注在相關的子集，不會淹沒在大量卻未必相關的資訊裡。</p>
+    <div class="explain terra">
+      <span class="label">代價</span>
+      <h4>跑的時候探索，比讀預先算好的資料慢</h4>
+      <p>原文把取捨講得很直接：即時探索比取用預先計算的資料慢，而且要有主見、周到的工程設計，模型才有對的工具與啟發法在資訊之間導航。沒有適當的引導，agent 會用錯工具、追進死路、找不到關鍵資訊，白白浪費 context。</p>
+    </div>
+    <p>所以在某些情境下，最有效的 agent 可能採用混合策略：先取一部分資料換速度，其餘讓 agent 自己決定要不要再探索。自主要放多少，看任務而定。Claude Code 就是混合的：<code>CLAUDE.md</code> 檔案一開始就直接放進 context，<code>glob</code> 和 <code>grep</code> 這類基本工具則讓它即時在環境裡找檔案，避開索引過時與複雜語法樹的問題。</p>
+    <p>原文認為，內容變動比較少的情境，例如法律或金融工作，可能更適合混合策略。長期的方向則是隨著模型變強，agentic 的設計會越來越放手讓聰明的模型自己判斷，需要人工預先挑選的越來越少。在這個變化速度下，作者給團隊最好的建議大概仍是：先做最簡單、能用的那一版。</p>
+  </div>
+</section>
+
+<section id="long-horizon" data-toc="長任務的三種技巧">
+  <div class="container head">
+    <p class="chapter">Chapter 06 · Context engineering for long-horizon tasks</p>
+    <h2>超過視窗的長任務，依任務特性挑三種技巧</h2>
+    <p class="lede">任務一長，token 總數就超過 context window。原文沒有把希望放在更大的視窗上，而是給了三種直接對付 context 污染的技巧，各自擅長不同形狀的任務。</p>
+    
+  </div>
+  <div class="cardband" id="card-07"><div class="cardlabel"><span class="n">圖卡 07 / 10</span><span class="t">長任務的三種技巧</span><button type="button" class="zoom" data-card="07">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">長任務的技巧，看任務的特性挑</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">長任務要連續工作數十分鐘到數小時，token 總數超過 context window；原文判斷任何大小的視窗都會遇到 context 污染</div>
+
+  <div style="position:absolute; left:60px; top:286px; width:230px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:17px; font-weight:700; color:#FFFFFF;">超過視窗的長任務</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">遷移、研究專案</div></div></div>
+  <div style="position:absolute; left:400px; top:276px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div style="font-size:17px; font-weight:700; color:#1C2431; line-height:1.35;">這個任務<br>長什麼樣？</div></div>
+
+  <div style="position:absolute; left:790px; top:172px; font-size:13px; font-weight:700; color:#2E7B4F;">來回很多的對話</div>
+  <div style="position:absolute; left:790px; top:292px; font-size:13px; font-weight:700; color:#2E7B4F;">有里程碑的迭代</div>
+  <div style="position:absolute; left:790px; top:412px; font-size:13px; font-weight:700; color:#2E7B4F;">平行探索的研究</div>
+
+  <div style="position:absolute; left:940px; top:150px; width:600px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">壓縮：摘要後，帶著摘要開新視窗</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">保住對話的連續；留下決策與未解的 bug，丟掉重複的工具輸出（第 08 卡）</div>
+  </div>
+  <div style="position:absolute; left:940px; top:270px; width:600px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">結構化筆記：寫到視窗外，重置後讀回</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">追蹤進度與依賴；待辦清單、NOTES.md、memory tool（第 09 卡）</div>
+  </div>
+  <div style="position:absolute; left:940px; top:390px; width:600px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">子 agent：各自在乾淨的視窗裡深挖</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">探索的細節留在子 agent，主 agent 只收精煉的摘要（第 10 卡）</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:520px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">共同目標</div>
+    <div style="font-size:15px; color:#2B3340;">在 token 超過視窗的任務上，維持連貫、保住脈絡、持續朝目標行動</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:600px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:624px; font-size:20px; font-weight:700; color:#1C2431;">三個前提</div>
+  <div style="position:absolute; left:60px; top:666px; width:470px; height:160px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#C8501F;">等更大的視窗不是解法</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">可預見的未來，各種大小的視窗都會遇到 context 污染與資訊相關性的問題，至少在要求最好表現時是這樣。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">所以技巧要直接對付污染本身。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:666px; width:470px; height:160px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">長任務長什麼樣</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">連續數十分鐘到數小時的工作，例如大型程式庫遷移、完整的研究專案；整串動作的 token 數超過視窗。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">動作一長串，目標要一路撐住。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:666px; width:470px; height:160px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">模型變強也不會消失</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">在長時間的互動裡維持連貫，仍會是做出更有效 agent 的核心挑戰。選哪一種技巧，取決於任務的特性。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">這是原文長任務一節的結語。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三個出口是原文舉的例子，說明各技巧最擅長哪一類任務；原文沒有給更細的判準。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M290 318L398 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M700 318H770" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M770 318V198H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c07)"></path>
+    <path d="M770 318H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c07)"></path>
+    <path d="M770 318V438H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c07)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>長任務要求 agent 在一長串動作裡維持連貫、保住脈絡、持續朝目標前進，而整串動作的 token 數超過了模型的 context window。像大型程式庫遷移、完整的研究專案這類需要連續工作數十分鐘到數小時的任務，agent 需要專門的技巧，繞過視窗大小的限制。</p>
+    <p>等更大的 context window 看起來是最直接的辦法。原文的判斷是，在可預見的未來，各種大小的視窗都會有 context 污染與資訊相關性的問題，至少在要求 agent 表現最好的場合是這樣。所以他們發展了三種直接處理污染的技巧：壓縮（compaction）、結構化筆記（structured note-taking）、多 agent 架構。</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>技巧</th><th>怎麼繞過視窗上限</th><th>原文說它擅長</th><th>本頁</th></tr></thead>
+        <tbody>
+          <tr><td>壓縮</td><td>快滿時摘要，帶著摘要開新視窗</td><td>需要大量來回的任務，保住對話的連續</td><td>第 7 章</td></tr>
+          <tr><td>結構化筆記</td><td>把筆記寫到視窗外，之後再讀回來</td><td>有清楚里程碑的迭代開發</td><td>第 8 章</td></tr>
+          <tr><td>子 agent 架構</td><td>深度探索交給有乾淨視窗的子 agent，只收摘要</td><td>平行探索划算的複雜研究與分析</td><td>第 9 章</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>選哪一種取決於任務的特性，上表第三欄是原文舉的例子。作者在這一節結尾補了一句：即使模型持續進步，在長時間的互動裡維持連貫，仍會是做出更有效 agent 的核心挑戰。</p>
+  </div>
+</section>
+
+<section id="compaction" data-toc="壓縮">
+  <div class="container head">
+    <p class="chapter">Chapter 07 · Compaction</p>
+    <h2>壓縮的功夫在挑留什麼、丟什麼</h2>
+    <p class="lede">對話快到上限時，把內容摘要，帶著摘要開一個新視窗接著做。摘要留下的是決策與未解的問題，丟掉的是重複的工具輸出。</p>
+    
+  </div>
+  <div class="cardband" id="card-08"><div class="cardlabel"><span class="n">圖卡 08 / 10</span><span class="t">壓縮：留什麼、丟什麼</span><button type="button" class="zoom" data-card="08">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">壓縮的功夫在挑留什麼、丟什麼</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">對話快到 context window 上限時，把內容摘要，帶著摘要開一個新視窗接著做；原文說它通常是第一個拉的槓桿</div>
+
+  <div style="position:absolute; left:60px; top:140px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1;"></div>固定：system prompt、工具定義</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FCF1EA; border:1px solid #E6B49A;"></div>丟掉：重複的工具輸出與訊息</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF6F0; border:1px solid #B4D5C0;"></div>留下：決策、未解的 bug、實作細節、最近的檔案</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; box-sizing:border-box;"></div>空出來的空間</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="font-size:14px; color:#1F2A3A;">▼</div>視窗上限</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:222px; font-size:16px; font-weight:700; color:#1C2431;">壓縮前</div>
+  <div style="position:absolute; left:180px; top:188px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">對話越跑越長，快碰到上限</div>
+  <div style="position:absolute; left:1420px; top:188px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#1F2A3A;">視窗上限</div>
+  <div style="position:absolute; left:1492px; top:184px; font-size:16px; color:#1F2A3A;">▼</div>
+  <div style="position:absolute; left:180px; top:206px; width:200px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#4B5866;">system prompt＋工具</div>
+  <div style="position:absolute; left:380px; top:206px; width:170px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#2E7B4F;">架構決策</div>
+  <div style="position:absolute; left:550px; top:206px; width:230px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#C8501F;">重複的工具輸出</div>
+  <div style="position:absolute; left:780px; top:206px; width:150px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#C8501F;">舊訊息</div>
+  <div style="position:absolute; left:930px; top:206px; width:150px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#2E7B4F;">未解的 bug</div>
+  <div style="position:absolute; left:1080px; top:206px; width:200px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#C8501F;">工具輸出</div>
+  <div style="position:absolute; left:1280px; top:206px; width:140px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#2E7B4F;">實作細節</div>
+  <div style="position:absolute; left:1420px; top:206px; width:80px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#2E7B4F;">最近檔案</div>
+  <div style="position:absolute; left:180px; top:286px; font-size:13px; color:#8A93A0;">橘色是重複的工具輸出與舊訊息，佔掉大半空間；綠色是要帶走的：架構決策、未解的 bug、實作細節、最近的檔案</div>
+
+  <div style="position:absolute; left:60px; top:362px; font-size:16px; font-weight:700; color:#1C2431;">壓縮後</div>
+  <div style="position:absolute; left:180px; top:328px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2E7B4F;">新視窗：摘要＋最近存取的五個檔案，接著做</div>
+  <div style="position:absolute; left:180px; top:346px; width:200px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#4B5866;">system prompt＋工具</div>
+  <div style="position:absolute; left:380px; top:346px; width:380px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#2E7B4F;">摘要：架構決策、未解的 bug、實作細節</div>
+  <div style="position:absolute; left:760px; top:346px; width:200px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#2E7B4F;">最近存取的 5 個檔案</div>
+  <div style="position:absolute; left:960px; top:346px; width:540px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#8A93A0;">空出來的空間：工作接著做</div>
+  <div style="position:absolute; left:180px; top:426px; font-size:13px; color:#8A93A0;">由模型自己摘要、壓縮最關鍵的細節；使用者得到連續的工作，不必操心視窗的上限（Claude Code 的做法）</div>
+
+  <div style="position:absolute; left:60px; top:470px; width:1480px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F; letter-spacing:0.08em;">壓太兇</div>
+    <div style="font-size:15px; color:#2B3340;">細微但關鍵的 context 會被丟掉，而它的重要性常常要到後面才看得出來</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:560px; width:470px; height:210px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">先求召回，再求精準</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">拿複雜的 agent trace 來調壓縮用的 prompt：先確定每一條相關資訊都留下了，再一輪一輪刪掉多餘的內容。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文給實作壓縮系統的工程師的建議。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:560px; width:470px; height:210px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">最輕的一刀：清掉工具結果</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">深埋在歷史裡的工具呼叫，agent 不需要再看一次原始結果。這是最安全、最輕量的壓縮之一，Claude Developer Platform 已做成功能。</div>
+    <div style="font-size:13px; color:#8A93A0;">先從這種明顯多餘的內容下手。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:560px; width:470px; height:210px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">高保真地蒸餾</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">壓縮要把一個視窗的內容高保真地濃縮，讓 agent 在表現幾乎不下降的情況下接著工作；它通常是第一個拉的槓桿。</div>
+    <div style="font-size:13px; color:#8A93A0;">換到的是長時間的連貫。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：分段長度是示意，原文沒有給比例；留下什麼、丟掉什麼，取決於壓縮用的 prompt 寫得好不好。</div>
+</div></div></div>
+  <div class="container prose">
+    <p>壓縮的做法是：拿一段快要碰到 context window 上限的對話，把內容摘要，再用這份摘要重新開一個 context window。它通常是 context engineering 裡第一個拉的槓桿，用來換取長期的連貫。核心是用高保真的方式把一個視窗的內容蒸餾出來，讓 agent 在表現幾乎不下降的情況下繼續工作。</p>
+    <p>以 Claude Code 為例，做法是把訊息歷史交給模型，請它摘要並壓縮最關鍵的細節。模型會保留架構上的決策、還沒解決的 bug、實作細節，丟掉重複的工具輸出或訊息。agent 接著帶著這份壓縮過的 context，加上最近存取過的五個檔案繼續做。使用者得到的是連續的工作，不必操心視窗的上限。</p>
+    <p>壓縮的難處在取捨。壓得太兇，會丟掉一些細微但關鍵的 context，而它的重要性常常要到後面才看得出來。原文給實作壓縮系統的工程師一個調整順序：拿複雜的 agent trace 來仔細調壓縮用的 prompt，先把召回率拉到最高，讓 trace 裡每一條相關資訊都被抓到；再一輪一輪提高精準度，刪掉多餘的內容。</p>
+    <div class="codeblock">
+      <span class="file">示意 · 壓縮用 prompt 的第一版（教學用草稿，非原文）</span>
+<pre class="code"><span class="c"># 第一輪：先求召回，寧可多留</span>
+把以上對話壓縮成一份接手用的摘要。
+<span class="k">必須保留</span>：架構決策與理由、還沒解決的 bug、做到一半的實作細節。
+<span class="k">可以丟掉</span>：已經處理完的工具輸出、重複的訊息。
+<span class="c"># 之後拿真實的 agent trace 比對，確認沒漏，再逐條刪多餘的內容</span></pre>
+    </div>
+    <p>最容易下手的多餘內容，是工具呼叫與它的結果。一個工具在訊息歷史深處被呼叫過之後，agent 為什麼還需要再看一次原始結果？清掉工具結果是最安全、最輕量的壓縮形式之一，最近也在 Claude Developer Platform 上推出成一項功能。</p>
+    <div class="explain bronze">
+      <span class="label">實作提示</span>
+      <h4>先召回、後精準，順序不能反</h4>
+      <p>先求精準，容易在一開始就把「看起來多餘、其實後面會用到」的東西刪掉，而這種損失在短測試裡看不出來。先確定該留的都留下，再慢慢修剪，犯的錯頂多是多留了一些 token，比較容易察覺，代價也比較小。這段理由是整理者的引申，順序本身出自原文。</p>
+    </div>
+  </div>
+</section>
+
+<section id="note-taking" data-toc="結構化筆記">
+  <div class="container head">
+    <p class="chapter">Chapter 08 · Structured note-taking</p>
+    <h2>筆記寫在視窗外，重置之後讀回來接著做</h2>
+    <p class="lede">一個檔案就能把進度、待辦與依賴留過幾十次工具呼叫，甚至留過 context 重置。寶可夢的例子顯示，agent 會自己長出記憶的結構。</p>
+    
+  </div>
+  <div class="cardband" id="card-09"><div class="cardlabel"><span class="n">圖卡 09 / 10</span><span class="t">結構化筆記</span><button type="button" class="zoom" data-card="09">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">筆記寫在視窗外，重置之後讀回來</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">結構化筆記（agentic memory）：agent 定期把筆記寫到 context window 之外，之後再拉回 context；額外負擔很小，換到持久的記憶</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　工作</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">呼叫工具、推進任務；<br>context 一路變長</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　寫筆記</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">進度、待辦、依賴、策略</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">定期寫</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　存到視窗外</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">NOTES.md、待辦清單、<br>memory tool 的檔案</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　context 重置</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">壓縮，或開一個新視窗</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">視窗清空</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 5　讀回筆記</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">讀自己寫下的筆記</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">接上進度</div>
+  </div>
+
+  <div style="position:absolute; left:1212px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 6　接著做</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">好幾個小時的練等、<br>探索或開發，一路連貫</div>
+  </div>
+  <div style="position:absolute; left:60px; top:318px; width:820px; font-size:14px; color:#6B7380; line-height:1.6;">筆記是 agent 寫給未來自己的：重置清空的是視窗，檔案還在。原文說，這種跨越摘要步驟的連貫，讓只靠 context window 做不到的長期策略成為可能。</div>
+  <div style="position:absolute; left:1380px; top:458px; font-size:13px; color:#8A93A0;">回到 Step 1</div>
+
+  <div style="position:absolute; left:60px; top:480px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:504px; font-size:20px; font-weight:700; color:#1C2431;">三個例子</div>
+
+  <div style="position:absolute; left:60px; top:546px; width:470px; height:224px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">① 待辦清單與 NOTES.md</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">Claude Code 會建立待辦清單追蹤進度；自訂的 agent 可以維護一份 NOTES.md。幾十次工具呼叫之後，關鍵的脈絡與依賴還在。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">最簡單的形式：一個檔案。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:546px; width:470px; height:224px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">② 寶可夢 agent 的計數</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">在幾千步的遊戲裡記下「過去 1,234 步在 1 號道路練等，皮卡丘升了 8 級，目標 10 級」。沒人教它記憶該長什麼樣，它自己畫地圖、記成就、寫戰術。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">context 重置後讀回筆記，接著跑好幾個小時。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:546px; width:470px; height:224px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">③ memory tool</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">隨 Sonnet 4.5 推出，在 Claude Developer Platform 公開測試：用檔案在視窗外存取資訊，跨 session 維持專案狀態、累積知識庫。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">參照過去的工作，不必全留在 context。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：原文沒有規定多久寫一次筆記、寫多少；六個步驟是整理者依原文的描述切的。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c09" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M1478 210C1530 210 1530 350 1480 350" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M1345 400V452H1560V128H193V158" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="6 5" marker-end="url(#ag-c09)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>結構化筆記也叫 agentic memory：agent 定期寫下筆記，存在 context window 之外的記憶裡，之後需要時再拉回 context。它用很小的額外負擔換到持久的記憶。Claude Code 建立待辦清單，或你自己的 agent 維護一份 <code>NOTES.md</code>，都是這個簡單的模式：agent 可以在複雜任務裡追蹤進度，把原本會在幾十次工具呼叫之間流失的關鍵脈絡與依賴關係留下來。</p>
+    <div class="codeblock">
+      <span class="file">NOTES.md · agent 寫給自己的筆記（教學用示意，非原文）</span>
+<pre class="code"><span class="k">## 目標</span>
+把付款模組從舊 API 遷到新 API，測試全綠。
+
+<span class="k">## 進度</span>
+- [x] 盤點 14 個呼叫點          <span class="c"># 數字是示意</span>
+- [x] 改完 billing/ 底下 9 個
+- [ ] refunds/ 的 5 個還沒動
+
+<span class="k">## 決策與依賴</span>
+- 新 API 的金額單位是「分」，換算寫在 utils/money.py
+- refunds/ 要等 billing/ 的測試過了再改</pre>
+    </div>
+    <p>原文用 Claude 玩寶可夢的直播，說明記憶在寫程式以外的領域怎麼改變 agent 的能力。這個 agent 在幾千步的遊戲裡維持精確的計數，例如記下「過去 1,234 步都在 1 號道路練等，皮卡丘已經升了 8 級，目標是 10 級」。沒有人提示它記憶該怎麼組織，它自己畫出探索過的區域地圖、記得解鎖了哪些關鍵成就，還寫下戰鬥策略的筆記，慢慢摸清哪些招式對哪些對手最有效。</p>
+    <p>context 重置之後，agent 讀回自己的筆記，繼續好幾個小時的練等或地城探索。這種跨越摘要步驟的連貫，讓只靠 context window 裝不下的長期策略成為可能。</p>
+    <div class="story">
+      <div class="label">關鍵觀念 · 整理者的觀察</div>
+      <h4>重置清空的是視窗，檔案還在</h4>
+      <p>壓縮是把視窗裡的東西濃縮了再帶著走；筆記則是 agent 在過程中主動把重要的東西寫到視窗外。重置之後，視窗是空的，但檔案還在，agent 讀回來就能接上。</p>
+      <p>所以筆記的品質取決於 agent 在當下判斷「什麼之後會用到」的能力。寶可夢的例子有意思的地方，就是這個判斷在沒有人教它記憶結構的情況下自己長出來了。</p>
+    </div>
+    <p>Anthropic 在推出 Sonnet 4.5 時，也在 Claude Developer Platform 上推出公開測試的 memory tool：一套以檔案為基礎的系統，讓 agent 更容易在視窗外存放與查詢資訊。agent 可以藉此逐步累積知識庫、跨 session 維持專案狀態、參照過去的工作，而不必把所有東西都留在 context 裡。</p>
+  </div>
+</section>
+
+<section id="sub-agents" data-toc="子 agent">
+  <div class="container head">
+    <p class="chapter">Chapter 09 · Sub-agent architectures</p>
+    <h2>子 agent 在乾淨的視窗深挖，主 agent 只收摘要</h2>
+    <p class="lede">每個子 agent 可能用掉數萬個 token 探索，交回的摘要常見只有 1,000 到 2,000 個 token。主 agent 的 context 因此能專心做綜合與分析。</p>
+    
+  </div>
+  <div class="cardband" id="card-10"><div class="cardlabel"><span class="n">圖卡 10 / 10</span><span class="t">子 agent 架構</span><button type="button" class="zoom" data-card="10">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">子 agent 在乾淨的視窗深挖，主 agent 只收摘要</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">與其讓一個 agent 撐住整個專案的狀態，把聚焦的任務交給各自有乾淨 context window 的子 agent；主 agent 拿高層計畫協調</div>
+
+  <div style="position:absolute; left:560px; top:150px; width:480px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">主 agent：拿著高層計畫協調</div><div style="margin-top:3px; font-size:12.5px; color:rgba(255,255,255,0.75);">把聚焦的任務派給子 agent</div></div></div>
+  <div style="position:absolute; left:1090px; top:238px; font-size:13px; color:#6B7380;">派出：聚焦的子任務</div>
+
+  <div style="position:absolute; left:230px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">子 agent · 深入的技術工作</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">乾淨的視窗，可能用掉數萬 token</div></div>
+  <div style="position:absolute; left:650px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">子 agent · 用工具找資訊</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">搜尋、讀檔、試錯都留在這裡</div></div>
+  <div style="position:absolute; left:1070px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">子 agent · 另一個聚焦任務</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">各自的探索脈絡互相隔離</div></div>
+
+  <div style="position:absolute; left:1140px; top:404px; font-size:13px; font-weight:700; color:#2E7B4F;">交回：精煉摘要，常見 1,000–2,000 token</div>
+  <div style="position:absolute; left:560px; top:440px; width:480px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">主 agent：綜合與分析</div><div style="margin-top:3px; font-size:12.5px; color:rgba(255,255,255,0.75);">只讀每個子 agent 交回的摘要</div></div></div>
+
+  <div style="position:absolute; left:60px; top:530px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">關注點分離</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">詳細的搜尋脈絡隔離在子 agent 的視窗裡；主 agent 的 context 只放摘要，專心綜合。虛線框表示子任務由主 agent 依計畫派出。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:620px; width:470px; height:182px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">數萬 token → 1,000–2,000</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">每個子 agent 可以大量探索，用掉數萬 token 甚至更多；交回主 agent 的，只有濃縮、精煉過的工作摘要。</div>
+    <div style="font-size:13px; color:#8A93A0;">主 agent 的 context 不會被搜尋過程塞滿。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:620px; width:470px; height:182px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">複雜研究明顯進步</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">原文引用自家多 agent 研究系統的經驗：在複雜的研究任務上，這種模式比單一 agent 的系統有顯著的改善。</div>
+    <div style="font-size:13px; color:#8A93A0;">這篇沒有另外給數字。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:620px; width:470px; height:182px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">適合平行探索的研究</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">原文把它和壓縮、筆記並列：複雜的研究與分析，平行探索划算時，用子 agent。</div>
+    <div style="font-size:13px; color:#8A93A0;">選哪一種看任務特性，見第 07 卡。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：子 agent 的數量與分工是示意；原文只說主 agent 以高層計畫協調，子 agent 做深入的技術工作或用工具找資訊。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M720 216L380 298" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c10)"></path>
+    <path d="M800 216L800 298" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c10)"></path>
+    <path d="M880 216L1220 298" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c10)"></path>
+    <path d="M380 386L720 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M800 386L800 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M1220 386L880 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>子 agent 架構是另一條繞過 context 限制的路。與其讓一個 agent 試著撐住整個專案的狀態，不如讓專門的子 agent 在乾淨的 context window 裡處理聚焦的任務。主 agent 拿著高層的計畫協調，子 agent 做深入的技術工作，或用工具找相關的資訊。每個子 agent 都可能大量探索，用掉數萬個 token 甚至更多，但交回來的只有一份濃縮、精煉過的工作摘要，常見是 1,000 到 2,000 個 token。</p>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="big">數萬<small>token</small></div><div class="label">一個子 agent 可能用掉的探索量</div><div class="note">搜尋、讀檔、試錯的細節都留在它自己的視窗裡。</div></div>
+      <div class="stat-card bronze"><div class="big">1–2<small>千 token</small></div><div class="label">交回主 agent 的摘要</div><div class="note">原文說常見是 1,000 到 2,000 個 token；主 agent 只讀這一份。</div></div>
+    </div>
+    <p>這樣做帶來清楚的關注點分離：詳細的搜尋脈絡被隔離在子 agent 裡，主 agent 專心綜合與分析結果。原文提到，這個模式在〈How we built our multi-agent research system〉一文討論過，在複雜的研究任務上比單一 agent 的系統有顯著的改善；這篇沒有另外給數字。</p>
+    <div class="explain stone">
+      <span class="label">補充說明</span>
+      <h4>和第 5 章的即時載入是同一個想法的放大</h4>
+      <p>即時載入是一個 agent 只把需要的那一片拉進自己的視窗；子 agent 架構則把整段探索交出去，只把結果拉回來。兩者守的是同一條原則：主要的 context 裡只放高訊號的 token。這段對照是整理者的整理，原文沒有把兩節並列。</p>
+    </div>
+    <div class="thought">
+      <span class="label">整理者的思考題 · 02</span>
+      <h4>你的長任務，比較像連續的對話、有里程碑的開發，還是需要平行探索的研究？</h4>
+      <p>拿一個最近跑到 context 上限的任務，對照第 6 章的三種形狀。</p>
+      <p class="hint">來回很多的先試壓縮；有明確里程碑的讓 agent 維護一份筆記；要同時查很多來源的才考慮子 agent。原文說選擇取決於任務的特性。</p>
+    </div>
+  </div>
+</section>
+
+<section id="takeaways" data-toc="結論與動手做" class="nocard">
+  <div class="container">
+    <p class="chapter">Chapter 10 · Conclusion</p>
+    <h2>每一步都找最小、訊號最強的一組 token</h2>
+    <p class="lede">不論是做壓縮、設計省 token 的工具，還是讓 agent 即時探索環境，指導原則都是同一條。模型越強，需要的規定越少，但 context 仍是珍貴而有限的資源。</p>
+    <p>作者把 context engineering 看成用模型做事的方式的一次根本轉變。模型越強，挑戰就越不只是寫出完美的 prompt，而是在每一步用心挑選：哪些資訊可以進入模型那份有限的注意力預算。</p>
+    <div class="quote-en">
+      "find the smallest set of high-signal tokens"
+      <span class="zh">「找出最小、訊號最強的一組 token。」這是原文結論重申的指導原則，後半句是：讓想要的結果出現的機率最大。第 3 章開頭也是同一句。</span>
+    </div>
+    <p>文中的技巧會隨著模型進步而演變。作者已經看到，越聰明的模型需要越少規定式的工程，agent 能以更高的自主程度運作。但即使能力持續提升，把 context 當成珍貴、有限的資源來對待，仍會是做出可靠、有效 agent 的核心。原文最後指向 Claude Developer Platform，以及一份記憶與 context 管理的 cookbook。</p>
+    <div class="pullquote bronze">
+      寫的時候收緊，跑的時候少拿，長任務時懂得放下：三件事都是在替注意力預算記帳。
+      <cite>整理自全文</cite>
+    </div>
+    <p>下面這份清單不在原文裡，是整理者把全文的建議壓成的順序，讓你今天就能對自己的 agent 跑一輪。</p>
+    <ol class="checklist">
+      <li><span class="box" aria-hidden="true"></span><div><strong>用最好的模型測一份最小的 system prompt</strong><small>分成背景、指示、工具指引、輸出說明幾段；只針對觀察到的失敗模式補指示與範例。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>把工具清單砍到人能一口說出怎麼選</strong><small>功能重疊的合併或刪掉；參數名稱與描述寫到不含糊；回傳只給省 token 的資訊。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>把邊界情況清單換成幾個典型範例</strong><small>挑多樣、能代表期望行為的例子，不要試著窮舉每條規則。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>大資料改成帶識別碼、跑的時候再載入</strong><small>檔案路徑、存好的查詢、網址；需要速度的部分先放進 context，其餘讓 agent 自己找。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>長任務先加最輕的壓縮</strong><small>清掉深埋在歷史裡的工具結果；要做摘要時，先在真實的 trace 上把召回調到最高，再修精準。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>依任務形狀加上筆記或子 agent</strong><small>有里程碑的開發讓 agent 維護一份筆記；需要平行探索的研究交給子 agent，只收摘要。</small></div></li>
+    </ol>
+    <div class="thought">
+      <span class="label">整理者的思考題 · 03</span>
+      <h4>你的 agent 下一次呼叫模型時，context 裡有多少 token 是這一步真的用得到的？</h4>
+      <p>把某一輪的完整 context 印出來，逐段標記：這一步用得到、之後可能用到、已經用不到。</p>
+      <p class="hint">「已經用不到」的那一堆，就是原文說的污染；可以從清掉工具結果、壓縮，或改成即時載入開始處理。</p>
+    </div>
+  </div>
+</section>
+
+<section id="glossary" class="nocard glossary" data-toc="名詞速查">
+  <div class="wide">
+    <p class="eyebrow">Reference · 名詞速查</p>
+    <h2>十七個名詞，看懂 context 怎麼被管理</h2>
+    <p class="lede">依「定義、為什麼、寫的時候、跑的時候、長任務」的順序排，解釋都是整理者依原文的用法寫的。</p>
+    <dl class="glossary-grid">
+      <div class="term"><dt>Context</dt><span class="zh-name">情境</span><dd>從模型取樣時放進去的整組 token：system prompt、工具、範例、對話歷史、工具結果都算。</dd></div>
+      <div class="term"><dt>Context window</dt><span class="zh-name">情境視窗</span><dd>模型一次能處理的 token 上限；長任務的 token 總數會超過它。</dd></div>
+      <div class="term"><dt>Prompt engineering</dt><span class="zh-name">提示工程</span><dd>寫與組織給模型的指示，重心在 system prompt；原文把 context engineering 看成它的自然延伸。</dd></div>
+      <div class="term"><dt>Context engineering</dt><span class="zh-name">情境工程</span><dd>推論時挑選並維持最適合的一組 token 的策略；每次決定要傳什麼給模型時都要做一次。</dd></div>
+      <div class="term"><dt>Context rot</dt><span class="zh-name">情境腐化</span><dd>token 越多，從 context 準確召回資訊的能力越差；大海撈針式測試觀察到，每個模型都有。</dd></div>
+      <div class="term"><dt>Attention budget</dt><span class="zh-name">注意力預算</span><dd>原文的比喻：模型讀 context 時有一份有限的注意力，每個新 token 都會用掉一些。</dd></div>
+      <div class="term"><dt>Right altitude</dt><span class="zh-name">剛好的高度</span><dd>system prompt 介於「寫死的 if-else」與「空泛的指引」之間的那一段：夠具體，又給得出啟發法。</dd></div>
+      <div class="term"><dt>Few-shot prompting</dt><span class="zh-name">少樣本提示</span><dd>在 prompt 裡給範例；原文建議給多樣、典型的範例，不要塞邊界情況的長清單。</dd></div>
+      <div class="term"><dt>Just-in-time context</dt><span class="zh-name">即時載入</span><dd>agent 只保留檔案路徑、查詢、網址這類識別碼，跑的時候再用工具載入需要的資料。</dd></div>
+      <div class="term"><dt>Progressive disclosure</dt><span class="zh-name">漸進揭露</span><dd>agent 透過探索一步步發現相關的 context；每次互動帶回的線索決定下一步看哪裡。</dd></div>
+      <div class="term"><dt>Hybrid strategy</dt><span class="zh-name">混合策略</span><dd>先放一部分資料進 context 換速度，其餘讓 agent 自己探索；Claude Code 先放 CLAUDE.md，再用 glob、grep 找檔。</dd></div>
+      <div class="term"><dt>Long-horizon task</dt><span class="zh-name">長任務</span><dd>連續數十分鐘到數小時、token 總數超過 context window 的任務，例如大型程式庫遷移。</dd></div>
+      <div class="term"><dt>Context pollution</dt><span class="zh-name">情境污染</span><dd>context 裡累積了不相關或多餘的資訊；原文認為任何大小的視窗都躲不掉。</dd></div>
+      <div class="term"><dt>Compaction</dt><span class="zh-name">壓縮</span><dd>快到上限時摘要對話，帶著摘要開新視窗；Claude Code 另外附上最近存取的五個檔案。</dd></div>
+      <div class="term"><dt>Tool result clearing</dt><span class="zh-name">工具結果清除</span><dd>最輕量的壓縮：把歷史深處已經用過的工具結果清掉，agent 不必再看一次原始輸出。</dd></div>
+      <div class="term"><dt>Structured note-taking</dt><span class="zh-name">結構化筆記</span><dd>也叫 agentic memory：agent 定期把筆記存到視窗外，之後讀回；memory tool 是平台提供的檔案式版本。</dd></div>
+      <div class="term"><dt>Sub-agent architecture</dt><span class="zh-name">子 agent 架構</span><dd>主 agent 拿高層計畫協調，子 agent 在乾淨的視窗深挖，交回 1,000 到 2,000 token 的摘要。</dd></div>
+    </dl>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>資料來源：Anthropic Engineering，〈Effective context engineering for AI agents〉，Prithvi Rajasekaran、Ethan Dixon、Carly Ryan、Jeremy Hadfield（Anthropic Applied AI 團隊），2025 年 9 月 29 日。<br><a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">www.anthropic.com/engineering/effective-context-engineering-for-ai-agents</a></p>
+    <p class="credit">整理於 2026-09-23</p>
+    <p class="disclaimer">本頁為學習用的重述與整理，不是原文逐句翻譯。觀點與著作權屬於原作者。程式片段為教學用精簡版，實際用法請以原文與官方文件為準。</p>
+  </div>
+</footer>
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="圖卡大圖"><button type="button" class="close">關閉（Esc）</button><div class="frame"></div></div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fitFrames() {
+    var frames = document.querySelectorAll('.cardband .frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  var KEY = 'rearranged-article-mode';
+  function setMode(m, save) {
+    document.body.classList.toggle('mode-cards', m === 'cards');
+    var btns = document.querySelectorAll('.modebar button[data-mode]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-mode') === m ? 'true' : 'false');
+    }
+    if (save) { try { localStorage.setItem(KEY, m); } catch (e) {} }
+    fitFrames();
+  }
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  setMode(saved === 'cards' ? 'cards' : 'full', false);
+
+  var box = document.getElementById('lightbox');
+  var boxFrame = box.querySelector('.frame');
+  function fitLightbox() {
+    if (!box.classList.contains('open')) return;
+    var root = boxFrame.firstElementChild;
+    if (!root) return;
+    var s = Math.min(1, (window.innerWidth - 48) / W, (window.innerHeight - 48) / H);
+    root.style.transform = 'scale(' + s + ')';
+    boxFrame.style.width = Math.round(W * s) + 'px';
+    boxFrame.style.height = Math.round(H * s) + 'px';
+  }
+  function openLightbox(num) {
+    var bandEl = document.getElementById('card-' + num);
+    if (!bandEl) return;
+    var root = bandEl.querySelector('.frame > div');
+    boxFrame.innerHTML = '';
+    var clone = root.cloneNode(true);
+    clone.style.transform = '';
+    boxFrame.appendChild(clone);
+    box.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    fitLightbox();
+  }
+  function closeLightbox() {
+    box.classList.remove('open');
+    boxFrame.innerHTML = '';
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var b = t.closest('.modebar button[data-mode]');
+    if (b) { setMode(b.getAttribute('data-mode'), true); return; }
+    var z = t.closest('.cardlabel .zoom');
+    if (z) { openLightbox(z.getAttribute('data-card')); return; }
+    if (t.closest('.lightbox') && !t.closest('.lightbox .frame')) { closeLightbox(); }
+  });
+  document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') closeLightbox(); });
+  window.addEventListener('resize', function () { fitFrames(); fitLightbox(); });
+  window.addEventListener('load', fitFrames);
+  fitFrames();
+})();
+</script>
+</body>
+</html>
