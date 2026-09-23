@@ -20,6 +20,7 @@ window.ARTICLES = {
       "formats": [
         "圖卡＋教材整合版"
       ],
+      "course": null,
       "extras": [
         {
           "label": "圖解卡連續閱讀版",
@@ -42,11 +43,18 @@ window.ARTICLES = {
         "compound-ai",
         "rag",
         "dspy",
-        "llmops"
+        "llmops",
+        "cs329z"
       ],
       "formats": [
         "圖卡＋教材整合版"
       ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 1,
+        "kind": "必讀",
+        "url": "https://cs329z.stanford.edu/"
+      },
       "extras": [
         {
           "label": "圖解卡連續閱讀版",
@@ -75,6 +83,7 @@ window.ARTICLES = {
       "formats": [
         "圖卡＋教材整合版"
       ],
+      "course": null,
       "extras": [
         {
           "label": "圖解卡連續閱讀版",
@@ -103,6 +112,7 @@ window.ARTICLES = {
       "formats": [
         "圖卡＋教材整合版"
       ],
+      "course": null,
       "extras": [
         {
           "label": "圖解卡連續閱讀版",
@@ -130,6 +140,7 @@ window.ARTICLES = {
       "formats": [
         "圖卡＋教材整合版"
       ],
+      "course": null,
       "extras": [
         {
           "label": "圖解卡連續閱讀版",
@@ -157,6 +168,7 @@ window.ARTICLES = {
       "formats": [
         "圖卡＋教材整合版"
       ],
+      "course": null,
       "extras": [
         {
           "label": "圖解卡連續閱讀版",
