@@ -72,6 +72,7 @@ def build_entry(index_file, folder):
         "date": date,
         "tags": meta.get("tags") or fb.get("tags") or [],
         "formats": meta.get("formats") or [],
+        "course": meta.get("course"),
         "extras": extras,
     }
 
