@@ -1,0 +1,1556 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG（Lewis et al. 2020）</title>
+<meta name="description" content="RAG 這個詞的出處。Lewis 等人在 2020 年把權重裡的參數記憶和可檢索的維基百科索引接在一起，做成一個端到端微調的生成模型：檢索器 DPR 找前 K 段，生成器 BART 邊看邊寫，找回的段落當隱變數邊緣化。四個開放領域問答資料集拿到當時最好的成績，人評更真實也更具體，換掉索引就能更新知識。每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="rag, retrieval, generation, knowledge-intensive, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2005.11401">
+<meta name="date" content="2026-09-23">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Theme: tech-modern 變體「測試報告語意色」
+   藍 = 主色 / 綠 = pass / 琥珀 = 注意 / 紅 = fail
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --paper: #ffffff;
+  --paper-soft: #f3f5f8;
+  --paper-shadow: #dde2e8;
+  --ink: #121821;
+  --ink-soft: #3b4450;
+  --ink-mute: #6b7481;
+  --primary: #1e56a8;
+  --primary-deep: #143a72;
+  --primary-bg: #e6eef9;
+  --accent: #157a52;
+  --accent-deep: #0d5236;
+  --accent-bg: #e1f3e9;
+  --warm: #b8620e;
+  --warm-deep: #7d4108;
+  --warm-bg: #fbeddc;
+  --danger: #b83228;
+  --danger-bg: #f9e3e0;
+  --stone: #5a6370;
+  --stone-bg: #eceff3;
+  --code-bg: #0f1720;
+  --code-ink: #e6edf3;
+  --code-mute: #8b98a8;
+  --code-blue: #7cc4ff;
+  --code-green: #7ee2b8;
+  --code-amber: #ffc46b;
+
+  --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-cjk: 'Noto Sans TC', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --content-width: 780px;
+  --wide-width: 1100px;
+  --gutter: 24px;
+}
+
+/* ---------- reset & 排版 ---------- */
+* { box-sizing: border-box; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+body {
+  margin: 0; padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-cjk);
+  font-size: 18px;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: var(--content-width); margin: 0 auto; padding: 0 var(--gutter); }
+.wide { max-width: var(--wide-width); margin: 0 auto; padding: 0 var(--gutter); }
+section { padding-block: 64px; }
+section + section { border-top: 1px solid var(--paper-shadow); }
+
+h1, h2, h3, h4 { font-family: var(--font-cjk); font-weight: 700; text-wrap: balance; }
+h1 { font-size: 56px; line-height: 1.14; margin: 0 0 24px; font-weight: 800; }
+h2 { font-size: 36px; line-height: 1.25; margin: 0 0 18px; letter-spacing: -0.01em; }
+h3 { font-size: 25px; line-height: 1.35; margin: 44px 0 14px; }
+h4 { font-size: 20px; line-height: 1.4; margin: 26px 0 10px; }
+p { margin: 0 0 18px; }
+ul, ol { padding-left: 26px; margin: 0 0 18px; }
+li { margin-bottom: 8px; }
+em { font-style: normal; color: var(--primary-deep); font-weight: 600; }
+strong { font-weight: 700; }
+a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+code {
+  font-family: var(--font-mono); font-size: 0.86em;
+  background: var(--stone-bg); color: var(--primary-deep);
+  padding: 2px 6px; border-radius: 4px;
+}
+.mono { font-family: var(--font-mono); }
+
+/* ---------- Hero ---------- */
+.hero {
+  padding-block: 84px 60px;
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-soft) 100%);
+  border-bottom: 2px solid var(--primary-deep);
+  position: relative;
+}
+.hero::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: linear-gradient(90deg,
+    var(--primary) 0%, var(--primary) 25%,
+    var(--accent) 25%, var(--accent) 50%,
+    var(--warm) 50%, var(--warm) 75%,
+    var(--danger) 75%, var(--danger) 100%);
+}
+.hero-meta {
+  display: flex; flex-wrap: wrap; gap: 10px 22px;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  margin-bottom: 32px;
+}
+.hero-meta span::before { content: "—"; margin-right: 10px; color: var(--paper-shadow); }
+.hero-meta span:first-child::before { content: ""; margin: 0; }
+.hero h1 { font-size: 60px; font-weight: 800; word-break: keep-all; }
+.hero h1 .accent {
+  display: block; margin-top: 12px;
+  font-size: 0.55em; font-weight: 600; line-height: 1.3;
+  color: var(--primary-deep);
+}
+.hero .lede { font-size: 22px; max-width: 720px; }
+.hero-keystat {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 28px; margin: 44px 0 0; padding-top: 34px;
+  border-top: 1px dashed var(--paper-shadow);
+}
+.hero-keystat dt {
+  font-family: var(--font-sans);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--ink-mute); margin-bottom: 6px;
+}
+.hero-keystat dd {
+  margin: 0; font-family: var(--font-mono);
+  font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1;
+}
+.hero-keystat dd small { font-family: var(--font-cjk); font-size: 14px; color: var(--ink-mute); font-weight: 400; margin-left: 6px; }
+
+/* ---------- Chapter / lede / eyebrow ---------- */
+.chapter {
+  font-family: var(--font-mono);
+  font-size: 12.5px; color: var(--primary);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 0 0 10px;
+}
+.chapter::before { content: "§ "; color: var(--paper-shadow); margin-right: 4px; }
+.lede {
+  font-size: 22px; line-height: 1.6; color: var(--ink-soft);
+  margin: 0 0 28px; font-weight: 400;
+}
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--primary); margin: 0 0 14px;
+}
+
+/* ---------- Pull quote ---------- */
+.pullquote {
+  margin: 48px -16px; padding: 32px 40px;
+  font-family: var(--font-cjk);
+  font-size: 27px; line-height: 1.5; font-weight: 600;
+  color: var(--primary-deep);
+  border-left: 5px solid var(--primary);
+  background: linear-gradient(90deg, var(--primary-bg) 0%, transparent 100%);
+}
+.pullquote.bronze {
+  color: var(--accent-deep); border-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-bg) 0%, transparent 100%);
+}
+.pullquote.terra {
+  color: var(--warm-deep); border-color: var(--warm);
+  background: linear-gradient(90deg, var(--warm-bg) 0%, transparent 100%);
+}
+.pullquote cite {
+  display: block; margin-top: 16px; font-style: normal; font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  letter-spacing: 0.06em;
+}
+.pullquote cite::before { content: "— "; }
+
+/* ---------- English quote ---------- */
+.quote-en {
+  margin: 28px 0;
+  font-family: var(--font-sans); font-style: italic;
+  font-size: 21px; line-height: 1.5; color: var(--ink);
+  padding-left: 20px; border-left: 3px solid var(--accent);
+}
+.quote-en .zh {
+  display: block; margin-top: 10px;
+  font-family: var(--font-cjk); font-style: normal;
+  font-size: 15px; color: var(--ink-soft); line-height: 1.6;
+}
+
+/* ---------- Story ---------- */
+.story {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 14px;
+  padding: 38px 44px; margin: 48px 0;
+  position: relative;
+}
+.story::before {
+  content: "❝"; position: absolute; top: -6px; left: 24px;
+  font-size: 72px; color: var(--warm); line-height: 1;
+  font-family: var(--font-sans);
+}
+.story .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.18em;
+  color: var(--warm); margin-bottom: 10px; padding-left: 42px;
+}
+.story h4 { margin: 0 0 16px; font-size: 22px; color: var(--warm-deep); }
+.story p { margin-bottom: 14px; font-size: 17px; line-height: 1.7; }
+.story p:last-child { margin-bottom: 0; }
+
+/* ---------- Explain ---------- */
+.explain {
+  background: var(--primary-bg);
+  border-left: 4px solid var(--primary);
+  border-radius: 4px;
+  padding: 26px 30px; margin: 36px 0;
+  font-family: var(--font-cjk); position: relative;
+}
+.explain.bronze { background: var(--accent-bg); border-color: var(--accent); }
+.explain.terra { background: var(--warm-bg); border-color: var(--warm); }
+.explain.stone { background: var(--stone-bg); border-color: var(--stone); }
+.explain .label {
+  position: absolute; top: -12px; left: 16px;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.15em; padding: 4px 12px;
+  border-radius: 3px; text-transform: uppercase;
+}
+.explain.bronze .label { background: var(--accent); }
+.explain.terra .label { background: var(--warm); }
+.explain.stone .label { background: var(--stone); }
+.explain h4 { margin: 4px 0 12px; font-size: 19px; color: var(--primary-deep); }
+.explain.bronze h4 { color: var(--accent-deep); }
+.explain.terra h4 { color: var(--warm-deep); }
+.explain.stone h4 { color: var(--ink); }
+.explain p { font-size: 16.5px; }
+.explain p:last-child { margin-bottom: 0; }
+.explain ul, .explain ol { margin: 8px 0 0; padding-left: 22px; }
+.explain li { margin-bottom: 6px; font-size: 16px; }
+.explain code { background: rgba(255,255,255,0.75); }
+
+/* ---------- Stat grid ---------- */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.stat-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 28px 24px; text-align: center;
+  border-top: 4px solid var(--primary);
+}
+.stat-card.bronze { border-color: var(--accent); }
+.stat-card.terra { border-color: var(--warm); }
+.stat-card.danger { border-color: var(--danger); }
+.stat-card .big {
+  font-family: var(--font-mono);
+  font-size: 46px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1; margin-bottom: 10px;
+}
+.stat-card.bronze .big { color: var(--accent-deep); }
+.stat-card.terra .big { color: var(--warm-deep); }
+.stat-card.danger .big { color: var(--danger); }
+.stat-card .big small { font-family: var(--font-cjk); font-size: 16px; opacity: 0.75; margin-left: 4px; font-weight: 500; }
+.stat-card .label {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.stat-card .note { margin-top: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.55; }
+
+/* ---------- Compare table ---------- */
+.table-scroll { overflow-x: auto; margin: 36px 0; }
+.compare {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-cjk); font-size: 15.5px;
+  background: var(--paper-soft);
+  border-radius: 10px; overflow: hidden;
+  min-width: 560px;
+}
+.compare th, .compare td {
+  padding: 15px 18px; text-align: left;
+  border-bottom: 1px solid var(--paper-shadow);
+  vertical-align: top; line-height: 1.6;
+}
+.compare th {
+  background: var(--primary-deep); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+}
+.compare tr:last-child td { border-bottom: none; }
+.compare td:first-child { font-weight: 700; color: var(--primary-deep); width: 24%; }
+.compare .id { font-family: var(--font-mono); font-size: 13px; display: block; color: var(--ink-mute); font-weight: 500; margin-bottom: 2px; }
+.compare .yes { color: var(--accent-deep); font-weight: 700; }
+.compare .no { color: var(--danger); font-weight: 700; }
+
+/* ---------- Value cards ---------- */
+.values {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.value-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 26px 24px;
+  border-top: 5px solid var(--primary);
+}
+.value-card:nth-child(2) { border-top-color: var(--accent); }
+.value-card:nth-child(3) { border-top-color: var(--warm); }
+.value-card:nth-child(4) { border-top-color: var(--primary-deep); }
+.value-card:nth-child(5) { border-top-color: var(--stone); }
+.value-card .num {
+  font-family: var(--font-mono);
+  font-size: 38px; font-weight: 700;
+  color: var(--primary); line-height: 1; margin-bottom: 12px;
+}
+.value-card:nth-child(2) .num { color: var(--accent); }
+.value-card:nth-child(3) .num { color: var(--warm); }
+.value-card:nth-child(4) .num { color: var(--primary-deep); }
+.value-card:nth-child(5) .num { color: var(--stone); }
+.value-card .tag {
+  display: inline-block; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--primary); margin-bottom: 10px;
+}
+.value-card:nth-child(2) .tag { color: var(--accent); }
+.value-card:nth-child(3) .tag { color: var(--warm); }
+.value-card:nth-child(4) .tag { color: var(--primary-deep); }
+.value-card h4 { margin: 0 0 10px; font-size: 19px; line-height: 1.4; }
+.value-card p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin: 0; }
+
+/* ---------- 擴充檢查卡（附成本標籤） ---------- */
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px; margin: 40px 0;
+}
+.card {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 12px;
+  padding: 24px 24px 22px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.card .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card h4 { margin: 0; font-size: 18.5px; line-height: 1.4; }
+.card p { margin: 0; font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); }
+.card .signal { font-family: var(--font-mono); font-size: 12.5px; color: var(--primary-deep); background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 6px; padding: 6px 10px; margin-top: 4px; overflow-x: auto; white-space: nowrap; }
+.pill {
+  flex: none; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px;
+}
+.pill.fast { background: var(--accent-bg); color: var(--accent-deep); }
+.pill.mid { background: var(--warm-bg); color: var(--warm-deep); }
+.pill.slow { background: var(--danger-bg); color: var(--danger); }
+
+/* ---------- Thought ---------- */
+.thought {
+  background: var(--accent-bg);
+  border-left: 4px solid var(--accent);
+  padding: 26px 30px; margin: 40px 0;
+  border-radius: 4px; position: relative;
+}
+.thought .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--accent-deep); margin-bottom: 10px;
+}
+.thought h4 { font-size: 19px; margin: 0 0 14px; color: var(--accent-deep); line-height: 1.45; }
+.thought p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin-bottom: 8px; }
+.thought .hint {
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px dashed rgba(13, 82, 54, 0.3);
+  font-size: 14px; color: var(--accent-deep);
+}
+.thought .hint::before { content: "建議方向："; font-weight: 700; }
+
+/* ---------- Code block ---------- */
+.codeblock { margin: 30px 0; }
+.codeblock .file {
+  display: inline-block; font-family: var(--font-mono);
+  font-size: 12px; color: var(--ink-mute);
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow); border-bottom: none;
+  border-radius: 8px 8px 0 0; padding: 7px 14px;
+}
+pre.code {
+  margin: 0; background: var(--code-bg); color: var(--code-ink);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65;
+  padding: 22px 24px; border-radius: 0 10px 10px 10px;
+  overflow-x: auto; tab-size: 2; white-space: pre;
+}
+pre.code.solo { border-radius: 10px; }
+pre.code .c { color: var(--code-mute); }
+pre.code .k { color: var(--code-blue); }
+pre.code .s { color: var(--code-green); }
+pre.code .a { color: var(--code-amber); font-weight: 700; }
+
+/* ---------- Flow（eval 迴圈圖） ---------- */
+.flow { display: flex; align-items: stretch; margin: 40px 0; }
+.flow-step {
+  flex: 1 1 0; min-width: 0;
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow);
+  border-radius: 10px; padding: 18px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.flow-step .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--primary); letter-spacing: 0.1em; }
+.flow-step strong { font-size: 17px; line-height: 1.3; }
+.flow-step span.d { font-size: 14px; line-height: 1.55; color: var(--ink-soft); }
+.flow-step.score { border-color: var(--accent); background: var(--accent-bg); }
+.flow-step.score .k { color: var(--accent-deep); }
+.flow-arrow { flex: none; width: 30px; position: relative; }
+.flow-arrow::before {
+  content: ""; position: absolute; top: 50%; left: 2px; right: 2px; height: 2px;
+  background: var(--primary); transform: translateY(-50%);
+}
+.flow-arrow::after {
+  content: ""; position: absolute; top: 50%; right: 4px; width: 9px; height: 9px;
+  border-top: 2px solid var(--primary); border-right: 2px solid var(--primary);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+/* ---------- Cascade（編號步驟） ---------- */
+.cascade { display: flex; flex-direction: column; gap: 14px; margin: 32px 0; }
+.cascade-step {
+  display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px;
+}
+.cascade-step .n {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-mono); font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.cascade-step .t { font-size: 16.5px; line-height: 1.65; }
+.cascade-step .t strong { display: block; margin-bottom: 2px; }
+
+/* ---------- Checklist ---------- */
+.checklist { list-style: none; padding: 0; margin: 32px 0; display: flex; flex-direction: column; gap: 12px; }
+.checklist li {
+  display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px; margin: 0;
+  font-size: 16.5px; line-height: 1.65;
+}
+.checklist .box {
+  width: 24px; height: 24px; margin-top: 3px;
+  border: 2px solid var(--accent); border-radius: 6px; background: var(--paper);
+}
+.checklist strong { display: block; }
+.checklist small { display: block; color: var(--ink-soft); font-size: 15px; }
+
+/* ---------- Glossary ---------- */
+.glossary { background: var(--primary-deep); color: var(--paper); padding-block: 64px; }
+.glossary h2 { color: var(--paper); margin-top: 0; }
+.glossary .eyebrow { color: var(--accent-bg); }
+.glossary .lede { color: var(--paper); opacity: 0.8; }
+.glossary-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 26px; margin: 42px 0 0;
+}
+.term { border-top: 2px solid var(--accent); padding-top: 16px; }
+.term:nth-child(3n+2) { border-color: var(--warm); }
+.term:nth-child(3n+3) { border-color: var(--paper); }
+.term dt {
+  font-family: var(--font-mono);
+  font-size: 14px; font-weight: 700;
+  color: var(--accent-bg); letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+.term .zh-name { font-family: var(--font-cjk); font-size: 16px; font-weight: 600; color: var(--paper); margin-bottom: 8px; display: block; }
+.term dd { margin: 0; font-family: var(--font-cjk); font-size: 14.5px; line-height: 1.65; color: rgba(255, 255, 255, 0.8); }
+
+/* ---------- TOC ---------- */
+.toc {
+  position: fixed; right: 24px; top: 50%; transform: translateY(-50%); z-index: 10;
+  font-family: var(--font-sans); font-size: 12px;
+  background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 10px;
+  padding: 18px 20px; max-width: 236px;
+  box-shadow: 0 4px 18px rgba(18, 24, 33, 0.08);
+}
+.toc h5 { margin: 0 0 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-mute); }
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc -1; }
+.toc li { margin-bottom: 6px; counter-increment: toc; font-size: 12px; line-height: 1.45; display: flex; gap: 8px; }
+.toc li::before { content: counter(toc, decimal-leading-zero); font-family: var(--font-mono); color: var(--ink-mute); font-size: 10.5px; padding-top: 2px; }
+.toc a { color: var(--ink-soft); text-decoration: none; }
+.toc a:hover { color: var(--primary); }
+@media (max-width: 1340px) { .toc { display: none; } }
+
+/* ---------- Footer ---------- */
+footer {
+  padding-block: 48px 64px;
+  background: var(--paper-soft);
+  text-align: center;
+  font-family: var(--font-cjk);
+  font-size: 13.5px; color: var(--ink-mute);
+}
+footer p { margin: 0 0 8px; }
+footer .credit { font-family: var(--font-sans); }
+footer .disclaimer { margin-top: 14px; font-size: 12px; opacity: 0.75; max-width: 640px; margin-inline: auto; }
+
+/* ---------- 響應式 ---------- */
+@media (max-width: 768px) {
+  body { font-size: 17px; }
+  .hero { padding-block: 56px 42px; }
+  .hero h1 { font-size: 36px; }
+  .hero .lede { font-size: 18px; }
+  h2 { font-size: 27px; }
+  h3 { font-size: 22px; }
+  section { padding-block: 46px; }
+  .lede { font-size: 19px; }
+  .pullquote { font-size: 21px; margin: 34px 0; padding: 24px; }
+  .story { padding: 30px 24px; }
+  .stat-card .big { font-size: 36px; }
+  .flow { flex-direction: column; }
+  .flow-arrow { width: auto; height: 30px; }
+  .flow-arrow::before { top: 2px; bottom: 2px; left: 50%; right: auto; width: 2px; height: auto; transform: translateX(-50%); }
+  .flow-arrow::after { top: auto; bottom: 4px; left: 50%; right: auto; transform: translateX(-50%) rotate(135deg); }
+  .compare td:first-child { width: auto; }
+}
+
+/* ---------- 列印 ---------- */
+@media print {
+  .toc { display: none; }
+  body { font-size: 12pt; }
+  .hero, .glossary {
+    color: var(--ink) !important; background: white !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .glossary h2, .glossary .term dt, .glossary .lede, .glossary .term .zh-name { color: var(--ink) !important; }
+  .glossary .term dd { color: var(--ink-soft) !important; }
+  pre.code { background: #f3f5f8 !important; color: #121821 !important; border: 1px solid #ccd; white-space: pre-wrap; }
+  pre.code .c, pre.code .k, pre.code .s, pre.code .a { color: inherit !important; }
+  section { page-break-inside: avoid; }
+}
+
+/* ---------- 整合版：模式列、圖卡帶、燈箱 ---------- */
+.modebar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; padding: 10px var(--gutter); background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--paper-shadow); font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.modebar .brand { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.modebar .left { display: flex; align-items: center; gap: 14px; }
+.modebar .homelink { font-size: 12px; font-weight: 600; color: var(--ink-mute); text-decoration: none; }
+.modebar .homelink:hover { color: var(--primary); text-decoration: underline; }
+.modebar .switch { display: flex; gap: 6px; }
+.modebar button { font: inherit; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.modebar button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+.modebar button:focus-visible, .cardlabel .zoom:focus-visible, .lightbox .close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.modebar .canvaslink { font-size: 12px; color: var(--ink-mute); }
+.cardband { max-width: 1600px; margin: 4px auto 40px; padding: 0 var(--gutter); }
+.cardlabel { display: flex; align-items: baseline; gap: 14px; padding: 0 2px 8px; font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.cardlabel .n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--warm); }
+.cardlabel .zoom { margin-left: auto; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--paper-shadow); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; font-size: 16px; color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(18, 24, 33, 0.86); display: none; align-items: center; justify-content: center; padding: 24px; }
+.lightbox.open { display: flex; }
+.lightbox .frame { border: none; border-radius: 8px; max-width: none; width: auto; flex: none; }
+.lightbox .close { position: absolute; top: 14px; right: 18px; font: inherit; font-family: var(--font-sans); font-size: 13px; color: #FFFFFF; background: transparent; border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.faq { margin: 36px 0 8px; padding: 0; }
+.faq > div { padding: 18px 0; border-top: 1px solid var(--paper-shadow); }
+.faq > div:last-child { border-bottom: 1px solid var(--paper-shadow); }
+.faq dt { margin: 0 0 6px; font-weight: 700; font-size: 17px; color: var(--ink); }
+.faq dt::before { content: "問"; display: inline-block; margin-right: 10px; padding: 1px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; color: #FFFFFF; background: var(--primary); vertical-align: 2px; }
+.faq dd { margin: 0; font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+body.mode-cards section .prose { display: none; }
+body.mode-cards section.nocard { display: none; }
+body.mode-cards section { padding-block: 44px; }
+body.mode-cards .toc li.nocard { display: none; }
+@media (max-width: 768px) { .cardband { margin-bottom: 32px; } .modebar { font-size: 12px; } }
+@media print {
+  .modebar, .lightbox, .cardlabel .zoom { display: none !important; }
+  body.mode-cards section .prose { display: block !important; }
+  body.mode-cards section.nocard { display: block !important; }
+  section { page-break-inside: auto; }
+  .cardband, .story, .explain, .thought, .stat-grid, .values, .cards, .table-scroll { page-break-inside: avoid; }
+  .frame { height: auto !important; border: none; border-radius: 0; }
+  .frame > div { transform: none !important; zoom: 0.44; }
+}
+
+</style>
+</head>
+<body>
+<div class="modebar">
+  <div class="left"><a class="homelink" href="../../">← 首頁</a><span class="brand">RAG 2020 · 圖卡 + 教材</span></div>
+  <div class="switch" role="group" aria-label="閱讀模式">
+    <button type="button" data-mode="full" aria-pressed="true">圖卡＋詳解</button>
+    <button type="button" data-mode="cards" aria-pressed="false">只看圖卡</button>
+  </div>
+  <a class="canvaslink" href="cards.html">圖卡連續閱讀版</a>
+</div>
+<nav class="toc" aria-label="目錄">
+  <h5>目錄</h5>
+  <ol>
+    <li class="nocard"><a href="#prologue">源頭，不是套路</a></li>
+    <li><a href="#problem">三個弱點</a></li>
+    <li><a href="#architecture">一條管線</a></li>
+    <li><a href="#formulations">兩種邊緣化</a></li>
+    <li><a href="#training">訓練與解碼</a></li>
+    <li><a href="#tasks">四類任務</a></li>
+    <li><a href="#qa-results">問答結果</a></li>
+    <li><a href="#generation-results">生成與查核</a></li>
+    <li><a href="#ablations">消融與換索引</a></li>
+    <li><a href="#position">定位與限制</a></li>
+    <li class="nocard"><a href="#glossary">名詞速查</a></li>
+  </ol>
+</nav>
+<header class="hero">
+  <div class="container">
+    <div class="hero-meta">
+      <span>arXiv · 2020-05-22（NeurIPS 2020）</span>
+      <span>研究論文（Facebook AI Research、UCL、NYU）</span>
+      <span>作者 Patrick Lewis、Ethan Perez、Aleksandra Piktus、Fabio Petroni、Vladimir Karpukhin、Naman Goyal、Heinrich Küttler、Mike Lewis、Wen-tau Yih、Tim Rocktäschel、Sebastian Riedel、Douwe Kiela</span>
+    </div>
+    <p class="eyebrow">RETRIEVAL-AUGMENTED GENERATION · 圖卡＋教材整合版</p>
+    <h1>知識放在模型外面， 生成才有出處、也能更新<span class="accent">RAG 這個詞的出處：把檢索器和生成器接在一起訓練的那篇論文</span></h1>
+    <p class="lede">2020 年，Lewis 等人把「參數記憶」（權重裡的知識）和「非參數記憶」（可檢索的維基百科索引）接在一起，做成一個端到端微調的生成模型，取名 retrieval-augmented generation。它在四個開放領域問答資料集拿到當時最好的成績，生成的文字更真實、更具體、更多樣，而且換掉索引就能更新知識，不用重新訓練。今天大家說的 RAG 多半是推論時把找回來的段落塞進 prompt；這篇是那個做法的源頭，也是一個更緊的版本：檢索是可微分的，跟著任務一起學。每章開頭先放一張圖解卡講重點，往下是詳細作法；想速讀就切到「只看圖卡」。</p>
+    <dl class="hero-keystat">
+      <div><dt>Natural Questions</dt><dd>44.5<small>exact match · 之前最好 41.5</small></dd></div>
+      <div><dt>人評更真實</dt><dd>42.7<small>% · BART 更真實只有 7.1%</small></dd></div>
+      <div><dt>非參數記憶</dt><dd>21M<small>段 · 2018 年 12 月的維基百科，100 字一段</small></dd></div>
+      <div><dt>可訓練參數</dt><dd>626M<small>· 閉卷的 T5-11B 是 11B</small></dd></div>
+    </dl>
+  </div>
+</header>
+
+
+<section id="prologue" data-toc="源頭，不是套路" class="nocard">
+  <div class="container">
+    <p class="chapter">Prologue · 整理者的引言</p>
+    <h2>先分清楚：這篇是 RAG 的源頭，不是今天的 RAG 套路</h2>
+    <p class="lede">課程第 2 週的 RAG 那一講講 grounding、embedding、切塊、混合搜尋、cross-encoder 與 late interaction。這篇排在必讀，因為 RAG 這個詞和「參數記憶對非參數記憶」的框架都從這裡來。</p>
+
+    <p>這篇是 Facebook AI Research、UCL 和 NYU 在 2020 年的論文，發表在 NeurIPS。它做了一件當時沒人做過的事：把一個預訓練的檢索器和一個預訓練的生成器接成同一個機率模型，一起微調，讓生成器在寫每個字的時候都能看著找回來的維基百科段落。作者給這個做法取名 retrieval-augmented generation，簡稱 RAG。</p>
+    <p>讀之前要先對齊一件事。今天工程上說的 RAG，多半是推論時的做法：把使用者的問題拿去向量庫找幾段，塞進聊天模型的 prompt，模型沒有被訓練過。這篇的 RAG 不是那樣：檢索器的查詢編碼器和生成器一起被微調，找回來的段落被當成隱變數，用機率邊緣化掉，兩種模型（RAG-Sequence、RAG-Token）差在怎麼邊緣化。所以讀的時候要分清楚：哪些結論是關於這個訓練出來的模型（例如「學到的檢索比 BM25 好」），哪些可以直接搬到今天的推論時 RAG（例如「知識放外面就能檢視、能更新」）。第九章有一個對照框。</p>
+    <p>這一頁的處理方式：章節跟論文的論證走；數字只用表格與文字寫出的；2020 年的對手（T5-11B、REALM、DPR）照論文的叫法保留，方便對回原文。</p>
+
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>先把幾個名詞對齊</h4>
+      <ul>
+        <li><strong>parametric memory（參數記憶）</strong>：存在模型權重裡的知識，預訓練時學進去的。</li>
+        <li><strong>non-parametric memory（非參數記憶）</strong>：存在模型外面、用檢索存取的知識；這篇是一個維基百科的向量索引。</li>
+        <li><strong>seq2seq</strong>：讀一段文字、寫一段文字的編碼器加解碼器模型；這篇用 BART。</li>
+        <li><strong>DPR</strong>：Dense Passage Retriever，用兩個 BERT 分別編碼查詢與文件、用內積打分的檢索器。</li>
+        <li><strong>MIPS</strong>：最大內積搜尋，在幾千萬個向量裡找內積最大的前 K 個，用 FAISS 做近似。</li>
+      </ul>
+    </div>
+
+    <div class="pullquote">
+      把知識從權重裡搬到索引裡，換來的是三件事：能檢視、能更新、少幻覺。
+      <cite>整理者的引言</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="problem" data-toc="三個弱點">
+  <div class="container head">
+    <p class="chapter">Chapter 01 · Introduction</p>
+    <h2>純參數的模型有三個弱點：改不了、看不見、會幻覺</h2>
+    <p class="lede">預訓練模型把大量知識存在權重裡，但不能輕易擴充或修改記憶、無法說明預測的依據、還會產生幻覺。混合參數與非參數記憶就是為了補這三點。</p>
+    
+  </div>
+  <div class="cardband" id="card-02"><div class="cardlabel"><span class="n">圖卡 02 / 10</span><span class="t">純參數的模型：改不了、看不見、會幻覺</span><button type="button" class="zoom" data-card="02">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">純參數的模型改不了、看不見、會幻覺</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">預訓練模型把知識存在權重裡，是一個參數化的隱式知識庫；三個弱點都來自「知識鎖在權重裡」，混合記憶把一部分知識搬到模型外面</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 純參數記憶：知識鎖在權重裡</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 參數＋非參數：知識也放在索引裡</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:240px; top:200px; width:320px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">問題 x</div>
+  <div style="position:absolute; left:200px; top:290px; width:400px; height:60px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">seq2seq 從權重裡的知識生成</div><div style="font-size:12.5px; color:#6B7380;">知識是預訓練時學進去的，看不到它用了什麼</div></div></div>
+  <div style="position:absolute; left:240px; top:390px; width:320px; height:50px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">答案 y：沒有出處</div>
+  <div style="position:absolute; left:60px; top:470px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">改不了：要更新知識得再訓練。看不見：不知道答案依據什麼。會幻覺：沒有東西把生成拉回事實。原文引言列的三個弱點。</div>
+
+  <div style="position:absolute; left:1020px; top:200px; width:280px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">問題 x</div>
+  <div style="position:absolute; left:960px; top:290px; width:400px; height:60px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">檢索器：查詢向量在索引裡找前 K 段</div><div style="font-size:12.5px; color:#6B7380;">非參數記憶：維基百科 2,100 萬段原始文字</div></div></div>
+  <div style="position:absolute; left:1020px; top:390px; width:280px; height:50px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">生成器邊看段落邊寫 y</div>
+  <div style="position:absolute; left:840px; top:470px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">改得了：換索引就換知識。看得見：找回的段落人讀得懂。少幻覺：生成被找回的事實牽著。兩種記憶都是預訓練好、預先裝滿的。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#C8501F;">先前的混合模型只做過抽取式問答</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">REALM 與 ORQA 把遮罩語言模型和可微分檢索器接在一起，成果不錯；這篇把混合記憶帶到 seq2seq，輸出是生成的，不是抽出來的片段。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文說 seq2seq 是「NLP 的主力」。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#2E7B4F;">存取記憶的機制也是預訓練的</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">和從零訓練的記憶網路不同：BART 帶著參數知識、DPR 帶著索引與檢索能力，接起來不需要額外訓練就會用知識；微調時只動查詢編碼器和生成器。</div>
+    <div style="font-size:13px; color:#8A93A0;">端到端訓練，找回的文件是隱變數。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三個弱點與三個好處是原文引言的；左右兩條垂直流程是整理者的畫法，原文的圖 1 只畫右邊那條。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M400 252L400 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M400 352L400 388" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c02)"></path>
+    <path d="M1160 252L1160 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1160 352L1160 388" stroke="#2E7B4F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#an-c02)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>論文開頭承認預訓練語言模型的強：它們從資料裡學到相當多的深層知識，不需要外部記憶，本身就是一個參數化的隱式知識庫。然後列出三個弱點：記憶不能輕易擴充或修改；預測的依據看不出來；會產生幻覺。把參數記憶和檢索式的非參數記憶混在一起可以處理其中一部分：知識可以直接修改和擴充，被存取的知識可以被檢視和解讀。</p>
+    <p>混合記憶不是這篇發明的。REALM 和 ORQA 已經把遮罩語言模型和可微分的檢索器接在一起，成果不錯，但只探索過開放領域的抽取式問答。這篇把混合記憶帶到 NLP 的主力，也就是 seq2seq 模型：預訓練的 BART 當參數記憶，維基百科的稠密向量索引當非參數記憶，用預訓練的神經檢索器存取，三者接成一個端到端訓練的機率模型。找回來的文件是隱變數，用前 K 近似邊緣化；可以整段輸出共用一份文件，也可以每個 token 各自選文件。和 T5 或 BART 一樣，RAG 可以在任何 seq2seq 任務上微調，檢索器和生成器一起學。</p>
+    <p>和更早的記憶網路、堆疊增強網路、記憶層的差別在於：那些是為特定任務從零訓練的；這裡兩種記憶都是預訓練、預先裝滿知識的，而且存取記憶的機制也是預訓練的，所以不需要額外訓練就已經會用知識。引言預告的結果有五項：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>開放領域問答的新高</strong>Natural Questions、WebQuestions、CuratedTrec 都是當時最好；TriviaQA 大幅超過用特殊預訓練目標的方法。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>生成勝過抽取</strong>即使是抽取式的任務，不受限制的生成也比先前的抽取式方法好。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>生成更真實、更具體、更多樣</strong>MS-MARCO 和 Jeopardy 問題生成上，比 BART 基線好。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>事實查核接近管線系統</strong>FEVER 上離用了強檢索監督的最佳管線只差 4.3%。</div></div>
+      <div class="cascade-step"><div class="n">5</div><div class="t"><strong>知識可以更新</strong>換掉非參數記憶，模型的世界知識就跟著換。</div></div>
+    </div>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>「知識密集」是什麼意思</h4>
+      <p>論文的定義：人類如果沒有外部知識來源，就不可能合理地完成的任務。開放領域問答、事實查核、要引用事實的生成都算。這個定義也解釋了為什麼作者選這些任務來測，以及為什麼純參數的模型在這裡會落後給任務專用的架構。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="architecture" data-toc="一條管線">
+  <div class="container head">
+    <p class="chapter">Chapter 02 · Methods: retriever and generator</p>
+    <h2>一條管線：查詢編碼、在索引找前 K 段、生成器邊看邊寫</h2>
+    <p class="lede">檢索器 DPR 用查詢向量在 2,100 萬段維基百科裡做最大內積搜尋找前 K 段；生成器 BART 把輸入和段落拼接起來生成；被找回的段落是隱變數，用前 K 近似邊緣化。</p>
+    
+  </div>
+  <div class="cardband" id="card-03"><div class="cardlabel"><span class="n">圖卡 03 / 10</span><span class="t">一條管線：編碼、找前 K 段、拼接生成</span><button type="button" class="zoom" data-card="03">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">一條管線：查詢編碼、在索引找前 K 段、生成器邊看邊寫</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">論文圖 1：預訓練的檢索器（查詢編碼器＋文件索引）接上預訓練的 seq2seq 生成器，端到端微調；找回的文件 z 是隱變數，對它的機率邊緣化</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">輸入 x</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">問題、主張，<br>或要生成的題目</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">查詢編碼器 BERT_q</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">把 x 編成向量；<br>微調時會更新</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">索引：MIPS 找前 K 段</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">內積最大的 K 段，p(z|x)</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">文件編碼器與索引固定</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">生成器 BART</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">把 x 和段落 z 拼接，<br>逐 token 生成</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">輸出 y</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">對 K 份文件的機率加權</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">隱變數邊緣化</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:300px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">索引怎麼建</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">2018 年 12 月的維基百科，每篇文章切成互不重疊的 100 字段落，共 2,100 萬段；用 DPR 的文件編碼器各算一個向量，建成一個 FAISS 索引（HNSW 近似）。訓練時每題取前 5 或 10 段。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:420px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:444px; font-size:20px; font-weight:700; color:#1C2431;">三個元件各從哪裡來</div>
+
+  <div style="position:absolute; left:60px; top:486px; width:470px; height:260px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">① 檢索器：DPR 的雙編碼器</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">查詢與文件各用一個 BERT-base 編碼、內積打分；用 DPR 預訓練好的版本初始化，它原本被訓練來找出含 TriviaQA 與 NQ 答案的文件。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">找前 K 是最大內積搜尋，可以在次線性時間近似。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:486px; width:470px; height:260px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">② 生成器：BART-large</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">4 億參數的預訓練 seq2seq，去噪目標訓練；輸入就是 x 和 z 拼接起來，沒有特別的融合機制。這就是參數記憶。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">原文說任何編碼器加解碼器都可以。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:486px; width:470px; height:260px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">③ 機率模型：z 是隱變數</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">檢索器給 p(z|x)，生成器給 p(y|x,z)；沒有人標哪份文件是對的，訓練時把 z 用前 K 近似邊緣化掉，兩個元件一起學。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">兩種邊緣化方式見第 4 卡。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：五格對應原文圖 1；「索引怎麼建」來自第 3 節。BART 的參數量原文正文寫 4 億、附錄寫 4.06 億。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M769 262L769 296" stroke="#2E7B4F" stroke-width="1.5" stroke-dasharray="4 4"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>模型用輸入序列 x 去檢索文件 z，再把 z 當成額外的脈絡來生成目標序列 y。兩個元件：檢索器給定查詢 x，回傳一個在文件上的分布（截到前 K）；生成器根據前面已生成的 token、原始輸入 x 和一份找回的段落 z，生成下一個 token。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>元件</th><th>是什麼</th><th>從哪裡來</th><th>微調時動不動</th></tr></thead>
+        <tbody>
+          <tr><td>查詢編碼器</td><td>BERT-base，把 x 編成向量</td><td>DPR 預訓練的雙編碼器</td><td>微調</td></tr>
+          <tr><td>文件編碼器</td><td>BERT-base，把每段文件編成向量</td><td>同上</td><td>固定</td></tr>
+          <tr><td>文件索引（非參數記憶）</td><td>2018 年 12 月的維基百科，切成互不重疊的 100 字段落，共 2,100 萬段；FAISS 索引，HNSW 近似</td><td>用固定的文件編碼器一次建好</td><td>固定</td></tr>
+          <tr><td>生成器（參數記憶）</td><td>BART-large，4 億參數的預訓練 seq2seq</td><td>BART 的去噪預訓練</td><td>微調</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>檢索器照 DPR 的雙編碼器架構：文件向量與查詢向量的內積越大，那份文件的機率越高。找內積最高的 K 份文件是一個最大內積搜尋問題，可以在次線性時間近似解。作者用 DPR 預訓練好的雙編碼器初始化檢索器並建索引；那個檢索器原本是被訓練來找出含有 TriviaQA 與 Natural Questions 答案的文件。生成器可以是任何編碼器加解碼器，這裡用 BART-large；把輸入 x 和找回的內容 z 拼接起來就是生成器的輸入。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>索引為什麼能這麼大</h4>
+      <p>2,100 萬段文件各有一個 728 維的向量，總共 153 億個數值，可以用 8 位元浮點數存。附錄說 FAISS 的最大內積搜尋在 CPU 上就夠快，所以索引向量放 CPU 記憶體，整個維基百科約需 100 GB；後來用 FAISS 的壓縮工具降到 36 GB。訓練用 8 張 32 GB 的 V100，但訓練和推論都可以在一張 GPU 上跑。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="formulations" data-toc="兩種邊緣化">
+  <div class="container head">
+    <p class="chapter">Chapter 03 · RAG-Sequence and RAG-Token</p>
+    <h2>同一份文件寫完整句，或每個字都可以換文件：兩種邊緣化</h2>
+    <p class="lede">RAG-Sequence 假設整段輸出來自同一份找回的文件，把 K 份文件的整句機率加權相加；RAG-Token 讓每個 token 各自在 K 份文件上混合，可以把好幾份文件的內容拼進同一個答案。</p>
+    
+  </div>
+  <div class="cardband" id="card-04"><div class="cardlabel"><span class="n">圖卡 04 / 10</span><span class="t">RAG-Sequence 對 RAG-Token</span><button type="button" class="zoom" data-card="04">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">同一份文件寫完整句，或每個字都可以換文件</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">兩種對隱變數邊緣化的方式；都只在檢索器給的前 K 份文件上做。分類任務把類別當成長度為一的序列，兩種就等價</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">RAG-SEQUENCE</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">整句共用一份文件</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">RAG-TOKEN</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">每個 token 可以換文件</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:240px; top:222px; width:280px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">前 K 份文件，各寫一條整句</div>
+  <div style="position:absolute; left:80px; top:320px; width:200px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">文件 1</div><div style="font-size:12.5px; color:#6B7380;">整句機率 p(y|x,z₁)</div></div>
+  <div style="position:absolute; left:300px; top:320px; width:200px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">文件 2</div><div style="font-size:12.5px; color:#6B7380;">整句機率 p(y|x,z₂)</div></div>
+  <div style="position:absolute; left:520px; top:320px; width:200px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">文件 K</div><div style="font-size:12.5px; color:#6B7380;">整句機率 p(y|x,z_K)</div></div>
+  <div style="position:absolute; left:240px; top:440px; width:280px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">用 p(z|x) 加權相加</div><div style="font-size:12.5px; color:#6B7380;">得到整句的 p(y|x)</div></div></div>
+  <div style="position:absolute; left:60px; top:530px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">假設整段輸出來自同一份文件。解碼時整句機率拆不成逐 token，要對每份文件各跑一次 beam search，再把候選句的機率邊緣化（第 5 卡）。</div>
+
+  <div style="position:absolute; left:1020px; top:222px; width:280px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">生成第 i 個 token</div>
+  <div style="position:absolute; left:860px; top:320px; width:200px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">文件 1</div><div style="font-size:12.5px; color:#6B7380;">下一個 token 的分布</div></div>
+  <div style="position:absolute; left:1080px; top:320px; width:200px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">文件 2</div><div style="font-size:12.5px; color:#6B7380;">下一個 token 的分布</div></div>
+  <div style="position:absolute; left:1300px; top:320px; width:200px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">文件 K</div><div style="font-size:12.5px; color:#6B7380;">下一個 token 的分布</div></div>
+  <div style="position:absolute; left:1020px; top:440px; width:280px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">用 p(z|x) 加權混合</div><div style="font-size:12.5px; color:#6B7380;">再往第 i+1 個 token</div></div></div>
+  <div style="position:absolute; left:840px; top:530px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">每一步都在 K 份文件上混合，可以把好幾份文件的內容拼進同一個輸出。轉移機率已經混合掉了，直接用標準 beam search。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">RAG-Sequence：短答案，生成更多樣</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">開放領域問答四個資料集裡三個是它最高；不重複三元組的比例也高於 RAG-Token（Jeopardy 上 53.8% 對 46.8%）。</div>
+    <div style="font-size:13px; color:#8A93A0;">分類任務兩種等價：類別是長度為一的序列。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">RAG-Token：要拼多份文件的時候</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">Jeopardy 問題常含兩個獨立的事實，RAG-Token 的 Q-BLEU-1 最高（22.2 對 21.4）；圖 2 看得到不同 token 由不同文件主導。</div>
+    <div style="font-size:13px; color:#8A93A0;">MS-MARCO 上 Rouge-L 略低於 RAG-Sequence。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩條公式用文字重述，符號照原文第 2.1 節；哪一種在哪個任務較好，來自表 1、表 2、表 5。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M380 272L180 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M380 272L400 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M380 272L620 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M180 390L380 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M400 390L380 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M620 390L380 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1160 272L960 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1160 272L1180 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1160 272L1400 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M960 390L1160 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1180 390L1160 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1400 390L1160 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>要把檢索器和生成器一起端到端訓練，作者把找回的文件當成隱變數，然後提出兩種對隱變數邊緣化的方式。用文字講公式：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>面向</th><th>RAG-Sequence</th><th>RAG-Token</th></tr></thead>
+        <tbody>
+          <tr><td>隱變數怎麼算</td><td>整個序列共用一份文件：對前 K 份文件，各算「這份文件的機率 × 在它之下生成整句的機率」，再相加</td><td>每個 token 可以來自不同文件：每一步先對 K 份文件各算下一個 token 的分布，用文件機率加權相加，再往下一個 token</td></tr>
+          <tr><td>擅長什麼</td><td>一份文件就夠答的短答案；生成也更多樣（第七章）</td><td>需要把好幾份文件的內容拼進同一個輸出，例如 Jeopardy 問題</td></tr>
+          <tr><td>解碼</td><td>整句機率拆不成逐 token，要對每份文件各跑 beam search（第四章）</td><td>可以看成一般的自迴歸生成器，直接用標準 beam search</td></tr>
+          <tr><td>何時等價</td><td colspan="2">分類任務把類別當成長度為一的目標序列，兩種模型就一樣</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>兩種都是「前 K 近似」：檢索器只給前 K 份文件的分布，邊緣化只在這 K 份上做。K 在訓練時是 5 或 10，測試時可以另外設，第八章會看多取文件的效果。</p>
+
+    <div class="thought">
+      <span class="label">思考題 · 01</span>
+      <h4>今天推論時的 RAG，比較像哪一種？</h4>
+      <p>把找回的幾段一起塞進 prompt，讓模型一次看全部再寫。</p>
+      <p class="hint">兩種都不是：沒有邊緣化，也沒有文件機率的加權；比較像是把 K 份文件拼成一份很長的 z 交給 RAG-Sequence。這篇的兩種模型各自保留了「哪一份文件負責哪一段輸出」的機率，第七章圖 2 就是靠它看出來的。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="training" data-toc="訓練與解碼">
+  <div class="container head">
+    <p class="chapter">Chapter 04 · Training and decoding</p>
+    <h2>沒有檢索監督，也不重建索引：只微調查詢編碼器和生成器</h2>
+    <p class="lede">訓練只最小化目標輸出的負對數邊緣似然，沒有人告訴模型該找哪份文件。文件編碼器和索引固定，因為每次更新都要重建索引太貴，作者發現不更新也夠強。解碼時兩種模型走不同的路。</p>
+    
+  </div>
+  <div class="cardband" id="card-05"><div class="cardlabel"><span class="n">圖卡 05 / 10</span><span class="t">解碼看你是哪一種模型</span><button type="button" class="zoom" data-card="05">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">怎麼近似最可能的輸出，看你是哪一種模型</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">訓練是同一套：最小化負對數邊緣似然、沒有檢索監督、只微調查詢編碼器與 BART；解碼時 RAG-Token 走標準路，RAG-Sequence 有完整與快速兩條</div>
+
+  <div style="position:absolute; left:60px; top:286px; width:230px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:700; color:#FFFFFF;">訓練好的 RAG</div>
+  <div style="position:absolute; left:400px; top:276px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div style="font-size:17px; font-weight:700; color:#1C2431; line-height:1.35;">測試時要生成 y，<br>最可能的輸出怎麼近似？</div></div>
+
+  <div style="position:absolute; left:790px; top:172px; font-size:13px; font-weight:700; color:#2E7B4F;">RAG-Token</div>
+  <div style="position:absolute; left:790px; top:292px; font-size:13px; font-weight:700; color:#2E7B4F;">RAG-Sequence，答案短</div>
+  <div style="position:absolute; left:790px; top:412px; font-size:13px; font-weight:700; color:#C8501F;">RAG-Sequence，輸出長</div>
+
+  <div style="position:absolute; left:940px; top:150px; width:600px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">標準 beam search</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">轉移機率是各文件下的 token 分布用 p(z|x) 加權相加，跟一般 seq2seq 一樣解碼；問答用 greedy，beam 沒有改善</div>
+  </div>
+  <div style="position:absolute; left:940px; top:270px; width:600px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">完整解碼（Thorough Decoding）</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">對每份文件各跑 beam search 得到候選集；候選沒出現的那些文件再補跑前向傳播，乘上文件機率後加總成邊緣機率</div>
+  </div>
+  <div style="position:absolute; left:940px; top:390px; width:600px; height:96px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#C8501F;">快速解碼（Fast Decoding）</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">假設候選在沒生成它的文件下機率約為零，不補跑；輸出長時候選很多，省很多前向傳播。生成任務用它，完整版沒有更好</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:520px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">訓練共用</div>
+    <div style="font-size:15px; color:#2B3340;">Adam 最小化每個目標的負對數邊緣似然；不告訴模型該找哪份文件；文件編碼器與索引固定，因為更新要重建索引太貴，作者發現不更新也夠強</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:600px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:624px; font-size:20px; font-weight:700; color:#1C2431;">附錄 A 與 C 的實際設定</div>
+  <div style="position:absolute; left:60px; top:666px; width:470px; height:160px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">問答：取很多文件</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">RAG-Token 取 15 份、RAG-Sequence 取 50 份並用完整解碼；兩者都 greedy，beam search 沒有改善。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">答案短，候選少，完整解碼付得起。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:666px; width:470px; height:160px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">生成：取 10 份、beam 4</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">MS-MARCO 與 Jeopardy 兩種模型都取 10 份文件，RAG-Sequence 用快速解碼；另外訓練一個 BART-large 當對手。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">訓練時取 5 或 10 份，測試時可以另外調。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:666px; width:470px; height:160px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#2E7B4F;">訓練環境</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">Fairseq、混合精度、8 張 32 GB V100，但一張 GPU 也能跑；索引放 CPU 記憶體約 100 GB，壓縮後 36 GB。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">後來移植到 HuggingFace Transformers 並開源。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三個出口對應原文第 2.5 節的三種解碼；「答案短／輸出長」是原文對兩種解碼適用情境的描述。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+      <marker id="ao-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+    </defs>
+    <path d="M290 318L398 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M700 318H770" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M770 318V198H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+    <path d="M770 318H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+    <path d="M770 318V438H938" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c05)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p><strong>訓練。</strong>給一組輸入輸出對，用 Adam 做隨機梯度下降，最小化每個目標的負對數邊緣似然。沒有任何關於「該檢索哪份文件」的直接監督。更新文件編碼器的代價很高，因為索引要像 REALM 預訓練時那樣定期重建；作者發現這一步對強表現不是必要的，所以固定文件編碼器和索引，只微調查詢編碼器和 BART 生成器。</p>
+    <p><strong>解碼。</strong>測試時兩種模型要用不同方式近似最可能的輸出。RAG-Token 可以看成一個標準的自迴歸生成器，轉移機率是各文件下的下一個 token 分布用文件機率加權相加，直接塞進標準的 beam decoder。RAG-Sequence 的整句似然拆不成逐 token 的似然，不能用一次 beam search 解決；作者對每份文件各跑一次 beam search，得到一組候選句，其中有些候選只出現在某幾份文件的 beam 裡。</p>
+
+    <div class="values">
+      <div class="value-card"><span class="tag">Thorough</span><h4>完整解碼</h4><p>對每個候選句，在它沒出現的那些文件下再各跑一次前向傳播算機率，乘上文件機率後把各 beam 的機率加總，得到邊緣機率。答案短的問答用這種。</p></div>
+      <div class="value-card"><span class="tag">Fast</span><h4>快速解碼</h4><p>假設候選句在沒生成它的文件下機率約為零，候選集產生後不再跑額外的前向傳播。輸出長時候選會很多，快速解碼省很多；生成任務用這種，完整解碼沒有更好。</p></div>
+      <div class="value-card"><span class="tag">RAG-Token</span><h4>標準 beam</h4><p>轉移機率已經把文件混合掉了，跟一般 seq2seq 一樣解碼；問答用 greedy，因為 beam search 沒有改善。</p></div>
+    </div>
+
+    <div class="explain bronze">
+      <span class="label">實作提示</span>
+      <h4>附錄 A 的實際設定</h4>
+      <p>開放領域問答的測試：RAG-Token 取 15 份文件，RAG-Sequence 取 50 份並用完整解碼，兩者都用 greedy。MS-MARCO 與 Jeopardy 生成：兩種模型都取 10 份文件，beam 大小 4，RAG-Sequence 用快速解碼。訓練用 Fairseq、混合精度，後來移植到 HuggingFace Transformers 並開源，效果相同。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="tasks" data-toc="四類任務">
+  <div class="container head">
+    <p class="chapter">Chapter 05 · Experiments: four task families</p>
+    <h2>四種知識密集任務，同一個模型、同一份索引</h2>
+    <p class="lede">開放領域問答、抽象式問答、Jeopardy 問題生成、事實查核；全部用 2018 年 12 月的維基百科當非參數知識源，訓練時取前 5 或 10 份文件。</p>
+    
+  </div>
+  <div class="cardband" id="card-06"><div class="cardlabel"><span class="n">圖卡 06 / 10</span><span class="t">四種知識密集任務</span><button type="button" class="zoom" data-card="06">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">四種知識密集任務，同一個模型、同一份索引</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">知識密集的定義：人沒有外部知識來源就不可能合理完成的任務。四類都用 2018 年 12 月的維基百科當非參數知識源，模型結構不變，只換微調的資料</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:230px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">任務</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">資料集</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">輸入 → 輸出</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">指標與對手</div>
+  </div>
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:230px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">開放領域問答</div><div style="font-size:13px; color:#8A93A0;">抽取式任務，用生成答</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div style="font-size:14.5px; color:#2B3340; line-height:1.5;">Natural Questions、TriviaQA、WebQuestions、CuratedTrec；後兩個很小，從 NQ 的模型初始化</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div style="font-size:14.5px; color:#2B3340; line-height:1.5;">問題 → 短答案；直接最小化答案的負對數似然</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div style="font-size:14.5px; color:#2B3340; line-height:1.5;">exact match；對手是抽取式（REALM、DPR）與閉卷（T5-11B）</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:306px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:230px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">抽象式問答</div><div style="font-size:13px; color:#8A93A0;">自由形式的整句回答</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div style="font-size:14.5px; color:#2B3340; line-height:1.5;">MS-MARCO NLG v2.1；故意不用附的十段金標段落，只用問題與答案</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div style="font-size:14.5px; color:#2B3340; line-height:1.5;">問題 → 一句完整的答案；有些題沒有金標段落答不了，有些題維基百科沒有</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div style="font-size:14.5px; color:#2B3340; line-height:1.5;">BLEU-1、Rouge-L；對手是 BART 與看得到金標段落的最佳模型</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:402px; width:1480px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:grid; grid-template-columns:230px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#2E7B4F;">Jeopardy 問題生成</div><div style="font-size:13px; color:#8A93A0;">作者提的新任務</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div style="font-size:14.5px; color:#2B3340; line-height:1.5;">SearchQA 的切分：10 萬訓練、1.4 萬開發、2.7 萬測試；自己訓練 BART 當對手</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div style="font-size:14.5px; color:#2B3340; line-height:1.5;">答案實體 → 一句精確的事實問句，例如從「The World Cup」反推 1986 年墨西哥那句</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div style="font-size:14.5px; color:#2B3340; line-height:1.5;">Q-BLEU-1 加兩種成對人評：真實性、具體性</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:498px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; border-radius:0px 0px 8px 8px; display:grid; grid-template-columns:230px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">事實查核</div><div style="font-size:13px; color:#8A93A0;">分類，不是生成</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div style="font-size:14.5px; color:#2B3340; line-height:1.5;">FEVER 三分類與兩分類；不用任何關於證據的檢索監督</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div style="font-size:14.5px; color:#2B3340; line-height:1.5;">主張 → 支持、反駁或資訊不足，對應一個輸出 token</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div style="font-size:14.5px; color:#2B3340; line-height:1.5;">標籤準確率；對手是用了檢索監督的管線，與拿到金標證據的 RoBERTa</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">同一份索引，同一個模型</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">四類任務都用同一個維基百科索引（2,100 萬段），訓練時取前 5 或 10 段；只換微調的輸入輸出對。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">這是「通用微調配方」那句話的意思。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">MS-MARCO 故意放掉金標段落</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">所以有些題（例如某地現在的天氣）答不出參考答案，有些題維基百科沒有，RAG 只能靠參數知識合理作答；成績會低於用金標段落的模型。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">刻意的開放設定，讀成績時要記得。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">Jeopardy 是作者提的新任務</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">從一個實體反推一句精確的事實，比一般問答難得多；人評用成對比較，評審看答案與兩個問句，選 A、選 B、都好或都不好。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">評審可以上網查證，內含金標句檢查評審。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：四類任務的設定來自原文第 3 節；「輸入 → 輸出」一欄是整理者的簡寫。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p><strong>開放領域問答。</strong>問題與答案當成輸入輸出對，直接最小化答案的負對數似然。對手有兩類：抽取式問答（答案是從找回文件裡抽出的片段，主要靠非參數知識）與閉卷問答（像 RAG 一樣生成答案，但不檢索，純靠參數知識，例如 T5）。四個資料集：Natural Questions、TriviaQA、WebQuestions、CuratedTrec；後兩個很小，照 DPR 的做法用 NQ 的 RAG 模型初始化。指標是 exact match。TriviaQA 另外在 T5 用的 Wiki 測試集上也評一次，才能跟 T5 比。</p>
+    <p><strong>抽象式問答。</strong>用 MS-MARCO NLG v2.1：每題附十段搜尋引擎找回的金標段落和一句完整的答案。作者不用附的段落，只用問題和答案，把它當成開放領域的抽象式問答，所以有些題目沒有金標段落就答不出參考答案（例如「Volcano, CA 現在的天氣」），有些題目光靠維基百科也答不了，這時 RAG 只能靠參數知識給合理的回答。</p>
+
+    <div class="story">
+      <div class="label">關鍵觀念 · 一</div>
+      <h4>Jeopardy 問題生成：從一個實體反推一句精確的事實</h4>
+      <p>標準問答資料集的問題短又簡單，作者提出一個更難的生成任務：給答案實體，生成 Jeopardy 式的問題。Jeopardy 的格式是從一個事實猜實體，例如答案「The World Cup」對應的問題是「1986 年墨西哥成為第一個兩度主辦這項國際體育賽事的國家」。因為這種問題是精確的事實陳述，這是一個知識密集的生成任務。</p>
+      <p>資料用 SearchQA 的切分，10 萬筆訓練、1.4 萬筆開發、2.7 萬筆測試；因為是新任務，自己訓練一個 BART 當對手。指標是對實體加權的 Q-BLEU-1，另外做兩種人評：真實性（陳述能不能被可信的外部來源證實）與具體性（輸入輸出之間的互相依賴程度高不高）。人評用成對比較：評審看到答案與兩個生成的問題，選 A 較好、B 較好、都好、都不好。</p>
+    </div>
+
+    <p><strong>事實查核。</strong>FEVER 要判斷一個自然語言的主張被維基百科支持、反駁，或資訊不足；它同時是檢索問題和蘊涵推理問題，也可以測 RAG 做分類而不是生成的能力。作者把三個類別對應到單一輸出 token，直接用主張與類別對訓練，而且不用任何關於證據的檢索監督；很多真實應用沒有這種監督訊號，不需要它的模型適用面更廣。做三分類和兩分類兩種，報告標籤準確率。</p>
+  </div>
+</section>
+
+
+<section id="qa-results" data-toc="問答結果">
+  <div class="container head">
+    <p class="chapter">Chapter 06 · Results: open-domain QA</p>
+    <h2>四個問答資料集都是當時最好，而且是用生成答的</h2>
+    <p class="lede">NQ 44.5、WQ 45.2、CT 52.2 的 exact match 都超過 REALM 與 DPR；TriviaQA 在 T5 用的測試切分上 68.0。不需要重排序器，也不需要抽取式閱讀器。</p>
+    
+  </div>
+  <div class="cardband" id="card-07"><div class="cardlabel"><span class="n">圖卡 07 / 10</span><span class="t">四個問答資料集都是當時最好</span><button type="button" class="zoom" data-card="07">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">四個問答資料集都是當時最好，而且是生成的</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 1 的測試集 exact match；TriviaQA 兩個數字是標準切分／T5 用的 Wiki 切分。閉卷靠參數記憶，開卷靠檢索，RAG 兩種都用</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:340px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">模型</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">Natural Questions</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">TriviaQA（標準／Wiki）</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">WebQuestions</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">CuratedTrec</div>
+  </div>
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:340px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">T5-11B</div><div style="font-size:12px; color:#8A93A0;">閉卷</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#2B3340;">34.5</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#2B3340;">— ／ 50.1</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#2B3340;">37.4</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#2B3340;">—</div>
+  </div>
+  <div style="position:absolute; left:60px; top:274px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:340px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">T5-11B + SSM</div><div style="font-size:12px; color:#8A93A0;">閉卷，特殊預訓練</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#2B3340;">36.6</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#2B3340;">— ／ 60.5</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#2B3340;">44.7</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#2B3340;">—</div>
+  </div>
+  <div style="position:absolute; left:60px; top:338px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:340px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">REALM</div><div style="font-size:12px; color:#8A93A0;">開卷，抽取式</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#2B3340;">40.4</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#2B3340;">— ／ —</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#2B3340;">40.7</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#2B3340;">46.8</div>
+  </div>
+  <div style="position:absolute; left:60px; top:402px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:340px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">DPR</div><div style="font-size:12px; color:#8A93A0;">開卷，重排序＋抽取式閱讀器</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#2B3340;">41.5</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#2B3340;">57.9 ／ —</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#2B3340;">41.1</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#2B3340;">50.6</div>
+  </div>
+  <div style="position:absolute; left:60px; top:466px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-bottom:none; display:grid; grid-template-columns:340px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><div style="font-size:16px; font-weight:700; color:#2E7B4F;">RAG-Token</div><div style="font-size:12px; color:#8A93A0;">本文，生成</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#2E7B4F;">44.1</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#2E7B4F;">55.2 ／ 66.1</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#2E7B4F;">45.5</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#2E7B4F;">50.0</div>
+  </div>
+  <div style="position:absolute; left:60px; top:530px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:0px 0px 8px 8px; display:grid; grid-template-columns:340px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><div style="font-size:16px; font-weight:700; color:#2E7B4F;">RAG-Sequence</div><div style="font-size:12px; color:#8A93A0;">本文，生成</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#2E7B4F;">44.5</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#2E7B4F;">56.8 ／ 68.0</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#2E7B4F;">45.2</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#2E7B4F;">52.2</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">不需要重排序器，也不需要閱讀器</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">DPR 的系統用 BERT cross-encoder 重排序加抽取式閱讀器，RAG 沒有這兩樣卻更好；也不需要 REALM 那種昂貴的顯著片段遮罩預訓練。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">結合閉卷的生成彈性與開卷的表現。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">生成勝過抽取</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">含線索但沒有逐字答案的文件也能貢獻；NQ 上答案不在任何找回文件裡的題，RAG 仍答對 11.8%，抽取式模型在這些題是 0%。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">對文件的邊緣化因此更有效。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">兩個要誠實看的地方</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">TriviaQA 標準切分上 RAG-Sequence 56.8 低於 DPR 57.9，贏的是 Wiki 切分；檢索器是用 DPR 初始化的，而 DPR 在 NQ 與 TQA 用過檢索監督。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">兩點原文自己都有寫。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：數字全部來自表 1，「—」是原文沒有報告的格子；綠底兩列是本文的模型。這些是 2020 年的水準，讀的是結構性結論。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>表 1 列出 RAG 和當時最好的模型。四個開放領域問答任務 RAG 都刷新紀錄，TriviaQA 只在和 T5 可比的切分上；在開放領域社群慣用的標準切分上，RAG-Sequence 的 56.8 其實低於 DPR 的 57.9，這一點論文的表格有寫，讀的時候要看到。RAG 結合了閉卷方法的生成彈性和開卷檢索方法的表現，而且不像 REALM 和 T5+SSM 需要昂貴的「顯著片段遮罩」預訓練。作者也提醒：RAG 的檢索器是用 DPR 初始化的，而 DPR 在 NQ 和 TQA 上用過檢索監督。</p>
+
+    <div class="stat-grid">
+      <div class="stat-card bronze"><div class="big">44.5</div><div class="label">Natural Questions，RAG-Sequence</div><div class="note">DPR 41.5、REALM 40.4、T5-11B+SSM 36.6</div></div>
+      <div class="stat-card"><div class="big">11.8<small>%</small></div><div class="label">NQ 裡答案不在任何找回文件中、仍答對的比例</div><div class="note">抽取式模型在這些題會得 0</div></div>
+      <div class="stat-card"><div class="big">626M</div><div class="label">可訓練參數</div><div class="note">T5-large 7.7 億參數在 NQ 只有 28.9</div></div>
+    </div>
+
+    <p>和 DPR 的問答系統比，RAG 沒有用 BERT 的 cross-encoder 重排序文件，也沒有抽取式閱讀器，表現卻更好；作者的結論是兩者都不是達到最佳表現的必要條件。用生成而不是抽取還有幾個好處：含有線索但沒有逐字答案的文件也能貢獻，抽取式做不到，所以對文件的邊緣化更有效；而且 RAG 能在正確答案不在任何找回文件裡的情況下答對，NQ 上這種情況有 11.8% 的準確率，抽取式模型會是 0%。</p>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>2020 年的對手，今天要換算著看</h4>
+      <p>表 1 的閉卷對手是 T5-11B，開卷對手是 REALM 與 DPR。這些數字是 2020 年的水準，今天的模型早就超過；這一章要讀的是結構性的結論：混合記憶用 6 億多可訓練參數勝過 110 億的閉卷模型，生成勝過抽取，重排序器與閱讀器可以省。整理者的提醒，原文沒有這一段。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="generation-results" data-toc="生成與查核">
+  <div class="container head">
+    <p class="chapter">Chapter 07 · Results: generation and fact verification</p>
+    <h2>人評說 RAG 更真實也更具體，生成也更多樣</h2>
+    <p class="lede">Jeopardy 的成對人評：RAG 更真實 42.7%、BART 更真實只有 7.1%；MS-MARCO 比 BART 多 2.6 BLEU；FEVER 三分類離用了檢索監督的複雜管線只差 4.3 個百分點。</p>
+    
+  </div>
+  <div class="cardband" id="card-08"><div class="cardlabel"><span class="n">圖卡 08 / 10</span><span class="t">人評：更真實也更具體</span><button type="button" class="zoom" data-card="08">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">人評：RAG 比 BART 更真實，也更具體</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">Jeopardy 問題生成，452 對 BART 與 RAG-Token 的生成；評審看答案與兩個問句，選一個較好、都好或都不好。表 4，兩列各 100%</div>
+
+  <div style="position:absolute; left:60px; top:140px; display:flex; gap:22px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF6F0; border:1px solid #B4D5C0;"></div>RAG 較好</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FCF1EA; border:1px solid #E6B49A;"></div>BART 較好</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#F3F9F5; border:1px solid #B4D5C0;"></div>都好</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1;"></div>都不好</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#F7F8FA; border:1px solid #D5DAE1;"></div>沒有多數</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:222px; font-size:16px; font-weight:700; color:#1C2431;">真實性</div>
+  <div style="position:absolute; left:180px; top:206px; width:564px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">RAG 較真實 42.7%</div>
+  <div style="position:absolute; left:744px; top:206px; width:94px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#C8501F;">7.1%</div>
+  <div style="position:absolute; left:838px; top:206px; width:154px; height:56px; box-sizing:border-box; background-color:#F3F9F5; border:1px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#2E7B4F;">都好 11.7%</div>
+  <div style="position:absolute; left:992px; top:206px; width:234px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#4B5866;">都不好 17.7%</div>
+  <div style="position:absolute; left:1226px; top:206px; width:274px; height:56px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#8A93A0;">沒有多數 20.8%</div>
+  <div style="position:absolute; left:180px; top:286px; font-size:13px; color:#8A93A0;">評審認為 BART 較真實的只有 7.1%，RAG 較真實 42.7%；另有 11.7% 兩者都真實。真實性＝陳述能被可信的外部來源證實。</div>
+
+  <div style="position:absolute; left:60px; top:362px; font-size:16px; font-weight:700; color:#1C2431;">具體性</div>
+  <div style="position:absolute; left:180px; top:346px; width:494px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">RAG 較具體 37.4%</div>
+  <div style="position:absolute; left:674px; top:346px; width:222px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#C8501F;">BART 較具體 16.8%</div>
+  <div style="position:absolute; left:896px; top:346px; width:156px; height:56px; box-sizing:border-box; background-color:#F3F9F5; border:1px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#2E7B4F;">都好 11.8%</div>
+  <div style="position:absolute; left:1052px; top:346px; width:91px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#4B5866;">6.9%</div>
+  <div style="position:absolute; left:1143px; top:346px; width:265px; height:56px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#8A93A0;">沒有多數 20.1%</div>
+  <div style="position:absolute; left:1408px; top:346px; width:92px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1px dashed #D5DAE1; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:12px; color:#8A93A0;">未列</div>
+  <div style="position:absolute; left:180px; top:426px; font-size:13px; color:#8A93A0;">具體性＝輸入與輸出的互相依賴程度高。表 4 的五格加起來是 93.0%，其餘 7.0% 原文沒有說明，這裡留白。</div>
+
+  <div style="position:absolute; left:60px; top:470px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">怎麼評</div>
+    <div style="font-size:15px; color:#2B3340;">成對比較，A、B 的位置隨機；評審可以上網查證，題目裡混入金標句檢查評審的品質，兩位不合格的評審被移除。Q-BLEU-1 也是 RAG-Token 最高：22.2 對 BART 19.7。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:560px; width:470px; height:250px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">MS-MARCO：比 BART 多 2.6 分</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">BLEU-1 與 Rouge-L 各多 2.6。開放設定下 RAG-Sequence 接近看得到金標段落的最佳模型；質性上更少幻覺。問「define middle ear」，BART 答成介於中耳和鼻子之間。</div>
+    <div style="font-size:13px; color:#8A93A0;">RAG-Token 答「鼓膜內側的部分」。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:560px; width:470px; height:250px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">FEVER：離最佳管線 4.3% 以內</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">三分類的對手用了檢索監督的複雜管線，兩分類的對手拿到金標證據句；RAG 只拿主張、自己找證據。第一份找回的文件 71% 來自金標文章，前十份 90%。</div>
+    <div style="font-size:13px; color:#8A93A0;">三分類 72.5、兩分類 89.5。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:560px; width:470px; height:250px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">多樣性：不靠解碼技巧</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">不重複三元組的比例：Jeopardy 上 BART 32.4%、RAG-Token 46.8%、RAG-Sequence 53.8%（金標 90.0%）；MS-MARCO 上 70.7%、77.8%、83.5%。</div>
+    <div style="font-size:13px; color:#8A93A0;">沒有用任何鼓勵多樣性的解碼。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：分段條照表 4 的百分比畫；MS-MARCO、FEVER、多樣性的數字來自表 2、第 4.4 節、表 5。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p><strong>抽象式問答。</strong>開放的 MS-MARCO 上，RAG-Sequence 比 BART 多 2.6 個 BLEU-1 和 2.6 個 Rouge-L，接近當時的最佳模型；作者說這很不容易，因為那些模型看得到含有參考答案所需資訊的金標段落，很多題沒有金標段落根本答不出來，也不是每題都能靠維基百科回答。質性上，RAG 比 BART 少幻覺、更常生成事實正確的文字。表 3 的例子：問「define middle ear」，BART 答「中耳是介於中耳和鼻子之間的部分」（錯），RAG-Token 答「中耳是耳朵在鼓膜內側的部分」，RAG-Sequence 答「中耳包含鼓室和三塊聽小骨」。</p>
+    <p><strong>Jeopardy 問題生成。</strong>Q-BLEU-1 上 RAG-Token 22.2、RAG-Sequence 21.4、BART 19.7。452 對生成的人評：真實性上評審認為 BART 較好的只有 7.1%，RAG 較好的 42.7%，另外 11.7% 兩者都真實；具體性上 RAG 較好 37.4%，BART 較好 16.8%。表 3 的例子：答案「Washington」，BART 生成「這個州有全美最多的郡」（錯），RAG-Token 生成「唯一以美國總統命名的州」，RAG-Sequence 生成「Mount Rainier 國家公園所在的州」。</p>
+
+    <div class="story">
+      <div class="label">關鍵觀念 · 二</div>
+      <h4>圖 2：非參數記憶負責引路，參數記憶負責補完</h4>
+      <p>Jeopardy 問題常含兩個獨立的資訊，RAG-Token 可能因此最好，因為它能把好幾份文件的內容組進同一個回應。作者用輸入「Hemingway」看 RAG-Token 對五份文件的後驗：生成「Sun」的時候，提到《The Sun Also Rises》的第二份文件後驗很高；生成「A Farewell to Arms」時換成第一份文件主導。有趣的是每本書名的第一個 token 生成之後，文件的後驗就變平了，表示生成器不靠特定文件也能把書名接完，也就是參數知識本身就夠。</p>
+      <p>作者用 BART 驗證這個假設：只給 BART 半句「"The Sun」，它自己接成「"The Sun Also Rises" is a novel by this author of "The Sun Also Rises"」；再給到「"A」，它接成「A Farewell to Arms」。書名存在 BART 的參數裡，非參數的部分是把它引出來的那個提示。這就是兩種記憶怎麼合作。</p>
+    </div>
+
+    <p><strong>事實查核。</strong>FEVER 三分類的成績離最佳模型 4.3% 以內，而那些是用中間檢索監督訓練的複雜管線；兩分類上，對手是拿到金標證據句的 RoBERTa，RAG 只拿到主張、自己找證據，差距在 2.7% 以內。作者也查了 RAG 找回的文件和 FEVER 標註的金標證據重疊多少：第一份找回的文件來自金標文章的比例 71%，前十份裡有金標文章的比例 90%。</p>
+    <p><strong>多樣性。</strong>算生成裡不重複的三元組佔總三元組的比例：MS-MARCO 上金標 89.6%、BART 70.7%、RAG-Token 77.8%、RAG-Sequence 83.5%；Jeopardy 上金標 90.0%、BART 32.4%、RAG-Token 46.8%、RAG-Sequence 53.8%。RAG-Sequence 比 RAG-Token 多樣，兩者都遠比 BART 多樣，而且不需要任何鼓勵多樣性的解碼技巧。</p>
+  </div>
+</section>
+
+
+<section id="ablations" data-toc="消融與換索引">
+  <div class="container head">
+    <p class="chapter">Chapter 08 · Ablations and index hot-swapping</p>
+    <h2>學到的檢索是關鍵，而索引可以整個換掉</h2>
+    <p class="lede">凍結檢索器或換成 BM25，除了 FEVER 以外都掉分；把 2018 年的索引換成 2016 年的，模型回答的世界領袖也跟著換，不用重新訓練。</p>
+    
+  </div>
+  <div class="cardband" id="card-09"><div class="cardlabel"><span class="n">圖卡 09 / 10</span><span class="t">學到的檢索是關鍵，索引可以整個換</span><button type="button" class="zoom" data-card="09">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">學到的檢索是關鍵，而索引可以整個換掉</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">作者對自己的主張做了四個檢查：凍結檢索器、換成 BM25、換一份不同年份的索引、測試時多取文件；表 6 與第 4.5 節</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:410px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:18px; font-weight:700; color:#FFFFFF;">論文的主張</div>
+  <div style="position:absolute; left:60px; top:198px; width:410px; height:280px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:20px 24px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:17px; font-weight:700; color:#1C2431; line-height:1.5;">「RAG 的表現來自學到的檢索，而非參數記憶是可以換的」</div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">檢索器跟任務一起微調，沒有檢索監督</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">索引是原始文字，可以整份換掉</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">測試時取幾份文件可以另外調</div></div>
+    <div style="margin-top:6px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">p(y|x) ≈ Σ_z p(z|x) · p(y|x,z)</div>
+    <div style="margin-top:2px; font-size:13px; color:#8A93A0;">↑ 每一條都要用實驗證明</div>
+  </div>
+
+  <div style="position:absolute; left:580px; top:120px; font-size:20px; font-weight:700; color:#1C2431;">四道檢查（開發集）</div>
+  <div style="position:absolute; left:580px; top:158px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">1</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">凍結檢索器：所有任務都掉分</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">FROZEN</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">NQ 43.5 → 37.8（Token）、44.0 → 41.2（Sequence）；TriviaQA 54.8 → 50.1；學到的檢索在每個任務都有幫助　✓ 成立</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:250px; width:960px; height:80px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#C8501F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">2</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">換成 BM25：除了 FEVER 都掉</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">BM25</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">NQ 掉到 29.7／31.8，開放領域問答差最多；FEVER 上 BM25 反而 75.1 最好，主張以實體為中心適合字面重疊　△ 有例外</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:342px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">3</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">換索引：知識跟著換</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">HOT-SWAP</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">2016 年索引答 2016 年的世界領袖 70%，2018 年索引答 2018 年的 68%；錯配只有 12% 與 4%。82 位領袖，模板 Who is {position}?　✓ 成立</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:434px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">4</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">多取文件：Sequence 單調上升，Token 在 10 份最好</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">MORE DOCS</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">訓練用 5 或 10 份沒差；測試時 RAG-Sequence 取越多越好；MS-MARCO 上多取讓 Rouge-L 升、BLEU-1 降　✓ 成立</div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:545px; width:480px; height:130px; box-sizing:border-box; background-color:#1F2A3A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#FFFFFF;">判定：檢索是學到的，記憶是可編輯的</div>
+    <div style="font-size:14px; color:rgba(255,255,255,0.78); line-height:1.6;">凍結或換成字面檢索都掉分，證明檢索是學到的；換索引就換知識，證明記憶不在權重裡。</div>
+  </div>
+  <div style="position:absolute; left:580px; top:545px; width:960px; height:130px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">為什麼 FEVER 是例外</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">FEVER 的主張以實體為中心，很適合靠字面重疊找到證據，作者的解釋止於此。對今天做 RAG 的人這是一條提醒：哪種檢索好要看任務，混合搜尋不是多餘的。純參數的 T5 或 BART 要更新知識得再訓練，RAG 換索引就好。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:695px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:716px; font-size:20px; font-weight:700; color:#1C2431;">附錄裡的三個補充</div>
+  <div style="position:absolute; left:60px; top:752px; font-size:16px; color:#2B3340;">① 空文件機制（找不到有用資訊時）試了三種做法都沒有改善，拿掉了。</div>
+  <div style="position:absolute; left:60px; top:784px; font-size:16px; color:#2B3340;">② 故事生成時檢索會塌縮：不管輸入都找同一批文件，生成器學會忽略它們，RAG 退化成 BART。</div>
+  <div style="position:absolute; left:60px; top:816px; font-size:16px; color:#2B3340;">③ 可訓練參數 6.26 億；參數量最接近的 T5-large（7.7 億）在 NQ 只有 28.9，RAG-Sequence 44.5。</div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：四道檢查的數字來自表 6（開發集）與第 4.5 節；「判定」的措辭是整理者的，原文分散在四段。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c09" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M482 336L558 336" stroke="#9AA3AE" stroke-width="2" marker-end="url(#ag-c09)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p><strong>學到的檢索有沒有用。</strong>RAG 的一個特點是學會為任務檢索相關資訊。作者訓練時把檢索器凍結來對照，表 6 顯示學到的檢索在所有任務上都更好。再把稠密檢索器換成靠字面重疊的 BM25，用 BM25 的分數當文件機率的 logit：FEVER 上 BM25 反而最好，作者的解釋是 FEVER 的主張以實體為中心，很適合字面重疊的檢索；其他任務上可微分的檢索都更好，開放領域問答上差距最大。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>開發集（表 6 節錄）</th><th>NQ（Token／Sequence）</th><th>TriviaQA</th><th>FEVER 三分類</th></tr></thead>
+        <tbody>
+          <tr><td>檢索器換成 BM25</td><td>29.7／31.8</td><td>41.5／44.1</td><td>75.1</td></tr>
+          <tr><td>檢索器凍結</td><td>37.8／41.2</td><td>50.1／52.1</td><td>72.9</td></tr>
+          <tr><td>完整的 RAG</td><td>43.5／44.0</td><td>54.8／55.8</td><td>74.5</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p><strong>換索引。</strong>非參數記憶的好處是知識可以在測試時直接更新；T5 或 BART 這類純參數模型要再訓練才能跟上世界的變化。作者用 DrQA 的 2016 年 12 月維基百科建了另一個索引，和主實驗的 2018 年索引對照，準備了 82 位在這兩年間換人的世界領袖，用「Who is {position}?」的模板去問 NQ 的 RAG 模型。2016 年索引答 2016 年的領袖對 70%，2018 年索引答 2018 年的對 68%；索引和年份錯配時很低，2018 年索引答 2016 年的領袖只有 12%，2016 年索引答 2018 年的只有 4%。換掉非參數記憶，世界知識就換了。</p>
+    <p><strong>多取幾份文件。</strong>訓練時取 5 或 10 份，表現沒有顯著差異；測試時可以另外調，影響表現和執行時間。開放領域問答上，RAG-Sequence 取越多文件越好，單調上升；RAG-Token 在 10 份時最好。MS-MARCO 上多取文件讓 RAG-Token 的 Rouge-L 上升、BLEU-1 下降，RAG-Sequence 的變化沒那麼明顯。</p>
+
+    <div class="thought">
+      <span class="label">思考題 · 02</span>
+      <h4>你的系統裡，哪些知識應該放在可以換掉的索引裡？</h4>
+      <p>82 位世界領袖的實驗是「會變的事實」；書名那種穩定的知識，圖 2 顯示參數記憶自己就會。</p>
+      <p class="hint">會變的、要有出處的、要能刪的，放索引；穩定的通用知識留給模型。這是這篇給今天 RAG 設計最直接的一條。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="position" data-toc="定位與限制">
+  <div class="container head">
+    <p class="chapter">Chapter 09 · Related work, discussion and limits</p>
+    <h2>把檢索做成一個通用的可微分模組，代價是它有時會塌掉</h2>
+    <p class="lede">相關工作裡的位置：單任務的檢索成果被統一到一個架構；記憶是原始文字，人讀得懂也改得動。附錄裡有兩個誠實的限制：檢索塌縮，以及參數量該怎麼比。</p>
+    
+  </div>
+  <div class="cardband" id="card-10"><div class="cardlabel"><span class="n">圖卡 10 / 10</span><span class="t">記憶放外面的三條原則</span><button type="button" class="zoom" data-card="10">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">記憶放外面的三條原則，和從這篇到今天的對照</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">三條原則來自全文；下方的對照是整理者把 2020 年訓練出來的 RAG 對到今天推論時的 RAG，原文沒有這份清單</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:320px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#C8501F;">原則 01</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.35;">會變的知識放索引，<br>穩定的留給權重</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">換掉 2018 年的索引，世界領袖就換人；圖 2 裡書名的後半段是參數記憶自己接完的。哪些知識該外放，看它會不會變、要不要出處。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">會變的、要出處的、要能刪的，放外面。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:320px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#2E7B4F;">原則 02</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.35;">生成勝過抽取，<br>但檢索品質決定上限</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">線索文件也有用、答案不在文件裡也能答對 11.8%；可是凍結檢索器或換成 BM25 就掉分，開放領域問答差最多，FEVER 是例外。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">哪種檢索好要看任務。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:320px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#1F2A3A;">原則 03</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.35;">記憶是原始文字：<br>人讀得懂、也改得動</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">找回的段落能被檢視，索引能被編輯；這是可解釋與可更新的來源，也是幻覺變少的原因。代價是檢索有時會塌縮。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">附錄 H 的症狀：不管問什麼都找同一批。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:530px; font-size:20px; font-weight:700; color:#1C2431;">從這篇到今天的 RAG（整理者的對照）</div>
+
+  <div style="position:absolute; left:60px; top:570px; width:470px; height:88px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">1　2020：訓練出來的 RAG</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">查詢編碼器與生成器一起微調；文件是隱變數，對它邊緣化；哪份文件負責哪個 token 看得到</div></div>
+  <div style="position:absolute; left:577px; top:570px; width:470px; height:88px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">2　今天：推論時的 RAG</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">不訓練，把找回的幾段塞進聊天模型的 prompt；沒有邊緣化，也沒有文件機率</div></div>
+  <div style="position:absolute; left:1094px; top:570px; width:470px; height:88px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">3　檢索那一格的後續發展</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">embedding、切塊、混合搜尋、cross-encoder、late interaction：課程第 2 週那一講的內容</div></div>
+
+  <div style="position:absolute; left:60px; top:690px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">能搬什麼</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">能搬的：知識外放能檢視、能更新、少幻覺；生成勝過抽取；檢索品質看任務；索引可以整個換。不能直接搬的：文件後驗、邊緣化、跟任務一起學的查詢編碼器，這些都要訓練這個模型。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三條原則是整理者從全文歸納的；下方的對照是整理者把這篇連到課程第 2 週的講題，原文沒有。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M536 606L548 614L536 622Z" fill="#9AA3AE"></path>
+    <path d="M1053 606L1065 614L1053 622Z" fill="#9AA3AE"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>相關工作一節把這篇放在四條線的交會處。先前的工作已經證明檢索對很多單一任務有幫助：開放領域問答、事實查核、事實補全、長篇問答、維基百科文章生成、對話、翻譯、語言建模；這篇把這些成果統一成一個架構。通用架構那一線（GLUE 上的微調、GPT-2、BART、T5）沒有用檢索，這篇用一個學到的檢索模組把通用架構能做的任務範圍再擴大。學習檢索那一線用搜尋、強化學習或隱變數來為特定下游任務最佳化檢索模組，這篇用隱變數，但一個架構跨多個任務。記憶架構那一線把索引看成神經網路可以注意的大型外部記憶；這篇的記憶是原始文字而不是分布式表示，所以人讀得懂、也寫得動。</p>
+
+    <div class="quote-en">
+      "human-readable, lending a form of interpretability to our model"
+      <span class="zh">「人讀得懂，給了模型某種可解釋性」：第 5 節談記憶由原始文字構成的好處，另一半是「人寫得動」，可以直接編輯索引來更新記憶。</span>
+    </div>
+
+    <p>討論一節的未來方向只有一個：兩個元件能不能從零開始一起預訓練，用 BART 那種去噪目標或別的目標。廣泛影響一節說接地在真實知識上讓模型少幻覺、更可控、更可解釋，例如接一個醫學索引來回答問題；壞處是維基百科或任何外部知識源都不會完全正確、沒有偏見，而且 RAG 可以當語言模型用，GPT-2 那些濫用的疑慮同樣適用，只是程度較輕。</p>
+    <p>附錄裡有兩個值得記的限制。第一是檢索塌縮：初步實驗做故事生成時，檢索器學會不管輸入是什麼都找同一批文件，生成器接著學會忽略文件，RAG 就退化成 BART；可能的原因是任務對事實知識的要求不明確，或目標序列太長讓檢索器拿到的梯度沒有資訊。第二是參數量：RAG 的可訓練參數是 6.26 億（兩個 BERT-base 各 1.1 億，文件編碼器不訓練，加 BART-large 4.06 億），閉卷最強的 T5-11B 有 110 億；參數量最接近的 T5-large 有 7.7 億，NQ 只有 28.9，遠低於 RAG-Sequence 的 44.5，所以混合記憶用少得多的可訓練參數就能有強的開放領域問答表現。作者也試過「空文件」機制來處理找不到有用資訊的情況，三種做法都沒有改善，就拿掉了。</p>
+
+    <div class="explain stone">
+      <span class="label">整理者的對照</span>
+      <h4>這篇的哪些結論能搬到今天的推論時 RAG</h4>
+      <p>能搬的：知識放外面就能檢視、能更新、少幻覺；生成比抽取靈活，線索文件也有用；檢索品質決定表現，而且哪種檢索好要看任務（FEVER 上 BM25 贏）；索引可以整個換。不能直接搬的：查詢編碼器跟任務一起微調、對文件的機率邊緣化、圖 2 那種「哪份文件負責哪個 token」的後驗，這些都需要訓練這個模型。課程第 2 週講的 embedding、切塊、混合搜尋、cross-encoder 與 late interaction，是在「檢索那一格」上的後續發展。這一段是整理者的連結，論文沒有。</p>
+    </div>
+
+    <div class="thought">
+      <span class="label">思考題 · 03</span>
+      <h4>如果你的檢索器也「塌縮」了，你會怎麼發現？</h4>
+      <p>附錄 H 的症狀：不管問什麼都找回同一批文件，生成器學會不看它們。</p>
+      <p class="hint">記錄每次找回的文件 id 的分布；分布集中就是警訊。推論時的 RAG 不會訓練塌縮，但會有等價的問題：檢索器回傳的東西模型根本沒用到。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="glossary" class="nocard glossary" data-toc="名詞速查">
+  <div class="wide">
+    <p class="eyebrow">Reference · 名詞速查</p>
+    <h2>關鍵名詞與它們在論文裡的位置</h2>
+    <p class="lede">先列兩種記憶與模型元件，再列兩種模型與解碼，最後是實驗用的資料集與指標。</p>
+    <dl class="glossary-grid">
+      <div class="term"><dt>parametric memory</dt><span class="zh-name">參數記憶</span><dd>存在權重裡的知識；這篇指 BART 生成器的參數。</dd></div>
+      <div class="term"><dt>non-parametric memory</dt><span class="zh-name">非參數記憶</span><dd>模型外面、用檢索存取的知識；這篇是 2,100 萬段維基百科的稠密向量索引。</dd></div>
+      <div class="term"><dt>DPR</dt><span class="zh-name">稠密段落檢索器</span><dd>Karpukhin 等人的雙編碼器：查詢與文件各用一個 BERT 編碼，用內積打分；RAG 用它初始化檢索器並建索引。</dd></div>
+      <div class="term"><dt>bi-encoder</dt><span class="zh-name">雙編碼器</span><dd>查詢與文件分開編碼成向量再比較，所以文件向量可以事先算好建索引。</dd></div>
+      <div class="term"><dt>MIPS</dt><span class="zh-name">最大內積搜尋</span><dd>在幾千萬個向量裡找內積最大的前 K 個；用 FAISS 加 HNSW 做近似，次線性時間。</dd></div>
+      <div class="term"><dt>FAISS</dt><span class="zh-name">向量索引函式庫</span><dd>Facebook 的相似度搜尋工具；這篇的索引放 CPU 記憶體，約 100 GB，壓縮後 36 GB。</dd></div>
+      <div class="term"><dt>BART</dt><span class="zh-name">去噪預訓練的 seq2seq</span><dd>4 億參數的編碼器加解碼器；這篇的生成器，也是生成任務的基線對手。</dd></div>
+      <div class="term"><dt>latent variable</dt><span class="zh-name">隱變數</span><dd>被找回的文件在模型裡的身分：沒有人標它，訓練時用機率把它邊緣化掉。</dd></div>
+      <div class="term"><dt>marginalize</dt><span class="zh-name">邊緣化</span><dd>對所有可能的文件把「文件機率 × 生成機率」加總，得到只看輸入與輸出的機率；這篇只在前 K 份上做。</dd></div>
+      <div class="term"><dt>RAG-Sequence</dt><span class="zh-name">整句共用一份文件</span><dd>對 K 份文件各算整句機率再加權相加；解碼要對每份文件各跑 beam search。</dd></div>
+      <div class="term"><dt>RAG-Token</dt><span class="zh-name">每個 token 可換文件</span><dd>每一步先在 K 份文件上混合下一個 token 的分布；可以用標準 beam search 解碼。</dd></div>
+      <div class="term"><dt>Thorough / Fast Decoding</dt><span class="zh-name">完整／快速解碼</span><dd>RAG-Sequence 的兩種解碼：完整版對缺席的文件補跑前向傳播算邊緣機率；快速版假設那些機率為零。</dd></div>
+      <div class="term"><dt>exact match</dt><span class="zh-name">完全比對</span><dd>開放領域問答的指標：生成的答案和標準答案完全一樣才算對。</dd></div>
+      <div class="term"><dt>closed-book QA</dt><span class="zh-name">閉卷問答</span><dd>不檢索、純靠參數知識生成答案；表 1 的 T5-11B 就是。</dd></div>
+      <div class="term"><dt>Q-BLEU-1</dt><span class="zh-name">問題生成指標</span><dd>BLEU 的變體，對實體的比對加權更高，和人對問題生成的判斷更相關。</dd></div>
+      <div class="term"><dt>FEVER</dt><span class="zh-name">事實查核資料集</span><dd>判斷主張被維基百科支持、反駁或資訊不足；RAG 不用證據監督，三分類離最佳管線 4.3% 內。</dd></div>
+      <div class="term"><dt>BM25</dt><span class="zh-name">字面重疊檢索</span><dd>傳統的詞頻式檢索；消融裡它在 FEVER 上最好，其他任務輸給學到的稠密檢索。</dd></div>
+      <div class="term"><dt>index hot-swapping</dt><span class="zh-name">熱換索引</span><dd>測試時直接換另一份維基百科索引，模型的世界知識跟著換；82 位世界領袖的實驗。</dd></div>
+      <div class="term"><dt>retrieval collapse</dt><span class="zh-name">檢索塌縮</span><dd>附錄 H：檢索器學會不管輸入都找同一批文件，生成器學會忽略它們，RAG 退化成 BART。</dd></div>
+      <div class="term"><dt>REALM / ORQA</dt><span class="zh-name">先前的混合記憶模型</span><dd>把遮罩語言模型和可微分檢索器接在一起，只做過抽取式問答；REALM 需要特殊的預訓練。</dd></div>
+    </dl>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>資料來源：arXiv，〈Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks〉，Patrick Lewis 等 12 位作者（Facebook AI Research、University College London、New York University），2020-05-22，NeurIPS 2020。<br><a href="https://arxiv.org/abs/2005.11401">arxiv.org/abs/2005.11401</a></p>
+    <p class="credit">整理於 2026-09-23</p>
+    <p class="disclaimer">本頁為學習用的重述與整理，不是原文逐句翻譯。觀點與著作權屬於原作者。程式片段為教學用精簡版，實際用法請以原文與官方文件為準。</p>
+  </div>
+</footer>
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="圖卡大圖"><button type="button" class="close">關閉（Esc）</button><div class="frame"></div></div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fitFrames() {
+    var frames = document.querySelectorAll('.cardband .frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  var KEY = 'rearranged-article-mode';
+  function setMode(m, save) {
+    document.body.classList.toggle('mode-cards', m === 'cards');
+    var btns = document.querySelectorAll('.modebar button[data-mode]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-mode') === m ? 'true' : 'false');
+    }
+    if (save) { try { localStorage.setItem(KEY, m); } catch (e) {} }
+    fitFrames();
+  }
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  setMode(saved === 'cards' ? 'cards' : 'full', false);
+
+  var box = document.getElementById('lightbox');
+  var boxFrame = box.querySelector('.frame');
+  function fitLightbox() {
+    if (!box.classList.contains('open')) return;
+    var root = boxFrame.firstElementChild;
+    if (!root) return;
+    var s = Math.min(1, (window.innerWidth - 48) / W, (window.innerHeight - 48) / H);
+    root.style.transform = 'scale(' + s + ')';
+    boxFrame.style.width = Math.round(W * s) + 'px';
+    boxFrame.style.height = Math.round(H * s) + 'px';
+  }
+  function openLightbox(num) {
+    var bandEl = document.getElementById('card-' + num);
+    if (!bandEl) return;
+    var root = bandEl.querySelector('.frame > div');
+    boxFrame.innerHTML = '';
+    var clone = root.cloneNode(true);
+    clone.style.transform = '';
+    boxFrame.appendChild(clone);
+    box.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    fitLightbox();
+  }
+  function closeLightbox() {
+    box.classList.remove('open');
+    boxFrame.innerHTML = '';
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var b = t.closest('.modebar button[data-mode]');
+    if (b) { setMode(b.getAttribute('data-mode'), true); return; }
+    var z = t.closest('.cardlabel .zoom');
+    if (z) { openLightbox(z.getAttribute('data-card')); return; }
+    if (t.closest('.lightbox') && !t.closest('.lightbox .frame')) { closeLightbox(); }
+  });
+  document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') closeLightbox(); });
+  window.addEventListener('resize', function () { fitFrames(); fitLightbox(); });
+  window.addEventListener('load', fitFrames);
+  fitFrames();
+})();
+</script>
+</body>
+</html>
