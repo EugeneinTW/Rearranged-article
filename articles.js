@@ -15,12 +15,18 @@ window.ARTICLES = {
         "agents",
         "workflows",
         "tool-design",
-        "anthropic"
+        "anthropic",
+        "cs329z"
       ],
       "formats": [
         "圖卡＋教材整合版"
       ],
-      "course": null,
+      "course": {
+        "name": "CS 329Z",
+        "week": 2,
+        "kind": "必讀",
+        "url": "https://cs329z.stanford.edu/"
+      },
       "extras": [
         {
           "label": "圖解卡連續閱讀版",
