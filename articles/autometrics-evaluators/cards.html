@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutoMetrics（Ryan et al. 2025） · 圖解卡</title>
+<meta name="description" content="Stanford 與 American Express 團隊的 AutoMetrics，把少量而且說不出原因的人評（讚與倒讚、分數、接受或拒絕）變成一組看得懂的自動評估指標：LLM 依好壞例子寫出候選評審，再從 48 個現成指標組成的 MetricBank 檢索，最後用偏最小平方回歸挑出幾個指標、配上權重。在五個任務上，它和人評的 Kendall 相關多數高於 LLM 評審等基線，約 80 筆人評就持平，拿來最佳化 τ-bench 的客服 agent 也追得上可驗證獎勵。這份整理逐章重述方法、實驗與限制，並對照表格核對論文的說法，每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="llm-evaluation, llm-as-a-judge, evaluation-metrics, metric-learning, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2512.17267">
+<meta name="date" content="2026-09-24">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+:root { color-scheme: light; --bg: #F4F5F7; --line: #E5E9EE; --ink: #1C2431; --mute: #8A93A0; --orange: #C8501F; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: #C8501F; } a:hover { color: #9E3E16; }
+a:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.wrap { max-width: 1600px; margin: 0 auto; padding-block: 24px 48px; padding-inline: 16px; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; padding: 6px 4px 18px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; letter-spacing: 0.12em; color: var(--mute); }
+.head nav { display: flex; flex-wrap: wrap; gap: 6px 14px; letter-spacing: 0.04em; }
+.head nav a { color: var(--mute); text-decoration: none; font-weight: 600; }
+.head nav a:hover { color: var(--orange); }
+.page { margin-bottom: 36px; scroll-margin-top: 16px; }
+.label { display: flex; align-items: baseline; gap: 14px; padding: 0 4px 8px; font-size: 13px; color: var(--mute); }
+.label .n { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-weight: 600; font-size: 12px; letter-spacing: 0.1em; color: var(--orange); }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--line); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; }
+.foot { padding: 12px 4px 0; font-size: 12px; color: var(--mute); line-height: 1.7; }
+@media print {
+  @page { size: 1600px 900px; margin: 0; }
+  body { background: #FFFFFF; }
+  .wrap { max-width: none; padding: 0; }
+  .head, .label, .foot { display: none; }
+  .page { margin: 0; page-break-after: always; }
+  .frame { border: none; border-radius: 0; height: auto !important; }
+  .frame > div { transform: none !important; }
+}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><span>AutoMetrics（Ryan et al. 2025） · 圖解卡 · 12 張 · 連續閱讀版</span><nav class="site" aria-label="導覽"><a href="../../">首頁</a><a href="index.html">圖卡＋教材版</a></nav><nav aria-label="跳頁"><a href="#p01" title="封面">01</a><a href="#p02" title="只有讚與倒讚時，缺的是標準">02</a><a href="#p03" title="四個步驟：先放大候選，再收斂">03</a><a href="#p04" title="從好壞例子找出評分的軸">04</a><a href="#p05" title="指標卡讓檢索找得到">05</a><a href="#p06" title="回歸替指標配權重">06</a><a href="#p07" title="表 2：十格裡九格拿到粗體">07</a><a href="#p08" title="敏感度與穩定度">08</a><a href="#p09" title="預設設定對表 3 查一次">09</a><a href="#p10" title="少於 80 筆只用生成的">10</a><a href="#p11" title="τ-bench：換掉最佳化的訊號">11</a><a href="#p12" title="結論與限制">12</a></nav></div>
+<section class="page" id="p01">
+  <div class="label"><span class="n">01 / 12</span><span>封面</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;"><span style="letter-spacing:0.14em">AUTOMETRICS</span> &#183; 圖解卡 &#183; 16:9 &#183; 12 張</div>
+  <div style="position:absolute; left:60px; top:110px; width:820px; font-size:60px; font-weight:700; color:#1C2431; line-height:1.3; letter-spacing:0.01em;">不到一百筆人評，<br>長出一組對齊人的指標。</div>
+  <div style="position:absolute; left:60px; top:296px; width:820px; font-size:20px; color:#6B7380; line-height:1.7;">整理自 arXiv 論文〈AutoMetrics〉（2025-12-19 v1，Michael J. Ryan 等六位作者，<br>Stanford 與 American Express）。十二頁講一件事：LLM 依好壞例子寫出評審，<br>從 MetricBank 檢索現成指標，再用回歸配出權重。</div>
+  <div style="position:absolute; left:60px; top:432px; display:flex; align-items:center; gap:36px;">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#C8501F;"></div>
+      <div style="font-size:15px; color:#2B3340;">卡住的地方</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#2E7B4F;"></div>
+      <div style="font-size:15px; color:#2B3340;">做法／通過</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#1F2A3A;"></div>
+      <div style="font-size:15px; color:#2B3340;">主體／終點</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div>
+      <div style="font-size:15px; color:#2B3340;">中性節點</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; top:482px; width:820px; font-size:13px; color:#8A93A0; line-height:1.6;">整組共用同一套語意色：橘是只有讚與倒讚時卡住的地方、以及要小心的結果，<br>綠是 AutoMetrics 的做法與通過的檢查，深藍是產出的指標與終點。</div>
+  <div style="position:absolute; left:960px; top:100px; width:580px; box-sizing:border-box; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 34px; display:flex; flex-direction:column;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">本組 &#183; 12 頁</div>
+    <div style="margin-top:10px; display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">01</div><div style="font-size:17px; color:#1C2431;">封面</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">02</div><div style="font-size:17px; color:#1C2431;">只有讚與倒讚時，缺的是標準</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">03</div><div style="font-size:17px; color:#1C2431;">四個步驟：先放大候選，再收斂</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">04</div><div style="font-size:17px; color:#1C2431;">從好壞例子找出評分的軸</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">05</div><div style="font-size:17px; color:#1C2431;">指標卡讓檢索找得到</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">06</div><div style="font-size:17px; color:#1C2431;">回歸替指標配權重</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">07</div><div style="font-size:17px; color:#1C2431;">表 2：十格裡九格拿到粗體</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">08</div><div style="font-size:17px; color:#1C2431;">敏感度與穩定度</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">09</div><div style="font-size:17px; color:#1C2431;">預設設定對表 3 查一次</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">10</div><div style="font-size:17px; color:#1C2431;">少於 80 筆只用生成的</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">11</div><div style="font-size:17px; color:#1C2431;">τ-bench：換掉最佳化的訊號</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#2E7B4F;">12</div><div style="font-size:17px; color:#1C2431;">結論與限制</div></div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">來源：arxiv.org/abs/2512.17267 —— 本組為學習用重述，數字依 arXiv v1；會議名 ICLR 2026 依課程書單標注。</div>
+</div></div>
+</section>
+<section class="page" id="p02">
+  <div class="label"><span class="n">02 / 12</span><span>只有讚與倒讚時，缺的是標準</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">讚或倒讚說不出原因，指標要從資料裡長出來</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 1 的例子：EvalGen 的商品描述，人只按讚或倒讚。現成的路各有卡住的地方；AutoMetrics 從同一批回饋長出五個加權指標</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 現成的三條路</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 從回饋長出一組指標</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:430px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:160px; top:200px; width:500px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#1C2431;">人的回饋：讚／倒讚，沒寫原因</div>
+
+  <div style="position:absolute; left:70px; top:290px; width:210px; height:92px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:5px;"><div style="font-size:15px; font-weight:700; color:#C8501F;">請人一直評</div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">金標準，但貴、慢，<br>每個原型都要重來</div></div>
+  <div style="position:absolute; left:295px; top:290px; width:210px; height:92px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:5px;"><div style="font-size:15px; font-weight:700; color:#C8501F;">訓練 reward model</div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">通常要上千筆標籤</div></div>
+  <div style="position:absolute; left:520px; top:290px; width:210px; height:92px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:5px;"><div style="font-size:15px; font-weight:700; color:#C8501F;">寫 rubric 請 LLM 評</div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">要先知道該看什麼，<br>也不保證照 rubric 打</div></div>
+
+  <div style="position:absolute; left:120px; top:414px; width:580px; height:66px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">實驗裡的 LLM 評審基線：拿原本給標註者的說明</div><div style="font-size:12.5px; color:#6B7380;">EvalGen 的說明只有一句：「這個回應好（1）還是壞（0）？」（附錄 C.1）</div></div>
+  <div style="position:absolute; left:60px; top:504px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">作者說：rubric 式評審假設系統該有的行為已經定義清楚；<br>實務上多半只有讚與倒讚，難處在先找出真正重要的標準。</div>
+
+  <div style="position:absolute; left:940px; top:200px; width:500px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#1C2431;">同一批讚／倒讚＋任務說明</div>
+  <div style="position:absolute; left:940px; top:270px; width:500px; height:52px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">產生評審、檢索現成指標、回歸配權重</div>
+
+  <div style="position:absolute; left:880px; top:344px; width:640px; height:28px; box-sizing:border-box; border-bottom:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:880px; top:346px; font-size:14px; color:#1C2431; line-height:24px;">避開禁用內容（連結、空泛的詞、缺點）</div>
+  <div style="position:absolute; left:1200px; top:351px; width:200px; height:14px; border-radius:3px; background-color:#B4D5C0;"></div>
+  <div style="position:absolute; left:1414px; top:346px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#2E7B4F; line-height:24px;">26.3%</div>
+
+  <div style="position:absolute; left:880px; top:376px; width:640px; height:28px; box-sizing:border-box; border-bottom:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:880px; top:378px; font-size:14px; color:#1C2431; line-height:24px;">最佳化過的評審 prompt</div>
+  <div style="position:absolute; left:1200px; top:383px; width:179px; height:14px; border-radius:3px; background-color:#B4D5C0;"></div>
+  <div style="position:absolute; left:1414px; top:378px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#2E7B4F; line-height:24px;">23.6%</div>
+
+  <div style="position:absolute; left:880px; top:408px; width:640px; height:28px; box-sizing:border-box; border-bottom:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:880px; top:410px; font-size:14px; color:#1C2431; line-height:24px;">語氣與口吻（rubric）</div>
+  <div style="position:absolute; left:1200px; top:415px; width:151px; height:14px; border-radius:3px; background-color:#B4D5C0;"></div>
+  <div style="position:absolute; left:1414px; top:410px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#2E7B4F; line-height:24px;">19.9%</div>
+
+  <div style="position:absolute; left:880px; top:440px; width:640px; height:28px; box-sizing:border-box; border-bottom:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:880px; top:442px; font-size:14px; color:#1C2431; line-height:24px;">搜尋引擎最佳化</div>
+  <div style="position:absolute; left:1200px; top:447px; width:116px; height:14px; border-radius:3px; background-color:#B4D5C0;"></div>
+  <div style="position:absolute; left:1414px; top:442px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#2E7B4F; line-height:24px;">15.3%</div>
+
+  <div style="position:absolute; left:880px; top:472px; width:640px; height:28px; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:880px; top:474px; font-size:14px; color:#1C2431; line-height:24px;">附範例的評審</div>
+  <div style="position:absolute; left:1200px; top:479px; width:113px; height:14px; border-radius:3px; background-color:#B4D5C0;"></div>
+  <div style="position:absolute; left:1414px; top:474px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#2E7B4F; line-height:24px;">14.9%</div>
+
+  <div style="position:absolute; left:840px; top:514px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">百分比是圖 1 印的相對重要性，由回歸係數換算，五個加起來 100%；<br>每個指標都附一段說明，看得出它在量什麼。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#C8501F;">LLM 評審：0.161／0.272</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">表 2 的 EvalGen 欄（Kendall τ，<span style="white-space:nowrap">GPT-4o-mini</span>／<span style="white-space:nowrap">Qwen3-32B</span> 當骨幹）：<br>拿原本那一句說明直接打分。</div>
+    <div style="font-size:13px; color:#8A93A0;">5 次獨立執行的平均；τ 接近 0，代表排名和亂排差不多。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#2E7B4F;">AutoMetrics：0.334／0.382</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">同一欄、同樣兩個骨幹：從不到 100 筆人評長出的<br>一組加權指標，排名更接近人評。</div>
+    <div style="font-size:13px; color:#8A93A0;">摘要說比 LLM 評審最多高 33.4%；和表 2 怎麼對，見第 07 卡。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：✗／✓ 依第 1 節對現成做法的批評；圖 1 是其中一次產出的指標，表 2 是 5 次平均；指標的中文名是整理者譯的。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M410 248L175 288" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c02)"></path>
+    <path d="M410 248L400 288" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c02)"></path>
+    <path d="M410 248L625 288" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c02)"></path>
+    <path d="M625 382L625 412" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1190 248L1190 268" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1190 322L1190 342" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c02)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p03">
+  <div class="label"><span class="n">03 / 12</span><span>四個步驟：先放大候選，再收斂</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">四個步驟：先把候選放大，再收斂成幾個</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3 節與圖 2：從任務說明與不到 100 筆人評出發，產生新的評審、檢索現成指標，再用回歸挑出幾個配上權重，最後寫成報告</div>
+
+  <div style="position:absolute; left:60px; top:132px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;"><span style="letter-spacing:0.12em">AUTOMETRICS</span> &#183; 預設設定下，每一步留下幾個</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:310px; height:120px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">Step 1　產生</div>
+    <div style="margin-top:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#2E7B4F; line-height:1.2;">17</div>
+    <div style="margin-top:2px; font-size:12.5px; color:#6B7380; line-height:1.45;">個候選：10 單一標準、5 rubric、<br>1 附範例、1 MIPROv2</div>
+  </div>
+  <div style="position:absolute; left:60px; top:292px; width:310px; height:120px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">MetricBank　現成指標</div>
+    <div style="margin-top:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#1C2431; line-height:1.2;">48</div>
+    <div style="margin-top:2px; font-size:12.5px; color:#6B7380; line-height:1.45;">個自然語言生成常用的指標，<br>每個附一張指標卡</div>
+  </div>
+
+  <div style="position:absolute; left:450px; top:226px; width:310px; height:120px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">Step 2　檢索</div>
+    <div style="margin-top:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#1C2431; line-height:1.2;">k＝30</div>
+    <div style="margin-top:2px; font-size:12.5px; color:#6B7380; line-height:1.45;">ColBERT 先篩到 k′ 張卡，<br>LLM 再挑出最相關的 k 個</div>
+  </div>
+  <div style="position:absolute; left:840px; top:226px; width:310px; height:120px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">Step 3　回歸</div>
+    <div style="margin-top:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#1C2431; line-height:1.2;">n＝5</div>
+    <div style="margin-top:2px; font-size:12.5px; color:#6B7380; line-height:1.45;">PLS 依權重取前 n 個再擬合，<br>刪掉係數為負的生成指標</div>
+  </div>
+  <div style="position:absolute; left:1230px; top:226px; width:310px; height:120px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#FFFFFF;">Step 4　報告</div>
+    <div style="margin-top:4px; font-size:17px; font-weight:700; color:#FFFFFF; line-height:1.4;">權重、和人評的相關、<br>每個指標的說明</div>
+    <div style="margin-top:4px; font-size:12.5px; color:rgba(255,255,255,0.75);">相關不顯著（p &gt; 0.05）時加警告</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:436px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">每一步都比過</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">產生器的組合在附錄 E.2 比了八種，檢索法在附錄 E.1 比了七種，指標庫的組成與 k、n 在表 3；k′ 論文沒有給數字。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:514px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:532px; font-size:20px; font-weight:700; color:#1C2431;">三個步驟，各解一個問題</div>
+
+  <div style="position:absolute; left:60px; top:574px; width:470px; height:226px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">① 產生：補上新任務的空缺</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.65;">分布外的任務沒有專門的指標，<br>先讓 LLM 依好壞例子寫出評審；<br>涵蓋得廣，後面才有東西可篩。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">資料少於 80 筆時只用產生的，<br>不放 MetricBank（第 10 卡）。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:574px; width:470px; height:226px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">② 檢索：不必每個都跑一遍</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.65;">直接在資料上跑所有指標太貴；<br>把指標卡當文件、任務說明當查詢，<br>先挑出 k 個再跑。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">預設下是 65 個候選挑 30 個；<br>65＝17＋48 是整理者加的。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:574px; width:470px; height:226px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">③ 回歸：誰留下、各佔多少</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.65;">在訓練集的人評上擬合 PLS，<br>留下的指標與權重寫進報告，<br>人看得到每個指標在量什麼。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">圖 2 的旅遊規劃例子：<br>在地文化融入 24.8%、在地體驗 20.4%。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：17 是整理者把預設的 10＋5＋1＋1 加起來的；k＝30、n＝5 取自表 3 的圖說；產生與指標庫疊在同一欄，是因為兩者一起送進檢索。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M372 220L448 270" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M372 352L448 302" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M762 286L838 286" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1152 286L1228 286" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p04">
+  <div class="label"><span class="n">04 / 12</span><span>從好壞例子找出評分的軸</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">從好壞例子找出評分的軸，再寫成一池評審</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.1 節與附錄 E.2：預設每跑一次產生 10 個單一標準、5 個 rubric、1 個附範例、1 個 MIPROv2 最佳化過的評審，每個附一張指標卡</div>
+
+  <div style="position:absolute; left:560px; top:150px; width:480px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">任務說明＋人評過的好壞例子</div><div style="margin-top:3px; font-size:12.5px; color:rgba(255,255,255,0.75);">訓練集裡分數高與分數低的輸出</div></div></div>
+
+  <div style="position:absolute; left:80px; top:300px; width:300px; height:92px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="display:flex; align-items:baseline; justify-content:space-between;"><div style="font-size:15px; font-weight:700; color:#1C2431;">單一標準 × 10</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.1em; color:#8A93A0;">CHEAP</div></div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">LLM 比較好壞例子，列出差異的軸；<br>每條軸一個 1 到 5 分的評審</div></div>
+  <div style="position:absolute; left:460px; top:300px; width:300px; height:92px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="display:flex; align-items:baseline; justify-content:space-between;"><div style="font-size:15px; font-weight:700; color:#1C2431;">Rubric × 5</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.1em; color:#8A93A0;">CHEAP</div></div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">同樣找出軸，再請 LLM 寫出<br>1 到 5 分各長什麼樣</div></div>
+  <div style="position:absolute; left:840px; top:300px; width:300px; height:92px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="display:flex; align-items:baseline; justify-content:space-between;"><div style="font-size:15px; font-weight:700; color:#1C2431;">附範例 × 1</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.1em; color:#C8501F;">COSTLY</div></div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">人評例子分五等份抽樣放進 prompt；<br>試 5 組，留最接近人評的那組</div></div>
+  <div style="position:absolute; left:1220px; top:300px; width:300px; height:92px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="display:flex; align-items:baseline; justify-content:space-between;"><div style="font-size:15px; font-weight:700; color:#1C2431;">MIPROv2 × 1</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.1em; color:#C8501F;">COSTLY</div></div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">DSPy 的最佳化器改寫評審 prompt、<br>挑例子（auto_mode＝medium）</div></div>
+
+  <div style="position:absolute; left:560px; top:440px; width:480px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">候選指標池：每個附一張指標卡</div><div style="margin-top:3px; font-size:12.5px; color:rgba(255,255,255,0.75);">說明、預期用途、實作細節、限制（附錄 B）</div></div></div>
+
+  <div style="position:absolute; left:60px; top:530px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">便宜與昂貴</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">單一標準與 rubric 便宜，一次產生多個；附範例與 MIPROv2 要花較多 LLM 呼叫與 token，各一個。四個框都是實線：組合是事先定好的。附錄 E.2 共比了八種產生法，這四種是預設組合。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:620px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">軸：從差異裡找標準</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">GenerateAxisOfVariation 給 LLM 任務說明與好、壞例子，<br>請它依重要性列出能解釋差異的軸，<br>每條附一句說明（附錄 C.3）。</div>
+    <div style="font-size:13px; color:#8A93A0;">τ-bench 的案例把單一標準加到 20 個、rubric 加到 8 個。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:620px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">八種產生法的平均 Kendall τ</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">Qwen3 32B：附範例 0.323、MIPROv2 0.287、<br>單一標準 0.281；GPT-4o Mini：MIPROv2 0.456、<br>DSPy 版 rubric 0.434、單一標準 0.426。</div>
+    <div style="font-size:13px; color:#8A93A0;">表 8、表 9 的最後一列；CodeGen 與微調在兩個骨幹都墊底。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:620px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">每個產生的指標也附一張卡</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">寫明說明、預期用途、實作細節與限制；<br>檢索時，卡片就是文件（第 05 卡）；<br>指標庫的 48 張也照同一個範本寫。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說這個組合在各種領域與任務都推廣得不錯。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：數量是第 3.1 節的預設；表 8 的 31 列對應註腳說的「將近 30 種設定」；第 3.1 節沒說預設的 rubric 是表上哪一版。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M680 216L230 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M760 216L610 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M840 216L990 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M920 216L1370 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M230 394L680 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M610 394L760 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M990 394L840 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1370 394L920 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p05">
+  <div class="label"><span class="n">05 / 12</span><span>指標卡讓檢索找得到</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">每個指標附一張卡，檢索才找得到它</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">附錄 B、D 與第 3.1 節：MetricBank 的 48 個指標都寫成一張指標卡；檢索時卡片就是文件、任務說明就是查詢</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:440px; height:370px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:10px;"></div>
+  <div style="position:absolute; left:80px; top:164px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;"><span style="letter-spacing:0.12em">METRICBANK</span> &#183; 48 個指標</div>
+  <div style="position:absolute; left:80px; top:192px; font-size:14px; font-weight:700; color:#1C2431;">要參考答案 &#183; 29</div>
+  <div style="position:absolute; left:80px; top:218px; width:400px; display:flex; flex-wrap:wrap; gap:8px;">
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">n-gram 重疊 11</div>
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">編輯距離 8</div>
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">語言模型回歸 5</div>
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">嵌入相似度 3</div>
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">分布差異 2</div>
+  </div>
+  <div style="position:absolute; left:80px; top:294px; font-size:14px; font-weight:700; color:#1C2431;">不用參考答案 &#183; 19</div>
+  <div style="position:absolute; left:80px; top:320px; width:400px; display:flex; flex-wrap:wrap; gap:8px;">
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">語言模型回歸 7</div>
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">分類器 6</div>
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">嵌入相似度 2</div>
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">多樣性 2</div>
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">規則 1</div>
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">流暢度 1</div>
+  </div>
+  <div style="position:absolute; left:80px; top:404px; width:400px; height:44px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#2E7B4F;">展開的例子：BLEU · n-gram 重疊 · 要參考答案</div>
+  <div style="position:absolute; left:80px; top:466px; width:400px; font-size:12.5px; color:#6B7380; line-height:1.5;">來源：調查整理出的 28 個、程式庫 12 個、<br>近期論文 8 個（附錄 B、B.1）</div>
+
+  <div style="position:absolute; left:505px; top:402px; width:66px; text-align:center; font-size:12.5px; color:#8A93A0;">展開</div>
+
+  <div style="position:absolute; left:580px; top:150px; width:500px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:17px; font-weight:700; color:#FFFFFF;">一張指標卡的七個部分 · 以 BLEU 為例</div>
+  <div style="position:absolute; left:580px; top:198px; width:500px; height:342px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:12px 20px; display:flex; flex-direction:column; gap:2px;">
+    <div style="height:44px; display:flex; align-items:center; gap:12px;"><div style="width:24px; height:24px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#FFFFFF;">1</div><div><div style="font-size:14px; font-weight:700; color:#1C2431;">指標細節</div><div style="font-size:12px; color:#6B7380;">0 到 1、越高越好、要參考答案、不用輸入</div></div></div>
+    <div style="height:44px; display:flex; align-items:center; gap:12px;"><div style="width:24px; height:24px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#FFFFFF;">2</div><div><div style="font-size:14px; font-weight:700; color:#1C2431;">預期用途</div><div style="font-size:12px; color:#6B7380;">適合翻譯、摘要；不建議用在對話、說故事</div></div></div>
+    <div style="height:44px; display:flex; align-items:center; gap:12px;"><div style="width:24px; height:24px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#FFFFFF;">3</div><div><div style="font-size:14px; font-weight:700; color:#1C2431;">實作</div><div style="font-size:12px; color:#6B7380;">SacreBLEU、NLTK、Hugging Face evaluate；計算很快</div></div></div>
+    <div style="height:44px; display:flex; align-items:center; gap:12px;"><div style="width:24px; height:24px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#FFFFFF;">4</div><div><div style="font-size:14px; font-weight:700; color:#1C2431;">已知限制</div><div style="font-size:12px; color:#6B7380;">懲罰意思相同的改寫；長度懲罰可能錯殺短輸出</div></div></div>
+    <div style="height:44px; display:flex; align-items:center; gap:12px;"><div style="width:24px; height:24px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#FFFFFF;">5</div><div><div style="font-size:14px; font-weight:700; color:#1C2431;">相關指標</div><div style="font-size:12px; color:#6B7380;">ROUGE、METEOR、BERTScore</div></div></div>
+    <div style="height:44px; display:flex; align-items:center; gap:12px;"><div style="width:24px; height:24px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#FFFFFF;">6</div><div><div style="font-size:14px; font-weight:700; color:#1C2431;">延伸閱讀</div><div style="font-size:12px; color:#6B7380;">原論文、SacreBLEU 的說明與教學文章</div></div></div>
+    <div style="height:44px; display:flex; align-items:center; gap:12px;"><div style="width:24px; height:24px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#FFFFFF;">7</div><div><div style="font-size:14px; font-weight:700; color:#1C2431;">卡片作者</div><div style="font-size:12px; color:#6B7380;">Michael J. Ryan；註明有生成式 AI 協助起草</div></div></div>
+  </div>
+
+  <div style="position:absolute; left:1140px; top:148px; font-size:13px; font-weight:700; color:#4B5866;">誰寫卡片，誰讀卡片</div>
+  <div style="position:absolute; left:1140px; top:170px; width:400px; height:80px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:0px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#FFFFFF;">寫：作者＋LLM 起草</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75); line-height:1.45;">指標庫的 48 張：給 LLM 原論文與參考實作<br>起草，作者審過（附錄 C.2）</div></div>
+  <div style="position:absolute; left:1140px; top:258px; width:400px; height:80px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; padding:0px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">寫：產生時自動附上</div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">每個產生的指標都附一張：<br>說明、預期用途、實作細節、限制</div></div>
+  <div style="position:absolute; left:1140px; top:346px; width:400px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:0px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">讀：ColBERT 先篩</div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">卡片當文件、任務說明當查詢，<br>先篩出 k′ 張</div></div>
+  <div style="position:absolute; left:1140px; top:434px; width:400px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:0px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">讀：LLM 再挑 k 個</div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">讀卡片的內容，<br>排出最相關的 k 個（預設 30）</div></div>
+
+  <div style="position:absolute; left:60px; top:570px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">有卡的檢索比較好</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">表 3、k＝20：五個任務都比只給一句說明好；<br>EvalGen 0.522 對 0.427，<br>HelpSteer2 0.378 對 0.328。</div>
+    <div style="font-size:13px; color:#8A93A0;">開發集的數字（Qwen3 32B，5 次平均）。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:570px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">ColBERT 先篩、LLM 再挑</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">附錄 E.1 比了七種檢索法，這個組合<br>在 16 種設定裡贏 14 種；NDCG@10 是<br>0.528 與 0.55，單用 ColBERT 0.442 與 0.42。</div>
+    <div style="font-size:13px; color:#8A93A0;">沒贏的兩種都是 Recall@20。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:570px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">跑一次指標，成本差很多</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">表 5：最重的 INFORM reward model<br>要 <span style="white-space:nowrap">129.62 GB</span> GPU 記憶體、<span style="white-space:nowrap">1,041 毫秒</span>；<br>BLEU 不用 GPU，<span style="white-space:nowrap">7 毫秒</span>。</div>
+    <div style="font-size:13px; color:#8A93A0;">先檢索，就不必把每個指標都跑一遍。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：類型的計數是整理者依表 4 數的；讀寫者分成四格是整理者的畫法。七個部分依附錄 B，BLEU 的內容依附錄 D。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+      <marker id="an-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M482 426H576" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M1138 210H1084" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c05)"></path>
+    <path d="M1138 298H1084" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c05)"></path>
+    <path d="M1082 386H1136" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+    <path d="M1082 474H1136" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p06">
+  <div class="label"><span class="n">06 / 12</span><span>回歸替指標配權重</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">回歸替每個指標配權重，加總去逼近人評</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.1 節與圖 2 的旅遊規劃例子：分數先轉成 z 分數，PLS 找出最能預測人評的方向；欄頭是圖 2 印的權重，人評也照圖 2</div>
+
+  <div style="position:absolute; left:250px; top:140px; font-size:13px; font-weight:700; color:#4B5866;">回歸留下的 5 個指標（欄頭是圖 2 印的權重）→</div>
+  <div style="position:absolute; left:60px; top:226px; width:176px; text-align:right; font-size:13px; font-weight:700; color:#4B5866;">旅遊規劃 ↓</div>
+
+  <div style="position:absolute; left:250px; top:164px; width:130px; height:80px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13px; font-weight:700; color:#1C2431;">在地文化融入</div><div style="font-size:11px; color:#8A93A0;">rubric</div><div style="margin-top:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#2E7B4F;">24.8%</div></div></div>
+  <div style="position:absolute; left:386px; top:164px; width:130px; height:80px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13px; font-weight:700; color:#1C2431;">在地體驗</div><div style="font-size:11px; color:#8A93A0;">單一標準</div><div style="margin-top:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#2E7B4F;">20.4%</div></div></div>
+  <div style="position:absolute; left:522px; top:164px; width:130px; height:80px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13px; font-weight:700; color:#1C2431;">住宿選項</div><div style="font-size:11px; color:#8A93A0;">單一標準</div><div style="margin-top:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#2E7B4F;">19.5%</div></div></div>
+  <div style="position:absolute; left:658px; top:164px; width:130px; height:80px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13px; font-weight:700; color:#1C2431;">INFORM</div><div style="font-size:11px; color:#8A93A0;">現成的 reward model</div><div style="margin-top:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1F2A3A;">17.8%</div></div></div>
+  <div style="position:absolute; left:794px; top:164px; width:130px; height:80px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13px; font-weight:700; color:#1C2431;">具體與細節</div><div style="font-size:11px; color:#8A93A0;">rubric</div><div style="margin-top:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#2E7B4F;">17.5%</div></div></div>
+
+  <div style="position:absolute; left:60px; top:274px; width:176px; text-align:right; font-size:15px; font-weight:700; color:#1C2431;">規劃 A</div>
+  <div style="position:absolute; left:60px; top:340px; width:176px; text-align:right; font-size:15px; font-weight:700; color:#1C2431;">規劃 B</div>
+  <div style="position:absolute; left:60px; top:406px; width:176px; text-align:right; font-size:15px; font-weight:700; color:#1C2431;">規劃 C</div>
+  <div style="position:absolute; left:60px; top:472px; width:176px; text-align:right; font-size:15px; font-weight:700; color:#1C2431;">規劃 D</div>
+
+  <div style="position:absolute; left:250px; top:258px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#FFFFFF;">＋＋</div>
+  <div style="position:absolute; left:386px; top:258px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#B4D5C0; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">＋</div>
+  <div style="position:absolute; left:522px; top:258px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#FFFFFF;">＋＋</div>
+  <div style="position:absolute; left:658px; top:258px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#B4D5C0; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">＋</div>
+  <div style="position:absolute; left:794px; top:258px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#B4D5C0; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">＋</div>
+
+  <div style="position:absolute; left:250px; top:324px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#B4D5C0; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">＋</div>
+  <div style="position:absolute; left:386px; top:324px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#FFFFFF;">＋＋</div>
+  <div style="position:absolute; left:522px; top:324px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#F7F8FA; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#8A93A0;">0</div>
+  <div style="position:absolute; left:658px; top:324px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#B4D5C0; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">＋</div>
+  <div style="position:absolute; left:794px; top:324px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#F7F8FA; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#8A93A0;">0</div>
+
+  <div style="position:absolute; left:250px; top:390px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#C8501F;">−</div>
+  <div style="position:absolute; left:386px; top:390px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#C8501F;">−</div>
+  <div style="position:absolute; left:522px; top:390px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#F7F8FA; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#8A93A0;">0</div>
+  <div style="position:absolute; left:658px; top:390px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#C8501F;">−</div>
+  <div style="position:absolute; left:794px; top:390px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#C8501F;">−</div>
+
+  <div style="position:absolute; left:250px; top:456px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#B4D5C0; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">＋</div>
+  <div style="position:absolute; left:386px; top:456px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#F7F8FA; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#8A93A0;">0</div>
+  <div style="position:absolute; left:522px; top:456px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#B4D5C0; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">＋</div>
+  <div style="position:absolute; left:658px; top:456px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#FFFFFF;">＋＋</div>
+  <div style="position:absolute; left:794px; top:456px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#B4D5C0; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">＋</div>
+
+  <div style="position:absolute; left:956px; top:226px; width:130px; font-size:12.5px; font-weight:700; color:#4B5866;">加權加總 ŷ</div>
+  <div style="position:absolute; left:1100px; top:226px; width:70px; text-align:center; font-size:12.5px; font-weight:700; color:#4B5866;">人評</div>
+
+  <div style="position:absolute; left:956px; top:272px; width:130px; height:30px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:4px;"></div>
+  <div style="position:absolute; left:956px; top:272px; width:130px; height:30px; box-sizing:border-box; background-color:#1F2A3A; border-radius:4px;"></div>
+  <div style="position:absolute; left:1100px; top:272px; width:70px; height:30px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:4px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#1C2431;">5/5</div>
+
+  <div style="position:absolute; left:956px; top:338px; width:130px; height:30px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:4px;"></div>
+  <div style="position:absolute; left:956px; top:338px; width:98px; height:30px; box-sizing:border-box; background-color:#1F2A3A; border-radius:4px;"></div>
+  <div style="position:absolute; left:1100px; top:338px; width:70px; height:30px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:4px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#1C2431;">4/5</div>
+
+  <div style="position:absolute; left:956px; top:404px; width:130px; height:30px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:4px;"></div>
+  <div style="position:absolute; left:956px; top:404px; width:14px; height:30px; box-sizing:border-box; background-color:#1F2A3A; border-radius:4px;"></div>
+  <div style="position:absolute; left:1100px; top:404px; width:70px; height:30px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:4px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#1C2431;">2/5</div>
+
+  <div style="position:absolute; left:956px; top:470px; width:130px; height:30px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:4px;"></div>
+  <div style="position:absolute; left:956px; top:470px; width:105px; height:30px; box-sizing:border-box; background-color:#1F2A3A; border-radius:4px;"></div>
+  <div style="position:absolute; left:1100px; top:470px; width:70px; height:30px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:4px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#1C2431;">4/5</div>
+
+  <div style="position:absolute; left:1204px; top:150px; width:336px; height:330px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 22px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:17px; font-weight:700; color:#1C2431;">怎麼讀這張表</div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">01</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">欄是回歸留下的 5 個指標，<br>欄頭的權重加起來是 100%。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">02</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">格子是這筆規劃的 z 分數：<br>深綠高於平均，淡橘低於平均。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">03</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">每一列乘上權重、橫著加起來，<br>就是預測分數 ŷ。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">04</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">ŷ 的排名和人評越一致，<br>Kendall τ 越高（第 07 卡）。</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:532px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">預測 ŷ＝每個指標的 z 分數乘上權重再加總。PLS 挑權重的方式：找一個長度為 1 的方向 w，讓 Xw 和人評 y 的共變異數平方最大，再沿著這個方向回歸（第 3.1 節的式子寫成文字）。</div>
+
+  <div style="position:absolute; left:60px; top:590px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">兩階段：全部，再前 n 個</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">先用檢索到的全部候選擬合、依權重大小排序；<br>只留前 n 個（預設 5）再擬合一次，<br>得到最後的權重與預測。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者選 PLS：指標可能比資料多，彼此又高度相關。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:590px; width:470px; height:196px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">刪掉負係數的生成指標</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">產生的評審本來就往正相關設計，<br>係數為負就刪；τ-bench 的例子<br>原本推薦 5 個，刪掉 2 個。</div>
+    <div style="font-size:13px; color:#8A93A0;">現成指標不刪：附錄 G 的 ParaScoreFree 是 −1.6125。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:590px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">留下的多半是產生的</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">表 2 的 25 次（<span style="white-space:nowrap">Qwen3-32B</span>）共推薦 125 個指標，<br>103 個是產生的；現成的 22 個裡，<br>20 個是 reward model（附錄 F.2）。</div>
+    <div style="font-size:13px; color:#8A93A0;">圖 8：單一標準 67、rubric 16、範例 10、最佳化 10。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：方格的深淺與 ŷ 的長度是整理者的示意，不是論文的數字；指標名、權重與人評（5/5、4/5、2/5、4/5）取自圖 2。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M928 287H952" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M928 353H952" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M928 419H952" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M928 485H952" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p07">
+  <div class="label"><span class="n">07 / 12</span><span>表 2：十格裡九格拿到粗體</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">十格裡九格拿到粗體，一格掉到負的</div>
+  <div style="position:absolute; left:60px; top:92px; width:1480px; font-size:15px; color:#6B7380;">表 2：和人評的 Kendall τ，5 次獨立執行的平均與 95% 信賴區間。綠底是表 2 的粗體（每個骨幹那一組裡最高），橘底是 AutoMetrics 落後的那一格</div>
+
+  <div style="position:absolute; left:60px; top:146px; width:1480px; height:36px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:200px repeat(7, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">任務</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">與骨幹無關</div>
+    <div style="grid-column:span 3; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866; border-left:1.5px solid #D5DAE1;"><span style="white-space:nowrap">Qwen3-32B</span>&#160;當骨幹</div>
+    <div style="grid-column:span 3; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866; border-left:1.5px solid #D5DAE1;"><span style="white-space:nowrap">GPT-4o-mini</span>&#160;當骨幹</div>
+  </div>
+  <div style="position:absolute; left:60px; top:182px; width:1480px; height:34px; box-sizing:border-box; background-color:#F7F8FA; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:200px repeat(7, minmax(0, 1fr));">
+    <div></div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">現成最好的指標</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380; border-left:1.5px solid #D5DAE1;">LLM 評審</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">DnA-Eval</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#1C2431;">AutoMetrics</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380; border-left:1.5px solid #D5DAE1;">LLM 評審</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">DnA-Eval</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#1C2431;">AutoMetrics</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:216px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:200px repeat(7, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">SimpEval</div><div style="font-size:12px; color:#8A93A0;">分布內 · 句子簡化</div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.246</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.00</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center; border-left:1.5px solid #D5DAE1;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.294</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.04</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.042</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.04</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.316</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.02</div></div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center; border-left:1.5px solid #D5DAE1;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.272</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.02</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.234</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.03</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.321</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.04</div></div></div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:280px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:200px repeat(7, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">HelpSteer2</div><div style="font-size:12px; color:#8A93A0;">分布內 · 對話</div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.327</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.00</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center; border-left:1.5px solid #D5DAE1;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.334</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.02</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.260</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.02</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.342</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.01</div></div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center; border-left:1.5px solid #D5DAE1;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.259</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.01</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.255</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.02</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.324</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.01</div></div></div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:344px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:200px repeat(7, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">EvalGen</div><div style="font-size:12px; color:#8A93A0;">分布外 · 商品描述</div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.193</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.00</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center; border-left:1.5px solid #D5DAE1;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.272</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.13</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.232</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.19</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.382</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.05</div></div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center; border-left:1.5px solid #D5DAE1;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.161</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.14</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.174</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.16</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.334</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.06</div></div></div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:408px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:200px repeat(7, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">RealHumanEval</div><div style="font-size:12px; color:#8A93A0;">分布外 · 程式補全</div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.138</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.00</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center; border-left:1.5px solid #D5DAE1;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.025</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.01</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.071</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.15</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.145</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.00</div></div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center; border-left:1.5px solid #D5DAE1;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.069</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.01</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.152</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.01</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.160</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.00</div></div></div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:472px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:200px repeat(7, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">CoGym</div><div style="font-size:12px; color:#8A93A0;">分布外 · 旅遊規劃</div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.074</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.00</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center; border-left:1.5px solid #D5DAE1;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.276</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.19</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.353</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.25</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.365</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.08</div></div></div></div>
+    <div style="padding:6px 8px; display:flex; border-left:1.5px solid #D5DAE1;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.199</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.13</div></div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.185</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.10</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#C8501F;">−0.034</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.17</div></div></div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:550px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">沒畫進來的兩個基線：MetaMetrics 在 EvalGen、CoGym 是負的；微調的 ModernBERT 只有 CoGym 較高（0.223 ± 0.20）。數字見正文的表 2。</div>
+
+  <div style="position:absolute; left:60px; top:596px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;"><span style="white-space:nowrap">Qwen3-32B</span>：五個任務都最高</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">AutoMetrics 在五欄都拿粗體，也高過現成的指標；<br>EvalGen 0.382 對 LLM 評審 0.272，<br>RealHumanEval 0.145 對現成最好的 0.138。</div>
+    <div style="font-size:13px; color:#8A93A0;">HelpSteer2 只高 0.008：0.342 對 0.334。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:596px; width:470px; height:196px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;"><span style="white-space:nowrap">GPT-4o-mini</span>：CoGym 是 −0.034</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">同骨幹的 LLM 評審 0.199，微調的 ModernBERT 0.223；<br>圖說寫四個任務在最佳的信賴區間內，<br>正文卻寫五個任務都贏。</div>
+    <div style="font-size:13px; color:#8A93A0;">HelpSteer2 的 0.324 也略低於現成最好的 0.327。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:596px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">33.4% 對不上這張表</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">圖說說在 EvalGen 比 LLM 評審高 33.4%；<br>表上是 0.382 對 0.272、0.334 對 0.161，<br>相對高約 40% 與一倍多（整理者算的）。</div>
+    <div style="font-size:13px; color:#8A93A0;">論文沒交代這個百分比怎麼算。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：綠底照表 2 的粗體，粗體只在同一個骨幹那一組裡比；「九格」是整理者數 AutoMetrics 兩欄的粗體，「相對高」是整理者用表上的數字算的。</div>
+</div></div>
+</section>
+<section class="page" id="p08">
+  <div class="label"><span class="n">08 / 12</span><span>敏感度與穩定度</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">該掉分時會掉，換句話說時不亂動</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.2、4.4 節：構念效度拆成兩個量。同一筆輸出做兩種擾動，一種故意改差、一種品質不變，看指標的分數怎麼動</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">SENSITIVITY</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">敏感度：改差的版本，分數要變低</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">STABILITY</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">穩定度：等價的改寫，分數要不動</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:230px; top:222px; width:360px; height:44px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">原本的輸出（第 i 筆）</div>
+  <div style="position:absolute; left:110px; top:290px; width:600px; height:54px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">LLM 想出 1 到 3 種變差的策略</div><div style="font-size:12.5px; color:#6B7380;">依要優先破壞的評估面向（GeneratePerturbationStrategies）</div></div>
+  <div style="position:absolute; left:110px; top:366px; width:600px; height:54px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">照策略改寫：輕微或明顯</div><div style="font-size:12.5px; color:#6B7380;">每個策略交回一個改差的版本，不附理由（PerturbWorse）</div></div>
+  <div style="position:absolute; left:110px; top:442px; width:600px; height:46px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">比分數：改差的版本比原本低嗎？</div>
+  <div style="position:absolute; left:60px; top:510px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">敏感度＝N 筆裡，改差的版本拿到較低正規化分數的比例；<br>只看方向，不看差了多少。</div>
+
+  <div style="position:absolute; left:1010px; top:222px; width:360px; height:44px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">原本的輸出（第 i 筆）</div>
+  <div style="position:absolute; left:890px; top:290px; width:600px; height:54px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">一組固定、人工設計的等價改寫</div><div style="font-size:12.5px; color:#6B7380;">換句話說、調換順序、換同義字、改文風</div></div>
+  <div style="position:absolute; left:890px; top:366px; width:600px; height:54px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">要保住評的那個面向</div><div style="font-size:12.5px; color:#6B7380;">任何改動會傷到它，就原封不動交回（PerturbSame）</div></div>
+  <div style="position:absolute; left:890px; top:442px; width:600px; height:46px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">比分數：兩個分數差了多少？</div>
+  <div style="position:absolute; left:840px; top:510px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">穩定度＝1 減掉原本與等價版本分數差的平均；<br>越接近 1，越不受無關的變化影響。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">81.0% 到 97.8%</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">依資料集不同，AutoMetrics 替改差的版本打較低分的比例落在這個範圍；<br>50% 是隨機打分的基準，作者說顯著高於它。</div>
+    <div style="font-size:13px; color:#8A93A0;">圖 3：SimpEval、HelpSteer2、CoGym，各 30 次試驗；長條上沒有印數字。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">穩定度都高過基準</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">作者說三個資料集都以超過 95% 信賴區間的差距高過常態分布的基準。<br>附錄 F.3 人工標 150 筆 SimpEval：敏感度 0.8275、穩定度 0.8000。</div>
+    <div style="font-size:13px; color:#8A93A0;">人工核對確認擾動有效：改差的真的變差，等價的真的沒變。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩條式子是第 3.2 節的文字版；附錄 F.1 說現成最好的指標也很穩定，LLM 類的方法在穩健性上突出。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c08" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M410 266L410 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M410 344L410 364" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M410 420L410 440" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M1190 266L1190 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M1190 344L1190 364" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M1190 420L1190 440" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p09">
+  <div class="label"><span class="n">09 / 12</span><span>預設設定對表 3 查一次</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">預設的設定，是在開發集上一項項試出來的</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4.5 節、表 3：Qwen3 32B（推理模式）、五個任務、每種設定 5 次；所有掃描與消融都在開發集做，作者說從不依測試集的結果做決定</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:410px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:18px; font-weight:700; color:#FFFFFF;">預設設定（表 3 圖說）</div>
+  <div style="position:absolute; left:60px; top:198px; width:410px; height:236px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:22px 24px; display:flex; flex-direction:column; gap:12px;">
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">完整的 MetricBank：產生的＋現成的</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">檢索靠指標卡，留 k＝30 個</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">回歸留 n＝5 個</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">人評少於 80 筆：只用產生的</div></div>
+    <div style="margin-top:6px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">k=30 &#183; n=5 &#183; Full MetricBank</div>
+    <div style="font-size:13px; color:#8A93A0;">↑ 前三項都拿表 3 查一次；第四項見第 10 卡</div>
+  </div>
+
+  <div style="position:absolute; left:580px; top:120px; font-size:20px; font-weight:700; color:#1C2431;">四道檢查（對表 3 的開發集數字）</div>
+  <div style="position:absolute; left:580px; top:158px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">1</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">只用一種指標夠不夠？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">METRICBANK</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">完整的庫在五個任務不是最好就是第二；CoGym 比只用產生的低 0.104，EvalGen 低 0.029　✓ 兩種都要</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:250px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">2</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">指標卡有沒有用？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">METRIC CARDS</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">k＝20 時，有卡的檢索在五個任務都比只給一句說明好；EvalGen 0.522 對 0.427　✓ 有用</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:342px; width:960px; height:80px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#C8501F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">3</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">檢索留幾個 k？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">RETRIEVAL K</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">作者說大致隨 k 上升，例外是 CoGym；表上 SimpEval、EvalGen 在 k＝20 最高　△ 預設取 30</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:434px; width:960px; height:80px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#C8501F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">4</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">回歸留幾個 n？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">REGRESSION N</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">最好的 n 每個任務不同，HelpSteer2 不回歸（n＝1）反而最高 0.393；n＝5 便宜、變異小　△ 折衷</div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:545px; width:480px; height:130px; box-sizing:border-box; background-color:#1F2A3A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#FFFFFF;">判定：預設可用，k 與 n 看任務</div>
+    <div style="font-size:14px; color:rgba(255,255,255,0.78); line-height:1.6;">兩種指標都留、指標卡保留；k＝30、n＝5 是<br>五個任務平均下的折衷，不是每個任務的最佳。</div>
+  </div>
+  <div style="position:absolute; left:580px; top:545px; width:960px; height:130px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">為什麼只在開發集上選</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">作者說所有掃描與消融都在開發集上做，從不依測試集的結果做設計決定；<br>所以表 3 不能和表 2 的測試集數字直接比。正文寫「六個主要任務」，表 3 只有五欄。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:695px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:716px; font-size:20px; font-weight:700; color:#1C2431;">直接可以拿去用的三條（整理者歸納）</div>
+  <div style="position:absolute; left:60px; top:752px; font-size:16px; color:#2B3340;">① 資料夠多時，現成指標與產生的指標一起放進候選池。</div>
+  <div style="position:absolute; left:60px; top:784px; font-size:16px; color:#2B3340;">② 每個指標都寫一張卡：檢索靠的是卡的內容，不是一句名字。</div>
+  <div style="position:absolute; left:60px; top:816px; font-size:16px; color:#2B3340;">③ k、n 先用預設；任務特別時，在開發集上掃一次再決定。</div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：綠＝表上看得出這個設計有效，橘＝要小心、最好的值因任務而異；綠橘判定與 k＝20 的核對是整理者依表 3 做的。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c09" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M482 336L558 336" stroke="#9AA3AE" stroke-width="2" marker-end="url(#ag-c09)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p10">
+  <div class="label"><span class="n">10 / 12</span><span>少於 80 筆只用生成的</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">少於 80 筆人評，就只用自己生成的指標</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4.6 節、圖 4：三個資料集的訓練集從 5 筆加到 160 筆（HelpSteer2 與 RealHumanEval 到 640 筆），兩種指標庫各跑多次，相關都在完整的測試集上量</div>
+
+  <div style="position:absolute; left:60px; top:286px; width:230px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:700; color:#FFFFFF;">新任務＋一批人評</div>
+  <div style="position:absolute; left:400px; top:276px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:17px; font-weight:700; color:#1C2431; line-height:1.35;">訓練用的人評<br>有幾筆？</div>
+
+  <div style="position:absolute; left:790px; top:232px; font-size:13px; font-weight:700; color:#2E7B4F;">少於 80 筆</div>
+  <div style="position:absolute; left:790px; top:352px; font-size:13px; font-weight:700; color:#2E7B4F;">80 筆以上</div>
+
+  <div style="position:absolute; left:940px; top:210px; width:600px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">只用產生的指標（Generated Only）</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">候選少、都是比較強的預測量；RealHumanEval 在 10、20 筆時比完整的庫好</div>
+  </div>
+  <div style="position:absolute; left:940px; top:330px; width:600px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">產生的＋現成的（Full MetricBank）</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">超過 80 筆後兩種都持平，完整的庫在三個資料集最後都停得比較高</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:506px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">三個資料集</div>
+    <div style="font-size:15px; color:#2B3340;">SimpEval、HelpSteer2、RealHumanEval 在兩種設定下都約 80 筆後持平；少於 80 筆時表現較低，作者說多半來自小訓練集上擬合回歸的高變異</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:580px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:592px; font-size:20px; font-weight:700; color:#1C2431;">作者的三個觀察</div>
+  <div style="position:absolute; left:60px; top:632px; width:470px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#2E7B4F;">約 80 筆就飽和</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">三個資料集、兩種設定，都在約 80 筆之後持平；<br>作者說用目前的架構，80 到 100 筆就夠。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">更好的產生或學習方法，也許能讓更多資料繼續有用。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:632px; width:470px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#2E7B4F;">分布外的小資料：只用產生的</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">RealHumanEval 在 10、20 筆時只用產生的比較好；<br>表 3 最小的 CoGym（37 筆）、EvalGen（57 筆）也是。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">作者：大多數任務本來就在分布外。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:632px; width:470px; height:180px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#C8501F;">高 p 低 n：碰巧的相關</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">候選指標多、資料少，弱的預測量容易碰巧和人評相關；<br>只用產生的，等於只留下比較強的訊號。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">這是作者提出的解釋。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：圖 4 的點沒有印數字，「持平」「比較好」是作者的讀法；少於 80 筆只用產生的，是作者依圖 4 與表 3 定的預設。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M290 318L398 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M700 318H770" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M770 318V258H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c10)"></path>
+    <path d="M770 318V378H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c10)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p11">
+  <div class="label"><span class="n">11 / 12</span><span>τ-bench：換掉最佳化的訊號</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">沒有可驗證獎勵，生成的三個指標也能帶最佳化</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 5 節、圖 5、圖 6：τ-bench 的航空客服任務，同一個 agent、同一個最佳化器 GEPA，只換掉替 rollout 打分數的東西</div>
+
+  <div style="position:absolute; left:60px; top:134px; width:1480px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">共同的起點</div>
+    <div style="font-size:15px; color:#2B3340;">用 DSPy 寫的 ReAct agent · τ-airline 的 50 題切成訓練 25、測試 25 · 未最佳化時，測試平均 0.6（五次試驗）</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:198px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">VERIFIABLE REWARD</div>
+  <div style="position:absolute; left:60px; top:218px; font-size:20px; font-weight:700; color:#1C2431;">用 τ-bench 的可驗證獎勵打分</div>
+  <div style="position:absolute; left:840px; top:198px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">AUTOMETRICS</div>
+  <div style="position:absolute; left:840px; top:218px; font-size:20px; font-weight:700; color:#1C2431;">用生成的三個指標打分</div>
+  <div style="position:absolute; left:800px; top:196px; width:0px; height:396px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:150px; top:268px; width:520px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">25 題訓練任務</div>
+  <div style="position:absolute; left:150px; top:350px; width:520px; height:62px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">GEPA 最佳化</div><div style="margin-top:3px; font-size:12.5px; color:rgba(255,255,255,0.75);">每次 rollout 用 τ-bench 的獎勵打分</div></div></div>
+  <div style="position:absolute; left:150px; top:448px; width:520px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">2,000 次 rollout 後，量 25 題測試</div>
+  <div style="position:absolute; left:60px; top:520px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">兩邊都從同一個未最佳化的 agent 開始，也都跑 2,000 次 rollout；<br>差別只在替 rollout 打分數的東西。</div>
+
+  <div style="position:absolute; left:860px; top:262px; width:320px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">25 題 × 8 種溫度</div><div style="font-size:12px; color:#6B7380;">200 條軌跡（整理者算的）</div></div></div>
+  <div style="position:absolute; left:1210px; top:262px; width:320px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">可驗證獎勵當標籤</div><div style="font-size:12px; color:#6B7380;">模擬人評；實務上可換成人工標籤</div></div></div>
+  <div style="position:absolute; left:860px; top:336px; width:670px; height:44px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">只用產生的：單一標準 20、rubric 8；n＝5，刪掉 2 個負係數</div>
+  <div style="position:absolute; left:860px; top:398px; width:216px; height:34px; box-sizing:border-box; background-color:#F3F9F5; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:13px; color:#1C2431;">會員權益（rubric）<span style="margin-left:6px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; color:#2E7B4F;">0.08</span></div>
+  <div style="position:absolute; left:1087px; top:398px; width:216px; height:34px; box-sizing:border-box; background-color:#F3F9F5; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:13px; color:#1C2431;">該轉真人才轉（rubric）<span style="margin-left:6px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; color:#2E7B4F;">0.0599</span></div>
+  <div style="position:absolute; left:1314px; top:398px; width:216px; height:34px; box-sizing:border-box; background-color:#F3F9F5; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:13px; color:#1C2431;">遵守航空規定<span style="margin-left:6px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; color:#2E7B4F;">0.0567</span></div>
+  <div style="position:absolute; left:860px; top:452px; width:670px; height:46px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">GEPA 最佳化：用這三個指標的加權打分</div>
+  <div style="position:absolute; left:840px; top:520px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">作者提醒：軌跡只來自 25 題，指標可能學到資料本身的特徵；<br>刪負係數與人的監督都重要。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">可驗證獎勵：0.680 ± 0.11</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">GEPA 用 τ-bench 的獎勵最佳化，<br>2,000 次 rollout 後，<br>五次試驗的測試平均。</div>
+    <div style="font-size:13px; color:#8A93A0;">未最佳化的 agent 是 0.6。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">AutoMetrics：0.720 ± 0.06</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">改用三個生成指標打分，同樣 2,000 次 rollout；<br>作者說顯著高於 0.6 的基準（p &lt; 0.05），<br>能追平或超過可驗證獎勵。</div>
+    <div style="font-size:13px; color:#8A93A0;">檢定比的是基準；兩組的區間重疊。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">圖 6 的曲線怎麼讀</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">可驗證獎勵的曲線前段比較高，<br>後段降到 0.68；AutoMetrics 在中段<br>兩次往上跳，最後停在 0.72。</div>
+    <div style="font-size:13px; color:#8A93A0;">整理者對圖 6 的讀法；縱軸是平均 pass^1。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：這裡的「人評」其實是 τ-bench 的可驗證獎勵，作者說實務上可換成主觀的人工標籤；圖 5 印的係數是 0.08，附錄 G 寫 0.0803。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c11" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M410 314L410 348" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+    <path d="M410 412L410 446" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+    <path d="M1180 290L1208 290" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+    <path d="M1370 318L1370 334" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+    <path d="M1195 380L1195 396" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+    <path d="M1195 432L1195 450" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p12">
+  <div class="label"><span class="n">12 / 12</span><span>結論與限制</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">指標可以自動長出來，資料與人不能省</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 6 節與 Limitations：作者說 AutoMetrics 是在新領域收集初步人評時，探索資料、引導最佳化的實用第一步</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:330px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">01　從訊號反推標準</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">讚與倒讚說不出原因，<br>標準要從資料裡找</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">讓 LLM 從好壞例子找出差異的軸、<br>寫成評審；再用回歸決定哪幾條<br>真的預測得了人評。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 先寫好 rubric，再請 LLM 照打<br>✓ 先收人評，讓標準從資料裡長出來</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:330px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">02　讓指標看得懂</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">權重、卡片、推理軌跡，<br>都攤在報告裡</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">每個指標都有說明與指標卡；<br>報告寫出權重與和人評的相關，<br>評審的推理軌跡也看得到。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 一個說不出理由的總分<br>✓ 幾個有說明、有權重的指標</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:330px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">03　資料與人的監督</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">資料要多樣，<br>碰巧的相關要有人刪</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">約 80 筆人評就夠到中等相關；<br>但資料來源太窄，指標會學到資料的特徵；<br>領域專家要刪掉自動過濾漏掉的指標。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 從少數來源放大合成資料<br>✓ 收能代表評估對象的真實人評</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:536px; font-size:20px; font-weight:700; color:#1C2431;">作者列的限制與提醒（不排順序）</div>
+  <div style="position:absolute; left:60px; top:576px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">01</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">換了模型要重新產生</div>
+  </div>
+  <div style="position:absolute; left:360px; top:576px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">02</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">資料要有代表性</div>
+  </div>
+  <div style="position:absolute; left:660px; top:576px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">03</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">相關不顯著時會警告</div>
+  </div>
+  <div style="position:absolute; left:960px; top:576px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">04</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">還沒有正式的使用者研究</div>
+  </div>
+  <div style="position:absolute; left:1260px; top:576px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">05</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">最佳化時盯著指標的回饋</div>
+  </div>
+  <div style="position:absolute; left:60px; top:668px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">前四格出自 Limitations，第五格出自第 6 節。第一格：用一個模型產生的指標換到別的模型上跑，表現會掉，新模型推出時要用 AutoMetrics 重新最佳化，而不是只換底層的 LLM。<br>第三格：候選多、資料少時仍可能有碰巧的相關，推薦指標和人評的相關不顯著（p &gt; 0.05）時，報告會加上警告。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三條原則與 ✗／✓ 是整理者依第 6 節與 Limitations 歸納的；下排五格是作者列的限制與提醒，原文沒有排順序。</div>
+</div></div>
+</section>
+  <div class="foot">整理自 arXiv · Michael J. Ryan、Yanzhe Zhang、Amol Salunkhe、Yi Chu、Di Xu、Diyi Yang（Stanford University、American Express），2025-12-19：<a href="https://arxiv.org/abs/2512.17267">https://arxiv.org/abs/2512.17267</a>。這些圖卡是學習用的重新整理，不是原文的逐句翻譯；觀點與著作權屬於原作者。<a href="index.html">回到圖卡＋教材版</a> · <a href="../../">回首頁</a></div>
+</div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fit() {
+    var frames = document.querySelectorAll('.frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('load', fit);
+  fit();
+})();
+</script>
+</body>
+</html>

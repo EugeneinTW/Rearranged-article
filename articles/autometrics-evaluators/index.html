@@ -1,0 +1,2097 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutoMetrics（Ryan et al. 2025）</title>
+<meta name="description" content="Stanford 與 American Express 團隊的 AutoMetrics，把少量而且說不出原因的人評（讚與倒讚、分數、接受或拒絕）變成一組看得懂的自動評估指標：LLM 依好壞例子寫出候選評審，再從 48 個現成指標組成的 MetricBank 檢索，最後用偏最小平方回歸挑出幾個指標、配上權重。在五個任務上，它和人評的 Kendall 相關多數高於 LLM 評審等基線，約 80 筆人評就持平，拿來最佳化 τ-bench 的客服 agent 也追得上可驗證獎勵。這份整理逐章重述方法、實驗與限制，並對照表格核對論文的說法，每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="llm-evaluation, llm-as-a-judge, evaluation-metrics, metric-learning, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2512.17267">
+<meta name="date" content="2026-09-24">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Theme: tech-modern 變體「測試報告語意色」
+   藍 = 主色 / 綠 = pass / 琥珀 = 注意 / 紅 = fail
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --paper: #ffffff;
+  --paper-soft: #f3f5f8;
+  --paper-shadow: #dde2e8;
+  --ink: #121821;
+  --ink-soft: #3b4450;
+  --ink-mute: #6b7481;
+  --primary: #1e56a8;
+  --primary-deep: #143a72;
+  --primary-bg: #e6eef9;
+  --accent: #157a52;
+  --accent-deep: #0d5236;
+  --accent-bg: #e1f3e9;
+  --warm: #b8620e;
+  --warm-deep: #7d4108;
+  --warm-bg: #fbeddc;
+  --danger: #b83228;
+  --danger-bg: #f9e3e0;
+  --stone: #5a6370;
+  --stone-bg: #eceff3;
+  --code-bg: #0f1720;
+  --code-ink: #e6edf3;
+  --code-mute: #8b98a8;
+  --code-blue: #7cc4ff;
+  --code-green: #7ee2b8;
+  --code-amber: #ffc46b;
+
+  --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-cjk: 'Noto Sans TC', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --content-width: 780px;
+  --wide-width: 1100px;
+  --gutter: 24px;
+}
+
+/* ---------- reset & 排版 ---------- */
+* { box-sizing: border-box; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+body {
+  margin: 0; padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-cjk);
+  font-size: 18px;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: var(--content-width); margin: 0 auto; padding: 0 var(--gutter); }
+.wide { max-width: var(--wide-width); margin: 0 auto; padding: 0 var(--gutter); }
+section { padding-block: 64px; }
+section + section { border-top: 1px solid var(--paper-shadow); }
+
+h1, h2, h3, h4 { font-family: var(--font-cjk); font-weight: 700; text-wrap: balance; }
+h1 { font-size: 56px; line-height: 1.14; margin: 0 0 24px; font-weight: 800; }
+h2 { font-size: 36px; line-height: 1.25; margin: 0 0 18px; letter-spacing: -0.01em; }
+h2 .seg { display: inline-block; }
+h3 { font-size: 25px; line-height: 1.35; margin: 44px 0 14px; }
+h4 { font-size: 20px; line-height: 1.4; margin: 26px 0 10px; }
+p { margin: 0 0 18px; }
+ul, ol { padding-left: 26px; margin: 0 0 18px; }
+li { margin-bottom: 8px; }
+em { font-style: normal; color: var(--primary-deep); font-weight: 600; }
+strong { font-weight: 700; }
+a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+code {
+  font-family: var(--font-mono); font-size: 0.86em;
+  background: var(--stone-bg); color: var(--primary-deep);
+  padding: 2px 6px; border-radius: 4px;
+}
+.mono { font-family: var(--font-mono); }
+
+/* ---------- Hero ---------- */
+.hero {
+  padding-block: 84px 60px;
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-soft) 100%);
+  border-bottom: 2px solid var(--primary-deep);
+  position: relative;
+}
+.hero::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: linear-gradient(90deg,
+    var(--primary) 0%, var(--primary) 25%,
+    var(--accent) 25%, var(--accent) 50%,
+    var(--warm) 50%, var(--warm) 75%,
+    var(--danger) 75%, var(--danger) 100%);
+}
+.hero-meta {
+  display: flex; flex-wrap: wrap; gap: 10px 22px;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  margin-bottom: 32px;
+}
+.hero-meta span::before { content: "—"; margin-right: 10px; color: var(--paper-shadow); }
+.hero-meta span:first-child::before { content: ""; margin: 0; }
+.hero h1 { font-size: 60px; font-weight: 800; word-break: keep-all; }
+.hero h1 .accent {
+  display: block; margin-top: 12px;
+  font-size: 0.55em; font-weight: 600; line-height: 1.3;
+  color: var(--primary-deep);
+}
+.hero .lede { font-size: 22px; max-width: 720px; }
+.hero-keystat {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 28px; margin: 44px 0 0; padding-top: 34px;
+  border-top: 1px dashed var(--paper-shadow);
+}
+.hero-keystat dt {
+  font-family: var(--font-sans);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--ink-mute); margin-bottom: 6px;
+}
+.hero-keystat dd {
+  margin: 0; font-family: var(--font-mono);
+  font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1;
+}
+.hero-keystat dd small { font-family: var(--font-cjk); font-size: 14px; color: var(--ink-mute); font-weight: 400; margin-left: 6px; }
+
+/* ---------- Chapter / lede / eyebrow ---------- */
+.chapter {
+  font-family: var(--font-mono);
+  font-size: 12.5px; color: var(--primary);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 0 0 10px;
+}
+.chapter::before { content: "§ "; color: var(--paper-shadow); margin-right: 4px; }
+.lede {
+  font-size: 22px; line-height: 1.6; color: var(--ink-soft);
+  margin: 0 0 28px; font-weight: 400;
+}
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--primary); margin: 0 0 14px;
+}
+
+/* ---------- Pull quote ---------- */
+.pullquote {
+  margin: 48px -16px; padding: 32px 40px;
+  font-family: var(--font-cjk);
+  font-size: 27px; line-height: 1.5; font-weight: 600;
+  color: var(--primary-deep);
+  border-left: 5px solid var(--primary);
+  background: linear-gradient(90deg, var(--primary-bg) 0%, transparent 100%);
+}
+.pullquote.bronze {
+  color: var(--accent-deep); border-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-bg) 0%, transparent 100%);
+}
+.pullquote.terra {
+  color: var(--warm-deep); border-color: var(--warm);
+  background: linear-gradient(90deg, var(--warm-bg) 0%, transparent 100%);
+}
+.pullquote cite {
+  display: block; margin-top: 16px; font-style: normal; font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  letter-spacing: 0.06em;
+}
+.pullquote cite::before { content: "— "; }
+
+/* ---------- English quote ---------- */
+.quote-en {
+  margin: 28px 0;
+  font-family: var(--font-sans); font-style: italic;
+  font-size: 21px; line-height: 1.5; color: var(--ink);
+  padding-left: 20px; border-left: 3px solid var(--accent);
+}
+.quote-en .zh {
+  display: block; margin-top: 10px;
+  font-family: var(--font-cjk); font-style: normal;
+  font-size: 15px; color: var(--ink-soft); line-height: 1.6;
+}
+
+/* ---------- Story ---------- */
+.story {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 14px;
+  padding: 38px 44px; margin: 48px 0;
+  position: relative;
+}
+.story::before {
+  content: "❝"; position: absolute; top: -6px; left: 24px;
+  font-size: 72px; color: var(--warm); line-height: 1;
+  font-family: var(--font-sans);
+}
+.story .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.18em;
+  color: var(--warm); margin-bottom: 10px; padding-left: 42px;
+}
+.story h4 { margin: 0 0 16px; font-size: 22px; color: var(--warm-deep); }
+.story p { margin-bottom: 14px; font-size: 17px; line-height: 1.7; }
+.story p:last-child { margin-bottom: 0; }
+
+/* ---------- Explain ---------- */
+.explain {
+  background: var(--primary-bg);
+  border-left: 4px solid var(--primary);
+  border-radius: 4px;
+  padding: 26px 30px; margin: 36px 0;
+  font-family: var(--font-cjk); position: relative;
+}
+.explain.bronze { background: var(--accent-bg); border-color: var(--accent); }
+.explain.terra { background: var(--warm-bg); border-color: var(--warm); }
+.explain.stone { background: var(--stone-bg); border-color: var(--stone); }
+.explain .label {
+  position: absolute; top: -12px; left: 16px;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.15em; padding: 4px 12px;
+  border-radius: 3px; text-transform: uppercase;
+}
+.explain.bronze .label { background: var(--accent); }
+.explain.terra .label { background: var(--warm); }
+.explain.stone .label { background: var(--stone); }
+.explain h4 { margin: 4px 0 12px; font-size: 19px; color: var(--primary-deep); }
+.explain.bronze h4 { color: var(--accent-deep); }
+.explain.terra h4 { color: var(--warm-deep); }
+.explain.stone h4 { color: var(--ink); }
+.explain p { font-size: 16.5px; }
+.explain p:last-child { margin-bottom: 0; }
+.explain ul, .explain ol { margin: 8px 0 0; padding-left: 22px; }
+.explain li { margin-bottom: 6px; font-size: 16px; }
+.explain code { background: rgba(255,255,255,0.75); }
+
+/* ---------- Stat grid ---------- */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.stat-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 28px 24px; text-align: center;
+  border-top: 4px solid var(--primary);
+}
+.stat-card.bronze { border-color: var(--accent); }
+.stat-card.terra { border-color: var(--warm); }
+.stat-card.danger { border-color: var(--danger); }
+.stat-card .big {
+  font-family: var(--font-mono);
+  font-size: 46px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1; margin-bottom: 10px;
+}
+.stat-card.bronze .big { color: var(--accent-deep); }
+.stat-card.terra .big { color: var(--warm-deep); }
+.stat-card.danger .big { color: var(--danger); }
+.stat-card .big small { font-family: var(--font-cjk); font-size: 16px; opacity: 0.75; margin-left: 4px; font-weight: 500; }
+.stat-card .label {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.stat-card .note { margin-top: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.55; }
+
+/* ---------- Compare table ---------- */
+.table-scroll { overflow-x: auto; margin: 36px 0; }
+.compare {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-cjk); font-size: 15.5px;
+  background: var(--paper-soft);
+  border-radius: 10px; overflow: hidden;
+  min-width: 560px;
+}
+.compare th, .compare td {
+  padding: 15px 18px; text-align: left;
+  border-bottom: 1px solid var(--paper-shadow);
+  vertical-align: top; line-height: 1.6;
+}
+.compare th {
+  background: var(--primary-deep); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+}
+.compare tr:last-child td { border-bottom: none; }
+.compare td:first-child { font-weight: 700; color: var(--primary-deep); width: 24%; }
+.compare .id { font-family: var(--font-mono); font-size: 13px; display: block; color: var(--ink-mute); font-weight: 500; margin-bottom: 2px; }
+.compare .yes { color: var(--accent-deep); font-weight: 700; }
+.compare .no { color: var(--danger); font-weight: 700; }
+
+/* ---------- Value cards ---------- */
+.values {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.value-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 26px 24px;
+  border-top: 5px solid var(--primary);
+}
+.value-card:nth-child(2) { border-top-color: var(--accent); }
+.value-card:nth-child(3) { border-top-color: var(--warm); }
+.value-card:nth-child(4) { border-top-color: var(--primary-deep); }
+.value-card:nth-child(5) { border-top-color: var(--stone); }
+.value-card .num {
+  font-family: var(--font-mono);
+  font-size: 38px; font-weight: 700;
+  color: var(--primary); line-height: 1; margin-bottom: 12px;
+}
+.value-card:nth-child(2) .num { color: var(--accent); }
+.value-card:nth-child(3) .num { color: var(--warm); }
+.value-card:nth-child(4) .num { color: var(--primary-deep); }
+.value-card:nth-child(5) .num { color: var(--stone); }
+.value-card .tag {
+  display: inline-block; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--primary); margin-bottom: 10px;
+}
+.value-card:nth-child(2) .tag { color: var(--accent); }
+.value-card:nth-child(3) .tag { color: var(--warm); }
+.value-card:nth-child(4) .tag { color: var(--primary-deep); }
+.value-card h4 { margin: 0 0 10px; font-size: 19px; line-height: 1.4; }
+.value-card p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin: 0; }
+
+/* ---------- 擴充檢查卡（附成本標籤） ---------- */
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px; margin: 40px 0;
+}
+.card {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 12px;
+  padding: 24px 24px 22px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.card .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card h4 { margin: 0; font-size: 18.5px; line-height: 1.4; }
+.card p { margin: 0; font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); }
+.card .signal { font-family: var(--font-mono); font-size: 12.5px; color: var(--primary-deep); background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 6px; padding: 6px 10px; margin-top: 4px; overflow-x: auto; white-space: nowrap; }
+.pill {
+  flex: none; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px;
+}
+.pill.fast { background: var(--accent-bg); color: var(--accent-deep); }
+.pill.mid { background: var(--warm-bg); color: var(--warm-deep); }
+.pill.slow { background: var(--danger-bg); color: var(--danger); }
+
+/* ---------- Thought ---------- */
+.thought {
+  background: var(--accent-bg);
+  border-left: 4px solid var(--accent);
+  padding: 26px 30px; margin: 40px 0;
+  border-radius: 4px; position: relative;
+}
+.thought .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--accent-deep); margin-bottom: 10px;
+}
+.thought h4 { font-size: 19px; margin: 0 0 14px; color: var(--accent-deep); line-height: 1.45; }
+.thought p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin-bottom: 8px; }
+.thought .hint {
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px dashed rgba(13, 82, 54, 0.3);
+  font-size: 14px; color: var(--accent-deep);
+}
+.thought .hint::before { content: "建議方向："; font-weight: 700; }
+
+/* ---------- Code block ---------- */
+.codeblock { margin: 30px 0; }
+.codeblock .file {
+  display: inline-block; font-family: var(--font-mono);
+  font-size: 12px; color: var(--ink-mute);
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow); border-bottom: none;
+  border-radius: 8px 8px 0 0; padding: 7px 14px;
+}
+pre.code {
+  margin: 0; background: var(--code-bg); color: var(--code-ink);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65;
+  padding: 22px 24px; border-radius: 0 10px 10px 10px;
+  overflow-x: auto; tab-size: 2; white-space: pre;
+}
+pre.code.solo { border-radius: 10px; }
+pre.code .c { color: var(--code-mute); }
+pre.code .k { color: var(--code-blue); }
+pre.code .s { color: var(--code-green); }
+pre.code .a { color: var(--code-amber); font-weight: 700; }
+
+/* ---------- Flow（eval 迴圈圖） ---------- */
+.flow { display: flex; align-items: stretch; margin: 40px 0; }
+.flow-step {
+  flex: 1 1 0; min-width: 0;
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow);
+  border-radius: 10px; padding: 18px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.flow-step .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--primary); letter-spacing: 0.1em; }
+.flow-step strong { font-size: 17px; line-height: 1.3; }
+.flow-step span.d { font-size: 14px; line-height: 1.55; color: var(--ink-soft); }
+.flow-step.score { border-color: var(--accent); background: var(--accent-bg); }
+.flow-step.score .k { color: var(--accent-deep); }
+.flow-arrow { flex: none; width: 30px; position: relative; }
+.flow-arrow::before {
+  content: ""; position: absolute; top: 50%; left: 2px; right: 2px; height: 2px;
+  background: var(--primary); transform: translateY(-50%);
+}
+.flow-arrow::after {
+  content: ""; position: absolute; top: 50%; right: 4px; width: 9px; height: 9px;
+  border-top: 2px solid var(--primary); border-right: 2px solid var(--primary);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+/* ---------- Cascade（編號步驟） ---------- */
+.cascade { display: flex; flex-direction: column; gap: 14px; margin: 32px 0; }
+.cascade-step {
+  display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px;
+}
+.cascade-step .n {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-mono); font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.cascade-step .t { font-size: 16.5px; line-height: 1.65; }
+.cascade-step .t strong { display: block; margin-bottom: 2px; }
+
+/* ---------- Checklist ---------- */
+.checklist { list-style: none; padding: 0; margin: 32px 0; display: flex; flex-direction: column; gap: 12px; }
+.checklist li {
+  display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px; margin: 0;
+  font-size: 16.5px; line-height: 1.65;
+}
+.checklist .box {
+  width: 24px; height: 24px; margin-top: 3px;
+  border: 2px solid var(--accent); border-radius: 6px; background: var(--paper);
+}
+.checklist strong { display: block; }
+.checklist small { display: block; color: var(--ink-soft); font-size: 15px; }
+
+/* ---------- Glossary ---------- */
+.glossary { background: var(--primary-deep); color: var(--paper); padding-block: 64px; }
+.glossary h2 { color: var(--paper); margin-top: 0; }
+.glossary .eyebrow { color: var(--accent-bg); }
+.glossary .lede { color: var(--paper); opacity: 0.8; }
+.glossary-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 26px; margin: 42px 0 0;
+}
+.term { border-top: 2px solid var(--accent); padding-top: 16px; }
+.term:nth-child(3n+2) { border-color: var(--warm); }
+.term:nth-child(3n+3) { border-color: var(--paper); }
+.term dt {
+  font-family: var(--font-mono);
+  font-size: 14px; font-weight: 700;
+  color: var(--accent-bg); letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+.term .zh-name { font-family: var(--font-cjk); font-size: 16px; font-weight: 600; color: var(--paper); margin-bottom: 8px; display: block; }
+.term dd { margin: 0; font-family: var(--font-cjk); font-size: 14.5px; line-height: 1.65; color: rgba(255, 255, 255, 0.8); }
+
+/* ---------- TOC ---------- */
+.toc {
+  position: fixed; right: 24px; top: 50%; transform: translateY(-50%); z-index: 10;
+  font-family: var(--font-sans); font-size: 12px;
+  background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 10px;
+  padding: 18px 20px; max-width: 236px;
+  box-shadow: 0 4px 18px rgba(18, 24, 33, 0.08);
+}
+.toc h5 { margin: 0 0 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-mute); }
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc -1; }
+.toc li { margin-bottom: 6px; counter-increment: toc; font-size: 12px; line-height: 1.45; display: flex; gap: 8px; }
+.toc li::before { content: counter(toc, decimal-leading-zero); font-family: var(--font-mono); color: var(--ink-mute); font-size: 10.5px; padding-top: 2px; }
+.toc a { color: var(--ink-soft); text-decoration: none; }
+.toc a:hover { color: var(--primary); }
+@media (max-width: 1340px) { .toc { display: none; } }
+
+/* ---------- Footer ---------- */
+footer {
+  padding-block: 48px 64px;
+  background: var(--paper-soft);
+  text-align: center;
+  font-family: var(--font-cjk);
+  font-size: 13.5px; color: var(--ink-mute);
+}
+footer p { margin: 0 0 8px; }
+footer .credit { font-family: var(--font-sans); }
+footer .disclaimer { margin-top: 14px; font-size: 12px; opacity: 0.75; max-width: 640px; margin-inline: auto; }
+
+/* ---------- 響應式 ---------- */
+@media (max-width: 768px) {
+  body { font-size: 17px; }
+  .hero { padding-block: 56px 42px; }
+  .hero h1 { font-size: 36px; }
+  .hero .lede { font-size: 18px; }
+  h2 { font-size: 27px; }
+  h3 { font-size: 22px; }
+  section { padding-block: 46px; }
+  .lede { font-size: 19px; }
+  .pullquote { font-size: 21px; margin: 34px 0; padding: 24px; }
+  .story { padding: 30px 24px; }
+  .stat-card .big { font-size: 36px; }
+  .flow { flex-direction: column; }
+  .flow-arrow { width: auto; height: 30px; }
+  .flow-arrow::before { top: 2px; bottom: 2px; left: 50%; right: auto; width: 2px; height: auto; transform: translateX(-50%); }
+  .flow-arrow::after { top: auto; bottom: 4px; left: 50%; right: auto; transform: translateX(-50%) rotate(135deg); }
+  .compare td:first-child { width: auto; }
+}
+
+/* ---------- 列印 ---------- */
+@media print {
+  .toc { display: none; }
+  body { font-size: 12pt; }
+  .hero, .glossary {
+    color: var(--ink) !important; background: white !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .glossary h2, .glossary .term dt, .glossary .lede, .glossary .term .zh-name { color: var(--ink) !important; }
+  .glossary .term dd { color: var(--ink-soft) !important; }
+  pre.code { background: #f3f5f8 !important; color: #121821 !important; border: 1px solid #ccd; white-space: pre-wrap; }
+  pre.code .c, pre.code .k, pre.code .s, pre.code .a { color: inherit !important; }
+  section { page-break-inside: avoid; }
+}
+
+/* ---------- 整合版：模式列、圖卡帶、燈箱 ---------- */
+.modebar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; padding: 10px var(--gutter); background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--paper-shadow); font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.modebar .brand { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.modebar .left { display: flex; align-items: center; gap: 14px; }
+.modebar .homelink { font-size: 12px; font-weight: 600; color: var(--ink-mute); text-decoration: none; }
+.modebar .homelink:hover { color: var(--primary); text-decoration: underline; }
+.modebar .switch { display: flex; gap: 6px; }
+.modebar button { font: inherit; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.modebar button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+.modebar button:focus-visible, .cardlabel .zoom:focus-visible, .lightbox .close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.modebar .canvaslink { font-size: 12px; color: var(--ink-mute); }
+.cardband { max-width: 1600px; margin: 4px auto 40px; padding: 0 var(--gutter); }
+.cardlabel { display: flex; align-items: baseline; gap: 14px; padding: 0 2px 8px; font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.cardlabel .n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--warm); }
+.cardlabel .zoom { margin-left: auto; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--paper-shadow); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; font-size: 16px; color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(18, 24, 33, 0.86); display: none; align-items: center; justify-content: center; padding: 24px; }
+.lightbox.open { display: flex; }
+.lightbox .frame { border: none; border-radius: 8px; max-width: none; width: auto; flex: none; }
+.lightbox .close { position: absolute; top: 14px; right: 18px; font: inherit; font-family: var(--font-sans); font-size: 13px; color: #FFFFFF; background: transparent; border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.faq { margin: 36px 0 8px; padding: 0; }
+.faq > div { padding: 18px 0; border-top: 1px solid var(--paper-shadow); }
+.faq > div:last-child { border-bottom: 1px solid var(--paper-shadow); }
+.faq dt { margin: 0 0 6px; font-weight: 700; font-size: 17px; color: var(--ink); }
+.faq dt::before { content: "問"; display: inline-block; margin-right: 10px; padding: 1px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; color: #FFFFFF; background: var(--primary); vertical-align: 2px; }
+.faq dd { margin: 0; font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+body.mode-cards section .prose { display: none; }
+body.mode-cards section.nocard { display: none; }
+body.mode-cards section { padding-block: 44px; }
+body.mode-cards .toc li.nocard { display: none; }
+@media (max-width: 768px) { .cardband { margin-bottom: 32px; } .modebar { font-size: 12px; } }
+@media print {
+  .modebar, .lightbox, .cardlabel .zoom { display: none !important; }
+  body.mode-cards section .prose { display: block !important; }
+  body.mode-cards section.nocard { display: block !important; }
+  section { page-break-inside: auto; }
+  .cardband, .story, .explain, .thought, .stat-grid, .values, .cards, .table-scroll { page-break-inside: avoid; }
+  .frame { height: auto !important; border: none; border-radius: 0; }
+  .frame > div { transform: none !important; zoom: 0.44; }
+}
+
+</style>
+</head>
+<body>
+<div class="modebar">
+  <div class="left"><a class="homelink" href="../../">← 首頁</a><span class="brand">AutoMetrics 2025 · 圖卡 + 教材</span></div>
+  <div class="switch" role="group" aria-label="閱讀模式">
+    <button type="button" data-mode="full" aria-pressed="true">圖卡＋詳解</button>
+    <button type="button" data-mode="cards" aria-pressed="false">只看圖卡</button>
+  </div>
+  <a class="canvaslink" href="cards.html">圖卡連續閱讀版</a>
+</div>
+<nav class="toc" aria-label="目錄">
+  <h5>目錄</h5>
+  <ol>
+    <li class="nocard"><a href="#prologue">第 8 週為什麼讀它</a></li>
+    <li><a href="#problem">缺的是標準</a></li>
+    <li class="nocard"><a href="#related">相關工作</a></li>
+    <li><a href="#pipeline">四個步驟</a></li>
+    <li><a href="#generate">產生候選指標</a></li>
+    <li><a href="#metricbank">指標庫與檢索</a></li>
+    <li><a href="#regress">回歸與報告</a></li>
+    <li class="nocard"><a href="#setup">任務與基線</a></li>
+    <li><a href="#criterion">和人評的相關</a></li>
+    <li><a href="#robustness">擾動測試</a></li>
+    <li><a href="#ablations">設計消融</a></li>
+    <li><a href="#data-needs">要多少人評</a></li>
+    <li><a href="#tau-bench">拿去最佳化 agent</a></li>
+    <li><a href="#takeaways">結論與限制</a></li>
+    <li class="nocard"><a href="#glossary">名詞速查</a></li>
+  </ol>
+</nav>
+<header class="hero">
+  <div class="container">
+    <div class="hero-meta">
+      <span>arXiv · 2025-12-19（v1；ICLR 2026）</span>
+      <span>研究論文（Stanford University、American Express，ICLR 2026）</span>
+      <span>作者 Michael J. Ryan、Yanzhe Zhang、Amol Salunkhe、Yi Chu、Di Xu、Diyi Yang</span>
+    </div>
+    <p class="eyebrow">AUTOMETRICS · EVALUATION · 圖卡＋教材整合版</p>
+    <h1>不到一百筆人評， 長出一組 對齊人的評估指標<span class="accent">AutoMetrics：產生評審標準、 檢索現成指標、 用回歸配出權重</span></h1>
+    <p class="lede">開放式的 AI 應用很難評：旅遊規劃、臨床紀錄、對話都沒有可以直接驗證的答案，手上常常只有使用者按的讚與倒讚。這篇論文的 AutoMetrics 從任務說明和不到 100 筆人評出發，讓 LLM 依好壞例子寫出候選評審，再從 48 個現成指標組成的 MetricBank 檢索，最後用回歸挑出幾個指標、配上權重。作者在五個任務上和 LLM 評審等基線比較與人評的相關，也把產生的指標拿去最佳化一個 τ-bench 的客服 agent。每章開頭先放一張圖解卡講重點，往下是詳細作法；想速讀就切到「只看圖卡」。</p>
+    <dl class="hero-keystat">
+      <div><dt>MetricBank 的現成指標</dt><dd>48<small>個</small></dd></div>
+      <div><dt>人評約到這裡就持平</dt><dd>80<small>筆</small></dd></div>
+      <div><dt>表 2 · <span style="white-space:nowrap">Qwen3-32B</span> 骨幹</dt><dd>5<small>／5 最高</small></dd></div>
+      <div><dt><span style="white-space:nowrap"><span style="text-transform:none">τ</span>-bench</span> · 生成指標</dt><dd>0.720<small>對 0.680</small></dd></div>
+    </dl>
+  </div>
+</header>
+
+
+<section id="prologue" data-toc="第 8 週為什麼讀它" class="nocard">
+  <div class="container">
+    <p class="chapter">Prologue · 整理者的引言</p>
+    <h2><span class="seg">評審該看什麼，</span><span class="seg">可以從少量人評裡學出來</span></h2>
+    <p class="lede">Stanford CS 329Z 第 8 週「LLM-as-Judge &amp; Evaluation Infrastructure」那一講（Evaluation for Agentic Systems 分區），談三種 grader、judge prompt 怎麼設計、已知的偏誤、pairwise 對 pointwise、非確定性的指標（pass@k 對 pass^k）、harness 設計，以及 Anthropic 的八步路線圖。這篇論文是這一講的必讀，它處理評審從哪裡來：人只給得出很少、又說不出原因的訊號時，怎麼做出一組會對齊人的指標。</p>
+
+    <p>同一講的另兩篇必讀是 Anthropic 的〈Demystifying evals for AI agents〉與 MT-Bench 論文（Zheng 等），選讀是 AutoLibra。MT-Bench 那一篇，正是這篇在相關工作裡替 LLM-as-a-Judge 引的出處。論文有六位作者，三位來自 Stanford、三位來自 American Express；整理者對照作者名單：第一作者 Michael J. Ryan 與最後作者 Diyi Yang 就是這門課的講師。</p>
+    <p>論文要解的問題是這樣。數學與寫程式有可以驗證對錯的答案，寫作、旅遊規劃、對話這類開放式任務沒有；人評仍是金標準，但又貴又慢。常見的替代是寫一份 rubric 請 LLM 當評審，前提是你已經知道該看什麼。作者說實務上多半只有讚與倒讚這種說不出原因的訊號，難處在找出背後的標準。AutoMetrics 的做法是讓標準從資料裡長出來：LLM 依好壞例子寫出候選評審，再和現成的指標一起交給回歸挑選、配權重。</p>
+    <p>把這一講的講題對到論文裡的內容，大致如下。這張表是整理者的對照，論文沒有用這些講題分類。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>這一講的講題</th><th>論文裡對應的內容（整理者的對照）</th><th>本頁在哪一章</th></tr></thead>
+        <tbody>
+          <tr><td>三種 grader</td><td>MetricBank 裡有 BLEU、編輯距離這類程式算的指標，也有 reward model、BERTScore 這類模型算的指標；產生出來的是 LLM 評審；人給的訊號是回歸要逼近的目標</td><td>第 4 到 6 章</td></tr>
+          <tr><td>judge prompt 怎麼設計</td><td>四種預設的評審產生法（單一標準、rubric、附範例、MIPROv2 最佳化），附錄 E.2 比了八種；基線用的是原本給標註者的說明</td><td>第 4、7 章</td></tr>
+          <tr><td>已知的偏誤</td><td>引 Tripathi 等人說評審不一定照 rubric 打分；回歸可能抓到假相關；用一個模型產生的指標換到別的模型跑，表現會掉</td><td>第 1、11、13 章</td></tr>
+          <tr><td>pairwise 對 pointwise</td><td>這篇的指標都是逐筆打分（pointwise），再用 Kendall τ 看排名；它引的 Tripathi 等人論文比的就是這兩種回饋方式，但這篇自己沒有比</td><td>第 8 章</td></tr>
+          <tr><td>非確定性的指標</td><td>τ-bench 那張圖的縱軸是平均 pass^1；主表都是 5 次獨立執行的平均加 95% 信賴區間</td><td>第 8、12 章</td></tr>
+          <tr><td>harness 設計</td><td>論文沒有處理；只交代 τ-bench 的 agent 是用 DSPy 寫的 ReAct</td><td>第 12 章</td></tr>
+          <tr><td>Anthropic 的八步路線圖</td><td>論文沒有處理</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>整理者對照參考文獻的補充有三件。第一，第 7 章的 EvalGen 任務出自〈Who Validates the Validators?〉（Shankar 等，2024b），本站整理過那一篇：它讓人一邊評分一邊挑斷言，發現標準會隨評分漂移；這篇的 EvalGen 任務引用那篇的商品描述資料（表 1 寫 100 筆、二元回饋），把好壞評分當成指標要逼近的訊號。第二，論文裡呼叫 LLM 的地方都寫成 DSPy 的 signature（附錄 C.3），產生器之一是 DSPy 內建的 MIPROv2，第 12 章的最佳化器是 GEPA；本站也整理過 DSPy、MIPRO 與 GEPA 三篇，第一作者 Ryan 同時在 MIPRO 與 GEPA 的作者名單上。第三，檢索的第一段用的是 ColBERT，本站也整理過它的論文，不過這篇的參考文獻沒有列 ColBERT。</p>
+    <p>arXiv 上只有 2025 年 12 月 19 日的 v1，PDF 頁首印的是 Preprint；課程書單把它標為 ICLR 2026，會議名的出處寫在頁尾。實驗用的骨幹模型是 GPT-4o-mini 與 Qwen3-32B（推理模式），模型名與結果都是寫作當時的狀況。</p>
+    <p>這一頁怎麼處理論文，也先交代。章節跟著論證走：第 1、2 章是問題與相關工作，第 3 到 6 章是方法的四個步驟（總覽、產生、指標庫與檢索、回歸與報告），第 7 到 11 章是實驗（設定、和人評的相關、擾動測試、設計消融、資料量），第 12 章是拿指標去最佳化 agent 的案例，第 13 章是結論與限制。有兩處合併：第 3.1 節的檢索和附錄 B、E.1 併成第 5 章；第 3.2 節的效度定義拆進第 8、9 章，和各自的實驗放在一起。數字只用正文、表格，以及圖上印出的值，全部依 arXiv v1；表格與圖號照 PDF。論文前後寫法不一致、或摘要的百分比對不上表格的地方，兩邊都寫出來。附錄裡的 prompt 與 signature 寫成教學用的中文精簡版。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>論文的用語</th><th>意思（整理者加的對照）</th><th>這一頁怎麼寫</th></tr></thead>
+        <tbody>
+          <tr><td>metric</td><td>替一筆輸出打分的函式，可以是程式、模型或 LLM 評審</td><td>指標</td></tr>
+          <tr><td>LLM-as-a-Judge</td><td>讓 LLM 依一段說明替輸出打分</td><td>LLM 評審</td></tr>
+          <tr><td>criterion、axis of variation</td><td>用自然語言描述的評分面向；AutoMetrics 讓 LLM 從好壞例子的差異裡找出來</td><td>標準、軸</td></tr>
+          <tr><td>rubric</td><td>寫出每個分數等級長什麼樣的評分說明</td><td>rubric</td></tr>
+          <tr><td>MetricBank、Metric Card</td><td>作者整理的 48 個現成指標；每個指標的說明文件</td><td>MetricBank、指標卡</td></tr>
+          <tr><td>human signal、feedback</td><td>人給的讚與倒讚、Likert 分數、接受或拒絕</td><td>人評、回饋</td></tr>
+          <tr><td>criterion validity、construct validity</td><td>和參考標準的相關；有沒有抓到「品質」這個抽象的東西</td><td>判準效度、構念效度</td></tr>
+          <tr><td>in-distribution、out-of-distribution</td><td>MetricBank 裡有沒有專為這個任務設計的指標</td><td>分布內、分布外</td></tr>
+          <tr><td>verifiable reward</td><td>可以用程式判定對錯的獎勵</td><td>可驗證獎勵</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>先把幾個名詞對齊</h4>
+      <ul>
+        <li><strong>Kendall τ</strong>：比較兩組排名一致的程度。把每一對輸出拿出來看，指標和人評排的先後相同就加分、相反就扣分；1 是完全一致，0 是和亂排差不多，負的是排反了。</li>
+        <li><strong>z 分數</strong>：把一個量減掉平均、再除以標準差。BLEU 在 0 到 1、評審打 1 到 5 分，轉成 z 分數之後才能放在同一個回歸裡。</li>
+        <li><strong>偏最小平方回歸（PLS）</strong>：預測量很多、彼此又高度相關時用的回歸。它先找出一個最能預測目標的方向，把所有預測量投影上去，再沿著這個方向做回歸。</li>
+        <li><strong>reward model</strong>：用大量人類偏好訓練出來、替回應打分的模型；MetricBank 也收了幾個現成的。</li>
+      </ul>
+    </div>
+
+    <div class="pullquote">
+      評估的難處常常不在打分，而在知道該看什麼；這篇讓該看的東西從人評裡長出來。
+      <cite>整理者的引言</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="problem" data-toc="缺的是標準">
+  <div class="container head">
+    <p class="chapter">Chapter 01 · Introduction</p>
+    <h2><span class="seg">只有讚和倒讚時，</span><span class="seg">缺的是那幾條標準</span></h2>
+    <p class="lede">人評貴、reward model 要上千筆標籤、rubric 式的 LLM 評審要你先知道該看什麼；手上多半只有讚與倒讚這種說不出原因的訊號。作者把問題改寫成：先從這些訊號裡找出背後的標準，再組成會對齊人的指標。</p>
+    
+  </div>
+  <div class="cardband" id="card-02"><div class="cardlabel"><span class="n">圖卡 02 / 12</span><span class="t">只有讚與倒讚時，缺的是標準</span><button type="button" class="zoom" data-card="02">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">讚或倒讚說不出原因，指標要從資料裡長出來</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 1 的例子：EvalGen 的商品描述，人只按讚或倒讚。現成的路各有卡住的地方；AutoMetrics 從同一批回饋長出五個加權指標</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 現成的三條路</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 從回饋長出一組指標</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:430px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:160px; top:200px; width:500px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#1C2431;">人的回饋：讚／倒讚，沒寫原因</div>
+
+  <div style="position:absolute; left:70px; top:290px; width:210px; height:92px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:5px;"><div style="font-size:15px; font-weight:700; color:#C8501F;">請人一直評</div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">金標準，但貴、慢，<br>每個原型都要重來</div></div>
+  <div style="position:absolute; left:295px; top:290px; width:210px; height:92px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:5px;"><div style="font-size:15px; font-weight:700; color:#C8501F;">訓練 reward model</div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">通常要上千筆標籤</div></div>
+  <div style="position:absolute; left:520px; top:290px; width:210px; height:92px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:5px;"><div style="font-size:15px; font-weight:700; color:#C8501F;">寫 rubric 請 LLM 評</div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">要先知道該看什麼，<br>也不保證照 rubric 打</div></div>
+
+  <div style="position:absolute; left:120px; top:414px; width:580px; height:66px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">實驗裡的 LLM 評審基線：拿原本給標註者的說明</div><div style="font-size:12.5px; color:#6B7380;">EvalGen 的說明只有一句：「這個回應好（1）還是壞（0）？」（附錄 C.1）</div></div>
+  <div style="position:absolute; left:60px; top:504px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">作者說：rubric 式評審假設系統該有的行為已經定義清楚；<br>實務上多半只有讚與倒讚，難處在先找出真正重要的標準。</div>
+
+  <div style="position:absolute; left:940px; top:200px; width:500px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#1C2431;">同一批讚／倒讚＋任務說明</div>
+  <div style="position:absolute; left:940px; top:270px; width:500px; height:52px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">產生評審、檢索現成指標、回歸配權重</div>
+
+  <div style="position:absolute; left:880px; top:344px; width:640px; height:28px; box-sizing:border-box; border-bottom:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:880px; top:346px; font-size:14px; color:#1C2431; line-height:24px;">避開禁用內容（連結、空泛的詞、缺點）</div>
+  <div style="position:absolute; left:1200px; top:351px; width:200px; height:14px; border-radius:3px; background-color:#B4D5C0;"></div>
+  <div style="position:absolute; left:1414px; top:346px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#2E7B4F; line-height:24px;">26.3%</div>
+
+  <div style="position:absolute; left:880px; top:376px; width:640px; height:28px; box-sizing:border-box; border-bottom:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:880px; top:378px; font-size:14px; color:#1C2431; line-height:24px;">最佳化過的評審 prompt</div>
+  <div style="position:absolute; left:1200px; top:383px; width:179px; height:14px; border-radius:3px; background-color:#B4D5C0;"></div>
+  <div style="position:absolute; left:1414px; top:378px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#2E7B4F; line-height:24px;">23.6%</div>
+
+  <div style="position:absolute; left:880px; top:408px; width:640px; height:28px; box-sizing:border-box; border-bottom:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:880px; top:410px; font-size:14px; color:#1C2431; line-height:24px;">語氣與口吻（rubric）</div>
+  <div style="position:absolute; left:1200px; top:415px; width:151px; height:14px; border-radius:3px; background-color:#B4D5C0;"></div>
+  <div style="position:absolute; left:1414px; top:410px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#2E7B4F; line-height:24px;">19.9%</div>
+
+  <div style="position:absolute; left:880px; top:440px; width:640px; height:28px; box-sizing:border-box; border-bottom:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:880px; top:442px; font-size:14px; color:#1C2431; line-height:24px;">搜尋引擎最佳化</div>
+  <div style="position:absolute; left:1200px; top:447px; width:116px; height:14px; border-radius:3px; background-color:#B4D5C0;"></div>
+  <div style="position:absolute; left:1414px; top:442px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#2E7B4F; line-height:24px;">15.3%</div>
+
+  <div style="position:absolute; left:880px; top:472px; width:640px; height:28px; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:880px; top:474px; font-size:14px; color:#1C2431; line-height:24px;">附範例的評審</div>
+  <div style="position:absolute; left:1200px; top:479px; width:113px; height:14px; border-radius:3px; background-color:#B4D5C0;"></div>
+  <div style="position:absolute; left:1414px; top:474px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#2E7B4F; line-height:24px;">14.9%</div>
+
+  <div style="position:absolute; left:840px; top:514px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">百分比是圖 1 印的相對重要性，由回歸係數換算，五個加起來 100%；<br>每個指標都附一段說明，看得出它在量什麼。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#C8501F;">LLM 評審：0.161／0.272</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">表 2 的 EvalGen 欄（Kendall τ，<span style="white-space:nowrap">GPT-4o-mini</span>／<span style="white-space:nowrap">Qwen3-32B</span> 當骨幹）：<br>拿原本那一句說明直接打分。</div>
+    <div style="font-size:13px; color:#8A93A0;">5 次獨立執行的平均；τ 接近 0，代表排名和亂排差不多。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#2E7B4F;">AutoMetrics：0.334／0.382</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">同一欄、同樣兩個骨幹：從不到 100 筆人評長出的<br>一組加權指標，排名更接近人評。</div>
+    <div style="font-size:13px; color:#8A93A0;">摘要說比 LLM 評審最多高 33.4%；和表 2 怎麼對，見第 07 卡。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：✗／✓ 依第 1 節對現成做法的批評；圖 1 是其中一次產出的指標，表 2 是 5 次平均；指標的中文名是整理者譯的。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M410 248L175 288" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c02)"></path>
+    <path d="M410 248L400 288" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c02)"></path>
+    <path d="M410 248L625 288" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c02)"></path>
+    <path d="M625 382L625 412" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1190 248L1190 268" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1190 322L1190 342" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c02)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>引言從一個落差講起。大型模型能拿去做幾乎任何任務，從旅遊規劃到程式補全，原型很快就做得出來，速度遠比社群替新任務設計專用指標快（作者引的是 BLEU、ROUGE、SARI 這幾篇指標論文）。數學與寫程式有容易驗證的獎勵，寫作這類主觀、開放的任務卻很難量；對這些任務，人評仍是金標準。</p>
+    <p>人評的問題是貴、慢，也沒辦法替每個原型、每群使用者都做一次。reward model 是一種替代，但通常要上千筆標籤。更常見的替代是 rubric 式的 LLM-as-a-Judge：把評分標準寫成 rubric，請 LLM 照著打。作者點出兩個問題：它假設系統該有的行為已經定義清楚，而且評審不保證嚴格照 rubric 打分（作者引 Tripathi 等人）。實務上，從業者手上往往只有說不出原因的訊號，例如使用者按的讚或倒讚；這時要做的不只是寫出 rubric，還得先找出真正重要的標準。引言這樣描述這件事：</p>
+
+    <div class="quote-en">
+      "not only formulating the rubric, but also discovering the underlying criteria that matter"
+      <span class="zh">「不只是寫出 rubric，還要找出真正重要的標準」：引言描述只有讚與倒讚時的難處。</span>
+    </div>
+
+    <p>作者由此主張評估本身要能適應：不只靠人評或固定的 rubric，而是依任務學出指標。已有的研究多半在讓 LLM 更會評特定標準，或拿 rubric 去最佳化模型；自動產生 rubric 與標準、並讓它們對齊人評的工作相對少，作者列了 RUBICON、VibeCheck，以及第一作者自己的 SynthesizeMe。作者說這種能適應的評估，不只讓新任務好評，也讓系統能依使用者的即時回饋最佳化。</p>
+    <p>AutoMetrics 就是在做這件事：把稀疏、說不出原因的人類回饋，變成能拿來行動、也看得懂的評估器。它從一份任務說明與不到 100 筆人類訊號出發，合成候選標準、檢索並改用現成的指標，再用回歸組成預測品質的量。作者強調它不只找出標準，還替標準找依據、配上權重，所以產出的指標既能預測人評，也看得出在量什麼。引言預告了三個結果：和人評的 Kendall 相關比 LLM 評審最多高 33.4%（第 8 章會拿表 2 核對這個數字）、大約 80 筆回饋就夠（第 11 章）、拿來最佳化下游系統時追得上可驗證獎勵（第 12 章）。工具開源在 GitHub 的 SALT-NLP/autometrics。</p>
+    <p>圖 1 用一個例子說明（第 02 卡）。資料是 EvalGen 的商品描述：LLM 依商品資料與顧客評論寫出描述，人只給讚或倒讚。AutoMetrics 產出五個指標，旁邊印著由回歸係數換算的相對重要性：避開禁用內容（不放連結、不用空泛的詞、不提商品缺點）26.3%、一個最佳化過的評審 prompt 23.6%、語氣與口吻的 rubric 19.9%、搜尋引擎最佳化 15.3%、一個附範例的評審 14.9%，五個加起來是 100%（整理者核對）。實驗裡拿來比較的 LLM 評審，用的是原本給標註者的說明；以 EvalGen 來說，那份說明只有一句「這個回應好（1）還是壞（0）？」（附錄 C.1）。</p>
+
+    <div class="explain stone">
+      <span class="label">整理者的讀法</span>
+      <h4>同一句說明，人和 LLM 讀到的東西不一樣</h4>
+      <p>如果給人的說明只有「好還是壞」一句，真正的標準就留在標註者心裡，沒有寫下來；LLM 評審拿到的也只有那一句。AutoMetrics 產出的五個指標，可以看成把那些沒寫下來的標準攤開：禁用內容、語氣、搜尋引擎最佳化，各有一段說明與一個權重。這一段是整理者的讀法，論文沒有這樣說。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="related" data-toc="相關工作" class="nocard">
+  <div class="container">
+    <p class="chapter">Chapter 02 · Related Work</p>
+    <h2><span class="seg">組合指標與生成標準，</span><span class="seg">以前是分開的兩條線</span></h2>
+    <p class="lede">相關工作分兩條：一條整理現成指標，讓人好用或把它們組合起來，最接近的是用回歸組合指標的 MetaMetrics；另一條讓 LLM 當評審，最接近 AutoMetrics 評審步驟的是 DnA-Eval 與 EvalGen。作者主張，替新任務產生指標才是低資料、新任務情境的關鍵。</p>
+
+    <p><strong>指標集合。</strong>先前的指標集合主要是為了讓從業者好用。已經在用 PyTorch 或 Hugging Face 的人，可以直接用 TorchMetrics 或 Hugging Face 的 lighteval；scikit-learn 的指標與 NLTK 的指標也是同樣的用意。作者說這些集合裡的文字生成指標，MetricBank 全部都有。另一種指標集合附在機器學習的觀測平台裡，例如 Evidently、Galileo、Scorecard.io、DeepEval；這些指標大多和平台綁在一起，只有 Evidently 與 DeepEval 有開源版。DeepEval 有推薦指標的功能，但它是一棵事先定好的問題樹，問的是「你的應用有沒有用檢索增強生成」「安全是不是優先考量」這類問題。</p>
+    <p>作者說最接近的是 MetaMetrics：它對多個任務專用的指標做回歸，替影像描述、摘要這類任務挑出最好的組合。作者在第 4 節把它當基線，並說比較的結果顯示，替新任務產生指標在低資料、新任務的情境裡是關鍵（第 8 章的表 2 裡，MetaMetrics 在 EvalGen 與 CoGym 是負的）。</p>
+    <p><strong>LLM 評估。</strong>LLM 能力變強之後，LLM-as-a-Judge 越來越普遍。有一批研究替特定任務設計評審 prompt：說故事、摘要、對話、知識、翻譯等。另一批研究想讓 LLM 評審更可靠：G-Eval 把評估拆成一步步的思路鏈，再用產生各個分數的機率做加權；ChatEval 讓多個 agent 辯論，模擬多種觀點；SPADE 依標好的好壞例子，產生讓 LLM 驗證的斷言；VERDICT 把判斷拆成推理、驗證、辯論、彙整這些可以組合的單位，在評審時加算力。作者說 AutoMetrics 的 LLM 評審步驟借了這些做法，最接近的是 DnA-Eval 與 EvalGen：DnA-Eval 把評估拆成幾條 rubric 標準再彙整；EvalGen 向人收少量回饋，據此提出評估標準，再讓人與 LLM 一起反覆修改。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>研究線</th><th>代表工作</th><th>和這篇的關係（依第 2 節）</th></tr></thead>
+        <tbody>
+          <tr><td>程式庫裡的指標集合</td><td>TorchMetrics、lighteval、scikit-learn、NLTK</td><td>文字生成的指標 MetricBank 都收了；它們不替你挑指標</td></tr>
+          <tr><td>觀測平台的指標</td><td>Evidently、Galileo、Scorecard.io、DeepEval</td><td>多半和平台綁在一起；DeepEval 的推薦是一棵固定的問題樹</td></tr>
+          <tr><td>用回歸組合指標</td><td>MetaMetrics</td><td>最接近的前例；第 8 章當基線</td></tr>
+          <tr><td>讓 LLM 評審更可靠</td><td>G-Eval、ChatEval、SPADE、VERDICT</td><td>AutoMetrics 的評審步驟借了這些做法</td></tr>
+          <tr><td>拆解標準、向人要回饋</td><td>DnA-Eval、EvalGen</td><td>和 AutoMetrics 的評審步驟最像；DnA-Eval 也是第 8 章的基線</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>把兩條線放在一起看，MetaMetrics 會組合，但組合的是現成指標；DnA-Eval 與 EvalGen 會產生標準，但不從現成指標裡挑、也不用回歸配權重。AutoMetrics 兩件事都做，再加上一步檢索。這一段是整理者對第 2 節的歸納，論文沒有這樣排。</p>
+  </div>
+</section>
+
+
+<section id="pipeline" data-toc="四個步驟">
+  <div class="container head">
+    <p class="chapter">Chapter 03 · The AutoMetrics Method</p>
+    <h2><span class="seg">四個步驟：</span><span class="seg">先放大候選，</span><span class="seg">再收斂成幾個</span></h2>
+    <p class="lede">AutoMetrics 要替主觀、新的任務做出和人評高度相關的指標，同時只收很少的資料。流程分四步：產生、檢索、回歸、報告；每一步都有幾種做法可選，作者用實驗挑過。</p>
+    
+  </div>
+  <div class="cardband" id="card-03"><div class="cardlabel"><span class="n">圖卡 03 / 12</span><span class="t">四個步驟：先放大候選，再收斂</span><button type="button" class="zoom" data-card="03">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">四個步驟：先把候選放大，再收斂成幾個</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3 節與圖 2：從任務說明與不到 100 筆人評出發，產生新的評審、檢索現成指標，再用回歸挑出幾個配上權重，最後寫成報告</div>
+
+  <div style="position:absolute; left:60px; top:132px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;"><span style="letter-spacing:0.12em">AUTOMETRICS</span> &#183; 預設設定下，每一步留下幾個</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:310px; height:120px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">Step 1　產生</div>
+    <div style="margin-top:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#2E7B4F; line-height:1.2;">17</div>
+    <div style="margin-top:2px; font-size:12.5px; color:#6B7380; line-height:1.45;">個候選：10 單一標準、5 rubric、<br>1 附範例、1 MIPROv2</div>
+  </div>
+  <div style="position:absolute; left:60px; top:292px; width:310px; height:120px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">MetricBank　現成指標</div>
+    <div style="margin-top:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#1C2431; line-height:1.2;">48</div>
+    <div style="margin-top:2px; font-size:12.5px; color:#6B7380; line-height:1.45;">個自然語言生成常用的指標，<br>每個附一張指標卡</div>
+  </div>
+
+  <div style="position:absolute; left:450px; top:226px; width:310px; height:120px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">Step 2　檢索</div>
+    <div style="margin-top:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#1C2431; line-height:1.2;">k＝30</div>
+    <div style="margin-top:2px; font-size:12.5px; color:#6B7380; line-height:1.45;">ColBERT 先篩到 k′ 張卡，<br>LLM 再挑出最相關的 k 個</div>
+  </div>
+  <div style="position:absolute; left:840px; top:226px; width:310px; height:120px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">Step 3　回歸</div>
+    <div style="margin-top:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#1C2431; line-height:1.2;">n＝5</div>
+    <div style="margin-top:2px; font-size:12.5px; color:#6B7380; line-height:1.45;">PLS 依權重取前 n 個再擬合，<br>刪掉係數為負的生成指標</div>
+  </div>
+  <div style="position:absolute; left:1230px; top:226px; width:310px; height:120px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#FFFFFF;">Step 4　報告</div>
+    <div style="margin-top:4px; font-size:17px; font-weight:700; color:#FFFFFF; line-height:1.4;">權重、和人評的相關、<br>每個指標的說明</div>
+    <div style="margin-top:4px; font-size:12.5px; color:rgba(255,255,255,0.75);">相關不顯著（p &gt; 0.05）時加警告</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:436px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">每一步都比過</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">產生器的組合在附錄 E.2 比了八種，檢索法在附錄 E.1 比了七種，指標庫的組成與 k、n 在表 3；k′ 論文沒有給數字。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:514px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:532px; font-size:20px; font-weight:700; color:#1C2431;">三個步驟，各解一個問題</div>
+
+  <div style="position:absolute; left:60px; top:574px; width:470px; height:226px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">① 產生：補上新任務的空缺</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.65;">分布外的任務沒有專門的指標，<br>先讓 LLM 依好壞例子寫出評審；<br>涵蓋得廣，後面才有東西可篩。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">資料少於 80 筆時只用產生的，<br>不放 MetricBank（第 10 卡）。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:574px; width:470px; height:226px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">② 檢索：不必每個都跑一遍</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.65;">直接在資料上跑所有指標太貴；<br>把指標卡當文件、任務說明當查詢，<br>先挑出 k 個再跑。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">預設下是 65 個候選挑 30 個；<br>65＝17＋48 是整理者加的。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:574px; width:470px; height:226px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">③ 回歸：誰留下、各佔多少</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.65;">在訓練集的人評上擬合 PLS，<br>留下的指標與權重寫進報告，<br>人看得到每個指標在量什麼。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">圖 2 的旅遊規劃例子：<br>在地文化融入 24.8%、在地體驗 20.4%。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：17 是整理者把預設的 10＋5＋1＋1 加起來的；k＝30、n＝5 取自表 3 的圖說；產生與指標庫疊在同一欄，是因為兩者一起送進檢索。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M372 220L448 270" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M372 352L448 302" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M762 286L838 286" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1152 286L1228 286" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>圖 2 用一個旅遊規劃的例子把四步串起來。左邊是人評過的資料，每一筆旅遊規劃有一個 1 到 5 的分數。第一步產生新的評審，例如「實際考量」「在地文化融入的 rubric」「住宿選項」「安全與健康考量」「具體與細節的 rubric」；旁邊的 MetricBank 提供現成的指標，例如 INFORM 與 LDL 兩個 reward model、SummaQA、Toxicity。第二步從兩邊一起檢索出最相關的 k 個，圖上註明每個指標都有文件幫助檢索。第三步在人評過的訓練資料上做 PLS 回歸，留下前 n 個並配上權重：在地文化融入 24.8%、在地體驗 20.4%、住宿選項 19.5%、INFORM reward model 17.8%、具體與細節 17.5%，加起來是 100%（整理者核對）。第四步把結果寫成一份「旅遊規劃指標」的報告。</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>產生（Generate）</strong>依任務說明與好壞例子，產生任務專用的候選指標：單一標準的評審、rubric、附範例的評審、用 MIPROv2 最佳化過的評審（第 4 章）。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>檢索（Retrieve）</strong>從產生的候選加上 MetricBank 裡，先用 ColBERT 篩出 k′ 張指標卡，再由 LLM 挑出最後的 k 個（第 5 章）。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>回歸（Regress）</strong>在訓練集上擬合 PLS 模型，替指標配權重、挑出能預測人評的那幾個（第 6 章）。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>報告（Report）</strong>寫出權重、和人評的相關，以及幫助採用的細節（第 6 章）。</div></div>
+    </div>
+
+    <p>預設設定下的數量是這樣：每跑一次產生 10 個單一標準的評審、5 個 rubric、1 個附範例的評審、1 個最佳化過的評審，加起來 17 個（整理者加的）；MetricBank 有 48 個；檢索留下 k＝30 個，回歸留下 n＝5 個（這兩個預設值取自表 3 的圖說與第 4.5 節）。圖說裡的 k′ 是 ColBERT 先篩的數量，論文沒有給數字。第 11 章會看到另一個預設：訓練用的人評少於 80 筆時，只用產生的指標，不放 MetricBank。</p>
+    <p>作者說每一步都有幾種可選的做法，全部在第 4.5 節與附錄 E 用實驗比過：產生器的組合在附錄 E.2、檢索法在附錄 E.1、指標庫的組成與 k、n 在表 3。後面三章各講一步，第 10 章再回頭看這些比較。</p>
+  </div>
+</section>
+
+
+<section id="generate" data-toc="產生候選指標">
+  <div class="container head">
+    <p class="chapter">Chapter 04 · Metric Production: Generate · Appendix E.2</p>
+    <h2><span class="seg">標準先求涵蓋廣，</span><span class="seg">之後再篩掉不重要的</span></h2>
+    <p class="lede">任務夠新時，現成的指標不夠用，得讓 LLM 產生評審。預設每跑一次產生 10 個單一標準、5 個 rubric、1 個附範例、1 個最佳化過的評審；涵蓋面廣，後面的步驟才有東西可篩。</p>
+    
+  </div>
+  <div class="cardband" id="card-04"><div class="cardlabel"><span class="n">圖卡 04 / 12</span><span class="t">從好壞例子找出評分的軸</span><button type="button" class="zoom" data-card="04">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">從好壞例子找出評分的軸，再寫成一池評審</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.1 節與附錄 E.2：預設每跑一次產生 10 個單一標準、5 個 rubric、1 個附範例、1 個 MIPROv2 最佳化過的評審，每個附一張指標卡</div>
+
+  <div style="position:absolute; left:560px; top:150px; width:480px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">任務說明＋人評過的好壞例子</div><div style="margin-top:3px; font-size:12.5px; color:rgba(255,255,255,0.75);">訓練集裡分數高與分數低的輸出</div></div></div>
+
+  <div style="position:absolute; left:80px; top:300px; width:300px; height:92px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="display:flex; align-items:baseline; justify-content:space-between;"><div style="font-size:15px; font-weight:700; color:#1C2431;">單一標準 × 10</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.1em; color:#8A93A0;">CHEAP</div></div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">LLM 比較好壞例子，列出差異的軸；<br>每條軸一個 1 到 5 分的評審</div></div>
+  <div style="position:absolute; left:460px; top:300px; width:300px; height:92px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="display:flex; align-items:baseline; justify-content:space-between;"><div style="font-size:15px; font-weight:700; color:#1C2431;">Rubric × 5</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.1em; color:#8A93A0;">CHEAP</div></div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">同樣找出軸，再請 LLM 寫出<br>1 到 5 分各長什麼樣</div></div>
+  <div style="position:absolute; left:840px; top:300px; width:300px; height:92px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="display:flex; align-items:baseline; justify-content:space-between;"><div style="font-size:15px; font-weight:700; color:#1C2431;">附範例 × 1</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.1em; color:#C8501F;">COSTLY</div></div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">人評例子分五等份抽樣放進 prompt；<br>試 5 組，留最接近人評的那組</div></div>
+  <div style="position:absolute; left:1220px; top:300px; width:300px; height:92px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="display:flex; align-items:baseline; justify-content:space-between;"><div style="font-size:15px; font-weight:700; color:#1C2431;">MIPROv2 × 1</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.1em; color:#C8501F;">COSTLY</div></div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">DSPy 的最佳化器改寫評審 prompt、<br>挑例子（auto_mode＝medium）</div></div>
+
+  <div style="position:absolute; left:560px; top:440px; width:480px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">候選指標池：每個附一張指標卡</div><div style="margin-top:3px; font-size:12.5px; color:rgba(255,255,255,0.75);">說明、預期用途、實作細節、限制（附錄 B）</div></div></div>
+
+  <div style="position:absolute; left:60px; top:530px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">便宜與昂貴</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">單一標準與 rubric 便宜，一次產生多個；附範例與 MIPROv2 要花較多 LLM 呼叫與 token，各一個。四個框都是實線：組合是事先定好的。附錄 E.2 共比了八種產生法，這四種是預設組合。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:620px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">軸：從差異裡找標準</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">GenerateAxisOfVariation 給 LLM 任務說明與好、壞例子，<br>請它依重要性列出能解釋差異的軸，<br>每條附一句說明（附錄 C.3）。</div>
+    <div style="font-size:13px; color:#8A93A0;">τ-bench 的案例把單一標準加到 20 個、rubric 加到 8 個。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:620px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">八種產生法的平均 Kendall τ</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">Qwen3 32B：附範例 0.323、MIPROv2 0.287、<br>單一標準 0.281；GPT-4o Mini：MIPROv2 0.456、<br>DSPy 版 rubric 0.434、單一標準 0.426。</div>
+    <div style="font-size:13px; color:#8A93A0;">表 8、表 9 的最後一列；CodeGen 與微調在兩個骨幹都墊底。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:620px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">每個產生的指標也附一張卡</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">寫明說明、預期用途、實作細節與限制；<br>檢索時，卡片就是文件（第 05 卡）；<br>指標庫的 48 張也照同一個範本寫。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說這個組合在各種領域與任務都推廣得不錯。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：數量是第 3.1 節的預設；表 8 的 31 列對應註腳說的「將近 30 種設定」；第 3.1 節沒說預設的 rubric 是表上哪一版。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M680 216L230 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M760 216L610 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M840 216L990 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M920 216L1370 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M230 394L680 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M610 394L760 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M990 394L840 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1370 394L920 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 3.1 節的理由很短：對夠新的情境，產生 LLM 評審用的標準是必要的，標準涵蓋得廣，之後才能篩到最重要的。最佳化過的評審要花較多 LLM 呼叫與 token 才做得出來，單一標準與 rubric 相對便宜，所以便宜的一次產生多個、昂貴的各產生一個。作者說這個組合在各種領域與任務上都推廣得不錯，論文裡除非另外說明都用它；註腳說這些設計在將近 30 種設定上驗證過，細節在附錄 E.2。每個產生出來的指標也會附一張指標卡，寫明說明、預期用途、實作細節與限制（第 5 章）。</p>
+    <p>單一標準的評審是這樣來的：給 LLM 分數高與分數低的例子，請它提出「差異的軸」，每一條軸各自成為一個指標，評審對它輸出 1 到 5 的整數分。rubric 多一步，請 LLM 替每條軸寫出 1 到 5 分各該長什麼樣。附錄 C.3 列出這些步驟用的 DSPy signature，下面是其中三個的精簡版：</p>
+
+    <div class="codeblock">
+      <span class="file">附錄 C.3 的三個 signature · 精簡改寫成中文</span>
+<pre class="code"><span class="c"># GenerateAxisOfVariation：從好壞例子找出評分的軸</span>
+輸入  task_description      任務說明
+      target_name           想預測的人評欄位（可以是 None 或「quality」這種泛稱）
+      good_examples         人評高的輸出
+      bad_examples          人評低的輸出
+      num_axes_to_generate  要幾條軸
+輸出  axes_of_variation     依重要性排序，每條寫成「<span class="a">**軸的名稱**</span> 一句說明」
+
+<span class="c"># GenerateRubricSignature：替一條軸寫 1 到 5 分的 rubric</span>
+輸入  任務說明、好例子、壞例子、指標名稱、指標說明
+輸出  score_one_description … score_five_description
+
+<span class="c"># LLMAsAJudgeSignature：拿一條軸去替一筆輸出打分</span>
+輸入  text、task_description、measure、suggested_range
+輸出  score</pre>
+    </div>
+
+    <p>另外兩種預設的產生器比較貴。附範例的評審把人評過的例子依分數分成五等份，依評審的脈絡長度決定每一等份抽幾筆，試 5 組隨機抽出、分布平均的例子，挑出在訓練集上離人評平均距離最小的那一組放進 prompt。MIPROv2 則用 DSPy 的 MIPROv2 最佳化器（auto_mode 設為 medium），在提供的資料上產生有資訊量的例子、改寫評審 prompt。</p>
+    <p>附錄 E.2 一共比了八種產生法，五種便宜、三種昂貴。便宜的一次產生 10 個指標，昂貴的一次產生 1 個（微調例外，也產生 10 個）；每種產生法在固定的訓練集上產生指標，再在固定的驗證集上量它們和人評的 Kendall τ，各跑 5 次。表 8 用 Qwen3 32B，表 9 用 GPT-4o Mini，最後一列是平均：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>附錄 E.2 · 產生法</th><th>怎麼做</th><th>表 8 平均<br>Qwen3 32B</th><th>表 9 平均<br>GPT-4o Mini</th></tr></thead>
+        <tbody>
+          <tr><td>CodeGen（便宜）</td><td>從好壞例子提出軸，再寫成一小段可以執行的 Python 打分函式；出錯時請 LLM 修一次</td><td>0.159</td><td>0.237</td></tr>
+          <tr><td>G-Eval（便宜）</td><td>把軸寫成評估步驟，評審先寫理由再給 1 到 5 分，用分數的機率算期望值</td><td>0.206</td><td>0.411</td></tr>
+          <tr><td>單一標準（便宜，預設）</td><td>每條軸一個評審，輸出 1 到 5 的整數分</td><td>0.281</td><td>0.426</td></tr>
+          <tr><td>Rubric（DSPy，便宜）</td><td>單一標準再加上 1 到 5 分的說明</td><td>0.263</td><td>0.434</td></tr>
+          <tr><td>Rubric（Prometheus，便宜）</td><td>從資料例子合成五級 rubric，交給 Prometheus 這類專門的評審模型打分</td><td>0.276</td><td>0.398</td></tr>
+          <tr><td>微調（昂貴）</td><td>在 ModernBERT-Large 上用 LoRA 訓練一個回歸頭，直接預測分數</td><td>0.108</td><td>0.184</td></tr>
+          <tr><td>附範例（昂貴，預設）</td><td>分五等份抽例子放進評審 prompt，挑最接近人評的一組</td><td>0.323</td><td>0.379</td></tr>
+          <tr><td>MIPROv2（昂貴，預設）</td><td>用 DSPy 的最佳化器改寫評審 prompt、挑例子</td><td>0.287</td><td>0.456</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>第 3.1 節的預設只寫「rubric」，沒有說是表上兩版的哪一版；附錄 C.3 產生 rubric 的是一個 DSPy signature。從平均看（整理者從兩張表讀的）：在 Qwen3 32B 上，附範例 0.323 最高，MIPROv2、單一標準、兩版 rubric 接在後面，都排在前五；在 GPT-4o Mini 上，MIPROv2 0.456 最高，DSPy 版的 rubric 與單一標準接在後面，附範例掉到第六。寫程式的 CodeGen 與微調的 ModernBERT 在兩個骨幹都墊底。論文沒有逐一說明為什麼不選 G-Eval，這裡不替作者補理由。</p>
+
+    <div class="explain stone">
+      <span class="label">對表核對</span>
+      <h4>兩個小地方</h4>
+      <p>註腳說預設組合在「將近 30 種設定」上驗證過；表 8 列了 31 種任務與評估面向的組合，表 9 列了 12 種。另外，兩張表裡 EvalGenProduct 與 EvalGenMedical 兩列的每一個數字都相同，論文沒有說明。以上是整理者對照表格的觀察。</p>
+    </div>
+
+    <div class="thought">
+      <span class="label">思考題 · 01</span>
+      <h4>如果只給 LLM 看好壞例子，它找得到你在乎的那條軸嗎？</h4>
+      <p>挑你手上一個 LLM 功能，各找五筆使用者滿意與不滿意的輸出。</p>
+      <p class="hint">先自己寫下你認為的差異，再把同樣的例子交給 LLM，請它依重要性列出幾條「差異的軸」。對不上的地方，可能是你沒寫下來的標準，也可能是例子太少、LLM 抓到了巧合的差異；第 11 章會看到作者說資料少時假相關的風險。這個練習是整理者依附錄 C.3 設計的。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="metricbank" data-toc="指標庫與檢索">
+  <div class="container head">
+    <p class="chapter">Chapter 05 · Metric Production: Retrieve · Appendix B, E.1</p>
+    <h2><span class="seg">每個指標附一張卡，</span><span class="seg">檢索才找得到它</span></h2>
+    <p class="lede">MetricBank 收了 48 個自然語言生成常用的指標，每個都實作好、寫好一張指標卡。全部跑一遍太貴，所以把指標卡當文件、任務說明當查詢，先用 ColBERT 篩、再請 LLM 挑出最相關的 k 個。</p>
+    
+  </div>
+  <div class="cardband" id="card-05"><div class="cardlabel"><span class="n">圖卡 05 / 12</span><span class="t">指標卡讓檢索找得到</span><button type="button" class="zoom" data-card="05">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">每個指標附一張卡，檢索才找得到它</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">附錄 B、D 與第 3.1 節：MetricBank 的 48 個指標都寫成一張指標卡；檢索時卡片就是文件、任務說明就是查詢</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:440px; height:370px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:10px;"></div>
+  <div style="position:absolute; left:80px; top:164px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;"><span style="letter-spacing:0.12em">METRICBANK</span> &#183; 48 個指標</div>
+  <div style="position:absolute; left:80px; top:192px; font-size:14px; font-weight:700; color:#1C2431;">要參考答案 &#183; 29</div>
+  <div style="position:absolute; left:80px; top:218px; width:400px; display:flex; flex-wrap:wrap; gap:8px;">
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">n-gram 重疊 11</div>
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">編輯距離 8</div>
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">語言模型回歸 5</div>
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">嵌入相似度 3</div>
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">分布差異 2</div>
+  </div>
+  <div style="position:absolute; left:80px; top:294px; font-size:14px; font-weight:700; color:#1C2431;">不用參考答案 &#183; 19</div>
+  <div style="position:absolute; left:80px; top:320px; width:400px; display:flex; flex-wrap:wrap; gap:8px;">
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">語言模型回歸 7</div>
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">分類器 6</div>
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">嵌入相似度 2</div>
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">多樣性 2</div>
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">規則 1</div>
+    <div style="padding:3px 10px; border:1px solid #D5DAE1; border-radius:999px; font-size:13px; color:#2B3340; background-color:#F7F8FA;">流暢度 1</div>
+  </div>
+  <div style="position:absolute; left:80px; top:404px; width:400px; height:44px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#2E7B4F;">展開的例子：BLEU · n-gram 重疊 · 要參考答案</div>
+  <div style="position:absolute; left:80px; top:466px; width:400px; font-size:12.5px; color:#6B7380; line-height:1.5;">來源：調查整理出的 28 個、程式庫 12 個、<br>近期論文 8 個（附錄 B、B.1）</div>
+
+  <div style="position:absolute; left:505px; top:402px; width:66px; text-align:center; font-size:12.5px; color:#8A93A0;">展開</div>
+
+  <div style="position:absolute; left:580px; top:150px; width:500px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:17px; font-weight:700; color:#FFFFFF;">一張指標卡的七個部分 · 以 BLEU 為例</div>
+  <div style="position:absolute; left:580px; top:198px; width:500px; height:342px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:12px 20px; display:flex; flex-direction:column; gap:2px;">
+    <div style="height:44px; display:flex; align-items:center; gap:12px;"><div style="width:24px; height:24px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#FFFFFF;">1</div><div><div style="font-size:14px; font-weight:700; color:#1C2431;">指標細節</div><div style="font-size:12px; color:#6B7380;">0 到 1、越高越好、要參考答案、不用輸入</div></div></div>
+    <div style="height:44px; display:flex; align-items:center; gap:12px;"><div style="width:24px; height:24px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#FFFFFF;">2</div><div><div style="font-size:14px; font-weight:700; color:#1C2431;">預期用途</div><div style="font-size:12px; color:#6B7380;">適合翻譯、摘要；不建議用在對話、說故事</div></div></div>
+    <div style="height:44px; display:flex; align-items:center; gap:12px;"><div style="width:24px; height:24px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#FFFFFF;">3</div><div><div style="font-size:14px; font-weight:700; color:#1C2431;">實作</div><div style="font-size:12px; color:#6B7380;">SacreBLEU、NLTK、Hugging Face evaluate；計算很快</div></div></div>
+    <div style="height:44px; display:flex; align-items:center; gap:12px;"><div style="width:24px; height:24px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#FFFFFF;">4</div><div><div style="font-size:14px; font-weight:700; color:#1C2431;">已知限制</div><div style="font-size:12px; color:#6B7380;">懲罰意思相同的改寫；長度懲罰可能錯殺短輸出</div></div></div>
+    <div style="height:44px; display:flex; align-items:center; gap:12px;"><div style="width:24px; height:24px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#FFFFFF;">5</div><div><div style="font-size:14px; font-weight:700; color:#1C2431;">相關指標</div><div style="font-size:12px; color:#6B7380;">ROUGE、METEOR、BERTScore</div></div></div>
+    <div style="height:44px; display:flex; align-items:center; gap:12px;"><div style="width:24px; height:24px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#FFFFFF;">6</div><div><div style="font-size:14px; font-weight:700; color:#1C2431;">延伸閱讀</div><div style="font-size:12px; color:#6B7380;">原論文、SacreBLEU 的說明與教學文章</div></div></div>
+    <div style="height:44px; display:flex; align-items:center; gap:12px;"><div style="width:24px; height:24px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#FFFFFF;">7</div><div><div style="font-size:14px; font-weight:700; color:#1C2431;">卡片作者</div><div style="font-size:12px; color:#6B7380;">Michael J. Ryan；註明有生成式 AI 協助起草</div></div></div>
+  </div>
+
+  <div style="position:absolute; left:1140px; top:148px; font-size:13px; font-weight:700; color:#4B5866;">誰寫卡片，誰讀卡片</div>
+  <div style="position:absolute; left:1140px; top:170px; width:400px; height:80px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:0px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#FFFFFF;">寫：作者＋LLM 起草</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75); line-height:1.45;">指標庫的 48 張：給 LLM 原論文與參考實作<br>起草，作者審過（附錄 C.2）</div></div>
+  <div style="position:absolute; left:1140px; top:258px; width:400px; height:80px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; padding:0px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">寫：產生時自動附上</div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">每個產生的指標都附一張：<br>說明、預期用途、實作細節、限制</div></div>
+  <div style="position:absolute; left:1140px; top:346px; width:400px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:0px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">讀：ColBERT 先篩</div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">卡片當文件、任務說明當查詢，<br>先篩出 k′ 張</div></div>
+  <div style="position:absolute; left:1140px; top:434px; width:400px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:0px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">讀：LLM 再挑 k 個</div><div style="font-size:12.5px; color:#6B7380; line-height:1.45;">讀卡片的內容，<br>排出最相關的 k 個（預設 30）</div></div>
+
+  <div style="position:absolute; left:60px; top:570px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">有卡的檢索比較好</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">表 3、k＝20：五個任務都比只給一句說明好；<br>EvalGen 0.522 對 0.427，<br>HelpSteer2 0.378 對 0.328。</div>
+    <div style="font-size:13px; color:#8A93A0;">開發集的數字（Qwen3 32B，5 次平均）。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:570px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">ColBERT 先篩、LLM 再挑</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">附錄 E.1 比了七種檢索法，這個組合<br>在 16 種設定裡贏 14 種；NDCG@10 是<br>0.528 與 0.55，單用 ColBERT 0.442 與 0.42。</div>
+    <div style="font-size:13px; color:#8A93A0;">沒贏的兩種都是 Recall@20。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:570px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">跑一次指標，成本差很多</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">表 5：最重的 INFORM reward model<br>要 <span style="white-space:nowrap">129.62 GB</span> GPU 記憶體、<span style="white-space:nowrap">1,041 毫秒</span>；<br>BLEU 不用 GPU，<span style="white-space:nowrap">7 毫秒</span>。</div>
+    <div style="font-size:13px; color:#8A93A0;">先檢索，就不必把每個指標都跑一遍。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：類型的計數是整理者依表 4 數的；讀寫者分成四格是整理者的畫法。七個部分依附錄 B，BLEU 的內容依附錄 D。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+      <marker id="an-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M482 426H576" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M1138 210H1084" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c05)"></path>
+    <path d="M1138 298H1084" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c05)"></path>
+    <path d="M1082 386H1136" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+    <path d="M1082 474H1136" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>作者把 MetricBank 當成這篇的第一個主要貢獻。指標的來源有三批。第一批取自 Schmidtova 等人 2024 年的調查：他們看了 INLG 2023 的全部論文與 ACL 2023 生成主題的論文，共 110 篇，整理出 283 種自動指標、分成 34 個家族；作者依熱門程度，實作了前 16 個家族裡最主要的 28 個。第二批是 NLTK、PyTorch、Hugging Face lighteval 與 MetaMetrics 裡剩下的生成指標，共 12 個。第三批是調查沒涵蓋的近期指標，共 8 個，附錄 B.1 各給了理由：RewardBench 排行榜上表現好的三個 reward model（INFORM 70B、LDL 27B、GRM 3B）加上 Qwen2.5 7B 的過程 reward model；簡化句子的 SALSA，它是 LENS 的延伸、和 SimpEval 論文相關，作者加它是想替 SimpEval 放一個推薦的「最佳」指標；以及三個在 CPU 上就跑得快的 FastText 分類器（不雅內容、毒性、教育價值）。28＋12＋8 正好是 48。</p>
+    <p>表 4 的統計：29 個要參考答案（例如 BLEU），19 個不用（例如可讀性的 FKGL），跨 12 個領域。每個指標都包成同一個介面：一個 calculate 方法，吃進產生的文字，吐出一個浮點數分數，也可以附上文字回饋。依表 4 的類型欄，整理者數出來的組成如下：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 4 · 類型</th><th>要參考答案</th><th>不用參考答案</th><th>例子</th></tr></thead>
+        <tbody>
+          <tr><td>n-gram 重疊</td><td>11</td><td>0</td><td>BLEU、ROUGE、METEOR、SARI、CIDEr</td></tr>
+          <tr><td>編輯距離</td><td>8</td><td>0</td><td>Levenshtein、TER、Jaro、Jaccard</td></tr>
+          <tr><td>語言模型回歸</td><td>5</td><td>7</td><td>BLEURT、BARTScore、LENS；三個 reward model、FactCC</td></tr>
+          <tr><td>嵌入相似度</td><td>3</td><td>2</td><td>BERTScore、MoverScore；YiSi-2、ParaScoreFree</td></tr>
+          <tr><td>分布差異</td><td>2</td><td>0</td><td>InfoLM、MAUVE</td></tr>
+          <tr><td>分類器</td><td>0</td><td>6</td><td>毒性、情緒、三個 FastText、數學過程 reward model</td></tr>
+          <tr><td>多樣性、規則、流暢度</td><td>0</td><td>4</td><td>DistinctNGrams、SelfBLEU、FKGL、Perplexity</td></tr>
+          <tr><td>合計</td><td>29</td><td>19</td><td></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p><strong>指標卡。</strong>作者仿照 Model Cards 與 Data Cards，替每個指標寫一張指標卡，分七個部分：指標細節（說明、分數範圍、是否要參考答案、是否要輸入）、預期用途（適用的領域與任務，什麼時候該用、什麼時候不該用）、實作（參考實作、效率與擴展性）、已知限制（偏誤、誤用、已知的失敗情況）、相關指標、延伸閱讀，以及卡片作者（誰寫的、有沒有用 AI 協助）。附錄 D 是 BLEU 的完整範例：分數 0 到 1、越高越好、要參考答案；適合翻譯、摘要這類和參考答案對得上的任務，不建議用在說故事、對話這類開放式生成；已知的限制包括懲罰意思相同的改寫、長度懲罰可能錯殺較短但合格的輸出；卡片作者是 Michael J. Ryan，並註明有生成式 AI 協助起草。附錄 C.2 有起草指標卡的 prompt：照著範本填、參考原論文與參考實作，資料裡沒有的就標「需要更多資訊」，不要編造。</p>
+    <p><strong>檢索。</strong>直接評估所有指標太貴，所以作者用檢索當過濾：指標卡當文件，評估情境或任務的說明當查詢。做法是 ColBERT 加 LLM 的混合式：先用 ColBERT 篩，再由 LLM 讀指標卡、排出最相關的幾個。附錄 E.1 比了檢索法：先把 MetricBank 的指標全部在開發集上跑一次，得到每個指標和人評的真實 Kendall 排名，再看 BM25、ColBERT、Faiss、把全部文件放進脈絡的 LLM（LLMRec），以及前三者再接 LLM 的組合，各自排得多準。下面挑 @10 的數字：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 6、表 7 · 檢索法</th><th>NDCG@10<br>Qwen3-32B</th><th>NDCG@10<br>GPT-4o-mini</th><th>Recall@10<br>Qwen3-32B</th><th>Recall@10<br>GPT-4o-mini</th></tr></thead>
+        <tbody>
+          <tr><td>BM25</td><td>0.427</td><td>0.427</td><td>0.418</td><td>0.418</td></tr>
+          <tr><td>ColBERT</td><td>0.442</td><td>0.42</td><td>0.441</td><td>0.429</td></tr>
+          <tr><td>Faiss</td><td>0.326</td><td>0.314</td><td>0.353</td><td>0.371</td></tr>
+          <tr><td>LLMRec</td><td>0.478</td><td>0.502</td><td>0.465</td><td>0.518</td></tr>
+          <tr><td>BM25 → LLMRec</td><td>0.498</td><td>0.47</td><td>0.494</td><td>0.512</td></tr>
+          <tr><td>ColBERT → LLMRec</td><td><strong>0.528</strong></td><td><strong>0.55</strong></td><td><strong>0.518</strong></td><td><strong>0.565</strong></td></tr>
+          <tr><td>Faiss → LLMRec</td><td>0.393</td><td>0.406</td><td>0.4</td><td>0.424</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>表裡的粗體是整理者標的每欄最高。作者的結論是 ColBERT 接 LLM 一直是最好的，在 16 種評估設定裡贏 14 種，所以正文的檢索都用它。整理者對表核對：16 種是兩張表各 8 欄（NDCG 與 Recall 各取 @1、@5、@10、@20）；沒贏的兩種都是 Recall@20，表 6 最高的是單用 BM25（0.788），表 7 最高的是單用 ColBERT（0.8），ColBERT 接 LLM 分別是 0.694 與 0.759；表 6 的 Recall@1 則是和 BM25 接 LLM 並列（0.094）。另外，單用 ColBERT 與 Faiss 的數字在兩張表略有不同，論文沒有說明。</p>
+    <p>指標卡本身有沒有幫上檢索，第 10 章的表 3 有一組對照：k＝20 時，用指標卡檢索在五個任務上都比只給一句指標說明的好，例如 EvalGen 0.522 對 0.427。檢索省下的是實際跑指標的成本，表 5 列出每個指標的 GPU、CPU 記憶體與延遲（取信賴區間上界的最大值）：最重的 INFORM reward model 要 129.62 GB 的 GPU 記憶體、1,041 毫秒；不少指標完全不用 GPU，BLEU 只要 7 毫秒；最慢的是 TER，26,064 毫秒。</p>
+
+    <div class="explain stone">
+      <span class="label">整理者的補充</span>
+      <h4>ColBERT 在這裡做的事</h4>
+      <p>ColBERT 把查詢和文件都拆成每個詞一個向量，逐詞比對再加總，適合在大量文件裡快速找近鄰；本站整理過它的論文。在 AutoMetrics 裡，文件是 48 張加上新產生的指標卡，數量不大，所以 ColBERT 只負責先篩，真正的排序交給讀得懂卡片內容的 LLM。這一段是整理者的補充，這篇的參考文獻沒有列 ColBERT 的論文。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="regress" data-toc="回歸與報告">
+  <div class="container head">
+    <p class="chapter">Chapter 06 · Metric Production: Regress · Appendix F.2, G</p>
+    <h2><span class="seg">回歸決定誰留下，</span><span class="seg">權重寫進報告</span></h2>
+    <p class="lede">檢索留下的候選還要組成一個能預測人評的訊號。作者把分數轉成 z 分數，用 PLS 找出最能預測人評的方向，依權重取前 n 個再擬合一次，最後刪掉係數為負的生成指標；結果連同權重與相關寫成報告。</p>
+    
+  </div>
+  <div class="cardband" id="card-06"><div class="cardlabel"><span class="n">圖卡 06 / 12</span><span class="t">回歸替指標配權重</span><button type="button" class="zoom" data-card="06">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">回歸替每個指標配權重，加總去逼近人評</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.1 節與圖 2 的旅遊規劃例子：分數先轉成 z 分數，PLS 找出最能預測人評的方向；欄頭是圖 2 印的權重，人評也照圖 2</div>
+
+  <div style="position:absolute; left:250px; top:140px; font-size:13px; font-weight:700; color:#4B5866;">回歸留下的 5 個指標（欄頭是圖 2 印的權重）→</div>
+  <div style="position:absolute; left:60px; top:226px; width:176px; text-align:right; font-size:13px; font-weight:700; color:#4B5866;">旅遊規劃 ↓</div>
+
+  <div style="position:absolute; left:250px; top:164px; width:130px; height:80px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13px; font-weight:700; color:#1C2431;">在地文化融入</div><div style="font-size:11px; color:#8A93A0;">rubric</div><div style="margin-top:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#2E7B4F;">24.8%</div></div></div>
+  <div style="position:absolute; left:386px; top:164px; width:130px; height:80px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13px; font-weight:700; color:#1C2431;">在地體驗</div><div style="font-size:11px; color:#8A93A0;">單一標準</div><div style="margin-top:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#2E7B4F;">20.4%</div></div></div>
+  <div style="position:absolute; left:522px; top:164px; width:130px; height:80px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13px; font-weight:700; color:#1C2431;">住宿選項</div><div style="font-size:11px; color:#8A93A0;">單一標準</div><div style="margin-top:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#2E7B4F;">19.5%</div></div></div>
+  <div style="position:absolute; left:658px; top:164px; width:130px; height:80px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13px; font-weight:700; color:#1C2431;">INFORM</div><div style="font-size:11px; color:#8A93A0;">現成的 reward model</div><div style="margin-top:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1F2A3A;">17.8%</div></div></div>
+  <div style="position:absolute; left:794px; top:164px; width:130px; height:80px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13px; font-weight:700; color:#1C2431;">具體與細節</div><div style="font-size:11px; color:#8A93A0;">rubric</div><div style="margin-top:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#2E7B4F;">17.5%</div></div></div>
+
+  <div style="position:absolute; left:60px; top:274px; width:176px; text-align:right; font-size:15px; font-weight:700; color:#1C2431;">規劃 A</div>
+  <div style="position:absolute; left:60px; top:340px; width:176px; text-align:right; font-size:15px; font-weight:700; color:#1C2431;">規劃 B</div>
+  <div style="position:absolute; left:60px; top:406px; width:176px; text-align:right; font-size:15px; font-weight:700; color:#1C2431;">規劃 C</div>
+  <div style="position:absolute; left:60px; top:472px; width:176px; text-align:right; font-size:15px; font-weight:700; color:#1C2431;">規劃 D</div>
+
+  <div style="position:absolute; left:250px; top:258px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#FFFFFF;">＋＋</div>
+  <div style="position:absolute; left:386px; top:258px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#B4D5C0; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">＋</div>
+  <div style="position:absolute; left:522px; top:258px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#FFFFFF;">＋＋</div>
+  <div style="position:absolute; left:658px; top:258px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#B4D5C0; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">＋</div>
+  <div style="position:absolute; left:794px; top:258px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#B4D5C0; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">＋</div>
+
+  <div style="position:absolute; left:250px; top:324px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#B4D5C0; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">＋</div>
+  <div style="position:absolute; left:386px; top:324px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#FFFFFF;">＋＋</div>
+  <div style="position:absolute; left:522px; top:324px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#F7F8FA; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#8A93A0;">0</div>
+  <div style="position:absolute; left:658px; top:324px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#B4D5C0; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">＋</div>
+  <div style="position:absolute; left:794px; top:324px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#F7F8FA; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#8A93A0;">0</div>
+
+  <div style="position:absolute; left:250px; top:390px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#C8501F;">−</div>
+  <div style="position:absolute; left:386px; top:390px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#C8501F;">−</div>
+  <div style="position:absolute; left:522px; top:390px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#F7F8FA; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#8A93A0;">0</div>
+  <div style="position:absolute; left:658px; top:390px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#C8501F;">−</div>
+  <div style="position:absolute; left:794px; top:390px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#C8501F;">−</div>
+
+  <div style="position:absolute; left:250px; top:456px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#B4D5C0; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">＋</div>
+  <div style="position:absolute; left:386px; top:456px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#F7F8FA; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#8A93A0;">0</div>
+  <div style="position:absolute; left:522px; top:456px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#B4D5C0; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">＋</div>
+  <div style="position:absolute; left:658px; top:456px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#FFFFFF;">＋＋</div>
+  <div style="position:absolute; left:794px; top:456px; width:130px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#B4D5C0; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">＋</div>
+
+  <div style="position:absolute; left:956px; top:226px; width:130px; font-size:12.5px; font-weight:700; color:#4B5866;">加權加總 ŷ</div>
+  <div style="position:absolute; left:1100px; top:226px; width:70px; text-align:center; font-size:12.5px; font-weight:700; color:#4B5866;">人評</div>
+
+  <div style="position:absolute; left:956px; top:272px; width:130px; height:30px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:4px;"></div>
+  <div style="position:absolute; left:956px; top:272px; width:130px; height:30px; box-sizing:border-box; background-color:#1F2A3A; border-radius:4px;"></div>
+  <div style="position:absolute; left:1100px; top:272px; width:70px; height:30px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:4px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#1C2431;">5/5</div>
+
+  <div style="position:absolute; left:956px; top:338px; width:130px; height:30px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:4px;"></div>
+  <div style="position:absolute; left:956px; top:338px; width:98px; height:30px; box-sizing:border-box; background-color:#1F2A3A; border-radius:4px;"></div>
+  <div style="position:absolute; left:1100px; top:338px; width:70px; height:30px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:4px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#1C2431;">4/5</div>
+
+  <div style="position:absolute; left:956px; top:404px; width:130px; height:30px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:4px;"></div>
+  <div style="position:absolute; left:956px; top:404px; width:14px; height:30px; box-sizing:border-box; background-color:#1F2A3A; border-radius:4px;"></div>
+  <div style="position:absolute; left:1100px; top:404px; width:70px; height:30px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:4px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#1C2431;">2/5</div>
+
+  <div style="position:absolute; left:956px; top:470px; width:130px; height:30px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:4px;"></div>
+  <div style="position:absolute; left:956px; top:470px; width:105px; height:30px; box-sizing:border-box; background-color:#1F2A3A; border-radius:4px;"></div>
+  <div style="position:absolute; left:1100px; top:470px; width:70px; height:30px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:4px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#1C2431;">4/5</div>
+
+  <div style="position:absolute; left:1204px; top:150px; width:336px; height:330px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 22px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:17px; font-weight:700; color:#1C2431;">怎麼讀這張表</div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">01</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">欄是回歸留下的 5 個指標，<br>欄頭的權重加起來是 100%。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">02</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">格子是這筆規劃的 z 分數：<br>深綠高於平均，淡橘低於平均。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">03</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">每一列乘上權重、橫著加起來，<br>就是預測分數 ŷ。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">04</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">ŷ 的排名和人評越一致，<br>Kendall τ 越高（第 07 卡）。</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:532px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">預測 ŷ＝每個指標的 z 分數乘上權重再加總。PLS 挑權重的方式：找一個長度為 1 的方向 w，讓 Xw 和人評 y 的共變異數平方最大，再沿著這個方向回歸（第 3.1 節的式子寫成文字）。</div>
+
+  <div style="position:absolute; left:60px; top:590px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">兩階段：全部，再前 n 個</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">先用檢索到的全部候選擬合、依權重大小排序；<br>只留前 n 個（預設 5）再擬合一次，<br>得到最後的權重與預測。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者選 PLS：指標可能比資料多，彼此又高度相關。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:590px; width:470px; height:196px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">刪掉負係數的生成指標</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">產生的評審本來就往正相關設計，<br>係數為負就刪；τ-bench 的例子<br>原本推薦 5 個，刪掉 2 個。</div>
+    <div style="font-size:13px; color:#8A93A0;">現成指標不刪：附錄 G 的 ParaScoreFree 是 −1.6125。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:590px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">留下的多半是產生的</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">表 2 的 25 次（<span style="white-space:nowrap">Qwen3-32B</span>）共推薦 125 個指標，<br>103 個是產生的；現成的 22 個裡，<br>20 個是 reward model（附錄 F.2）。</div>
+    <div style="font-size:13px; color:#8A93A0;">圖 8：單一標準 67、rubric 16、範例 10、最佳化 10。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：方格的深淺與 ŷ 的長度是整理者的示意，不是論文的數字；指標名、權重與人評（5/5、4/5、2/5、4/5）取自圖 2。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M928 287H952" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M928 353H952" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M928 419H952" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M928 485H952" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>作者選 PLS 回歸，是因為這個情境有兩個限制：預測量（指標）的數量可能和資料筆數差不多、甚至更多；預測量之間又常常高度相關。直覺上，PLS 先把指標空間投影到最能預測人類標籤的方向，再沿著這條軸對標籤做回歸。</p>
+    <p>第 3.1 節的式子寫成文字是這樣：X 是正規化之後的指標分數矩陣，一列一筆輸出、一欄一個指標；y 是人類標籤。只用一個潛在成分時，PLS 找一個長度為 1 的權重向量 w，讓 Xw 和 y 的共變異數平方最大。潛在分數 t 是 X 乘上這個 w，再把人評對 t 做回歸，得到預測值 ŷ＝tβ，係數 β 等於 t 和 y 的內積除以 t 自己的內積。</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>轉成 z 分數</strong>每個指標的分數減平均、除以標準差，量尺不同的指標才能放進同一個回歸。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>全部候選擬合一次</strong>用檢索留下的全部候選擬合 PLS，依權重 w 的絕對值排序。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>取前 n 個再擬合</strong>只留排序前 n 個指標（預設 5 個），重新擬合 PLS，得到新的投影與預測。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>刪掉負係數的生成指標</strong>產生的評審本來就是往正相關設計的，係數為負就刪；現成的指標不刪，因為長度這類量本來就可能和簡潔負相關。</div></div>
+    </div>
+
+    <p>最後一步在兩個例子裡看得到。附錄 G 的 SimpEval 例子，前五個指標裡有一個現成的 ParaScoreFree，係數是 −1.6125，它被留了下來；第 12 章的 τ-bench 例子，n＝5 原本推薦五個指標，這一步刪掉兩個係數為負的，只剩三個。</p>
+    <p><strong>報告。</strong>圖 2 的第四步把結果寫成一份報告，寫出權重、和人評的相關，以及幫助採用的細節。這份報告也是作者處理內容效度（第 8 章）的方式：內容效度很難直接量化，所以公開報告，並附上 LLM 評審的推理軌跡，讓使用者自己檢查評審的判斷站不站得住；作者說這些軌跡也能幫忙拿 AutoMetrics 最佳化系統（第 5 節）。限制一節補了一條：推薦的指標和人評的相關若不顯著（p &gt; 0.05），報告裡會加警告。附錄 G 列了各任務的報告範例，格式是整體的 Kendall τ、前五個指標與係數，以及每個指標的說明（一句描述、一張 rubric 表，或放進 prompt 的例子）。以 EvalGen 的商品描述為例，整體 τ 是 0.4178，前五個是格式合規 0.1144、附範例的評審 0.1022、行動呼籲的力道 0.0752、顧客評論的運用（rubric）0.0747、避免提到缺點 0.0653。</p>
+
+    <div class="explain stone">
+      <span class="label">怎麼讀百分比</span>
+      <h4>圖 1、圖 2 的百分比是相對重要性</h4>
+      <p>圖 1 的圖說說百分比是由回歸係數換算的相對重要性；圖 1 與圖 2 的五個百分比各自加起來都是 100%（整理者核對）。附錄 G 印的是係數本身，量尺跟著任務的人評走，不同任務之間不能直接比大小（整理者的讀法）。圖 1 與附錄 G 的 EvalGen 例子挑出的指標不一樣，論文沒有說明兩者各來自哪一次執行。</p>
+    </div>
+
+    <p><strong>最後留下的是哪些指標。</strong>附錄 F.2 回頭看表 2 的主實驗：只看 Qwen3-32B 的 25 次執行，共推薦了 125 個指標，其中 103 個是產生的；22 個現成的裡，20 個是 reward model。圖 8 的長條印著細項：單一標準 67、rubric 16、附範例的評審 10、最佳化過的評審 10；GRM 與 INFORM 兩個 reward model 各 10，ParaScoreFree 2（整理者核對：產生的四項加起來 103，現成的三項加起來 22）。作者據此說，檢索的範圍可以大幅縮小，主要從產生的指標，加上幾個關鍵的 reward model 與 ParaScoreFree 這類模型式指標裡推薦，MetricBank 也能更精簡。</p>
+  </div>
+</section>
+
+
+<section id="setup" data-toc="任務與基線" class="nocard">
+  <div class="container">
+    <p class="chapter">Chapter 07 · Experiments: Tasks and Baselines · Appendix C.1</p>
+    <h2><span class="seg">五個任務裡，</span><span class="seg">三個沒有專門的現成指標</span></h2>
+    <p class="lede">作者挑了兩類任務：分布內的任務，MetricBank 裡有專門為它設計的指標；分布外的任務沒有，考的是推廣與產生指標的能力。五種基線涵蓋現成指標、回歸組合、微調小模型、LLM 評審與拆解式的評審。</p>
+
+    <p>第 4 節的目標是證明 AutoMetrics 產出的指標在許多任務與領域都有效，而且比有競爭力的基線更貼近人評；作者用判準效度與構念效度兩個角度來展示。五個任務的人評都是資料集本來就收好的，形式有三種：行為（程式修改有沒有被接受）、二元（讚或倒讚）、Likert 量表。主表對每個資料集只取一個評估面向，其他面向放在附錄。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 1 · 資料集</th><th>任務</th><th>筆數</th><th>回饋</th><th>面向數</th><th>參考答案</th><th>主表用的面向</th></tr></thead>
+        <tbody>
+          <tr><td>SimpEval（分布內）</td><td>句子簡化</td><td>360</td><td>1 到 100 的 Likert</td><td>1</td><td>有</td><td>簡化分數</td></tr>
+          <tr><td>HelpSteer2（分布內）</td><td>對話</td><td>20,324</td><td>1 到 5 的 Likert</td><td>5</td><td>無</td><td>聊天機器人的有用程度</td></tr>
+          <tr><td>EvalGen（分布外）</td><td>商品描述</td><td>100</td><td>二元</td><td>1</td><td>無</td><td>讚或倒讚</td></tr>
+          <tr><td>RealHumanEval（分布外）</td><td>程式補全</td><td>5,204</td><td>行為</td><td>1</td><td>無</td><td>程式修改被接受或拒絕</td></tr>
+          <tr><td>Co-Gym（分布外）</td><td>旅遊規劃</td><td>72</td><td>1 到 5 的 Likert</td><td>3</td><td>無</td><td>旅遊規劃結果的評分</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>分布內的 SimpEval，MetricBank 裡有 LENS、SALSA 這類句子簡化用的指標（附錄 B.1 說 SALSA 就是為了 SimpEval 加進來的）。分布外的三個任務沒有任何指標是專門為它們設計的，考的是推廣與產生指標。第 10、11 章會一再看到，EvalGen 與 CoGym 是訓練集最小的兩個（57 筆與 37 筆）。</p>
+    <p>比較的基線有五種，前三種和骨幹模型無關，後兩種和 AutoMetrics 一樣要用 LLM：</p>
+
+    <div class="values">
+      <div class="value-card"><span class="tag">現成</span><h4>現成最好的指標</h4><p>把 48 個指標全跑一遍（不用參考答案的任務只跑 19 個），依驗證集上的 Kendall τ 挑最好的一個。</p></div>
+      <div class="value-card"><span class="tag">回歸</span><h4>MetaMetrics</h4><p>取 MetaMetrics 論文的全部指標，在訓練集上做 XGBoost 回歸。</p></div>
+      <div class="value-card"><span class="tag">微調</span><h4>微調的 ModernBERT</h4><p>論文叫它 Finetuned LLM：在 ModernBERT-large 上用 LoRA（rank 16）訓練注意力層、全連接層與回歸頭，學習率 5e-5、批次 16、3 個 epoch，直接預測人評。</p></div>
+      <div class="value-card"><span class="tag">LLM</span><h4>LLM 評審</h4><p>把每個任務原本給人類標註者的說明直接交給 LLM。</p></div>
+      <div class="value-card"><span class="tag">LLM</span><h4>DnA-Eval</h4><p>LLM 提出三個值得評的面向與彙整權重，每個面向交給 LLM 評審打分，再依權重加總。</p></div>
+    </div>
+
+    <p>作者說 LLM 評審是強的基線：這些說明原本就是寫給人類標註者的，理想上就是他們打分時依據的指示。附錄 C.1 列了五份說明，精簡如下：</p>
+
+    <div class="codeblock">
+      <span class="file">附錄 C.1 · 原本給標註者的說明 · 精簡改寫成中文</span>
+<pre class="code"><span class="c"># SimpEval：0 到 100 分，附五個錨點與例句</span>
+100 完全簡化、通順、保留原意；75 較簡單、大致通順、意思接近
+ 50 較簡單、還算通順、意思相似；25 沒有更簡單、意思跑掉；0 讀不懂
+<span class="c"># HelpSteer2：有用程度，4 到 0 五級</span>
+4 非常有用、完全符合提問的用意 … 0 完全沒用、錯過提問的重點
+<span class="c"># EvalGen</span>
+<span class="a">這個回應好（1）還是壞（0）？</span>
+<span class="c"># RealHumanEval</span>
+<span class="a">你會接受（1）還是拒絕（0）這個程式修改或新增？</span>
+<span class="c"># CoGym：對最後成果（旅遊規劃、分析結果）的整體評分</span>
+1 非常不滿意 · 2 有點不滿意 · 3 普通 · 4 有點滿意 · 5 非常滿意</pre>
+    </div>
+
+    <p>兩個二元任務的說明都只有一句，評審拿不到任何標準；這正是第 1 章說的「只有讚與倒讚」的情況。另外，表 1 把 HelpSteer2 寫成 1 到 5 的 Likert，附錄 C.1 的說明用的是 4 到 0 五級，兩處照錄。LLM 類的方法（LLM 評審、DnA-Eval、AutoMetrics）分別用 GPT-4o-mini 與 Qwen3-32B（推理模式）當骨幹；每個設定做 5 次獨立執行，報平均與 95% 信賴區間。</p>
+  </div>
+</section>
+
+
+<section id="criterion" data-toc="和人評的相關">
+  <div class="container head">
+    <p class="chapter">Chapter 08 · Metric Evaluation · Criterion Validity (Correlation)</p>
+    <h2><span class="seg">十格裡九格拿到粗體，</span><span class="seg">一格掉到負的</span></h2>
+    <p class="lede">判準效度看的是指標和參考標準的相關，這裡的標準是人評，量法是 Kendall τ。表 2 裡，AutoMetrics 以 Qwen3-32B 當骨幹時五個任務都最高；以 GPT-4o-mini 當骨幹時，CoGym 掉到 −0.034。</p>
+    
+  </div>
+  <div class="cardband" id="card-07"><div class="cardlabel"><span class="n">圖卡 07 / 12</span><span class="t">表 2：十格裡九格拿到粗體</span><button type="button" class="zoom" data-card="07">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">十格裡九格拿到粗體，一格掉到負的</div>
+  <div style="position:absolute; left:60px; top:92px; width:1480px; font-size:15px; color:#6B7380;">表 2：和人評的 Kendall τ，5 次獨立執行的平均與 95% 信賴區間。綠底是表 2 的粗體（每個骨幹那一組裡最高），橘底是 AutoMetrics 落後的那一格</div>
+
+  <div style="position:absolute; left:60px; top:146px; width:1480px; height:36px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:200px repeat(7, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">任務</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">與骨幹無關</div>
+    <div style="grid-column:span 3; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866; border-left:1.5px solid #D5DAE1;"><span style="white-space:nowrap">Qwen3-32B</span>&#160;當骨幹</div>
+    <div style="grid-column:span 3; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866; border-left:1.5px solid #D5DAE1;"><span style="white-space:nowrap">GPT-4o-mini</span>&#160;當骨幹</div>
+  </div>
+  <div style="position:absolute; left:60px; top:182px; width:1480px; height:34px; box-sizing:border-box; background-color:#F7F8FA; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:200px repeat(7, minmax(0, 1fr));">
+    <div></div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">現成最好的指標</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380; border-left:1.5px solid #D5DAE1;">LLM 評審</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">DnA-Eval</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#1C2431;">AutoMetrics</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380; border-left:1.5px solid #D5DAE1;">LLM 評審</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">DnA-Eval</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#1C2431;">AutoMetrics</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:216px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:200px repeat(7, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">SimpEval</div><div style="font-size:12px; color:#8A93A0;">分布內 · 句子簡化</div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.246</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.00</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center; border-left:1.5px solid #D5DAE1;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.294</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.04</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.042</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.04</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.316</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.02</div></div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center; border-left:1.5px solid #D5DAE1;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.272</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.02</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.234</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.03</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.321</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.04</div></div></div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:280px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:200px repeat(7, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">HelpSteer2</div><div style="font-size:12px; color:#8A93A0;">分布內 · 對話</div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.327</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.00</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center; border-left:1.5px solid #D5DAE1;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.334</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.02</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.260</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.02</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.342</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.01</div></div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center; border-left:1.5px solid #D5DAE1;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.259</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.01</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.255</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.02</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.324</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.01</div></div></div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:344px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:200px repeat(7, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">EvalGen</div><div style="font-size:12px; color:#8A93A0;">分布外 · 商品描述</div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.193</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.00</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center; border-left:1.5px solid #D5DAE1;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.272</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.13</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.232</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.19</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.382</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.05</div></div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center; border-left:1.5px solid #D5DAE1;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.161</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.14</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.174</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.16</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.334</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.06</div></div></div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:408px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:200px repeat(7, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">RealHumanEval</div><div style="font-size:12px; color:#8A93A0;">分布外 · 程式補全</div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.138</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.00</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center; border-left:1.5px solid #D5DAE1;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.025</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.01</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.071</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.15</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.145</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.00</div></div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center; border-left:1.5px solid #D5DAE1;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.069</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.01</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.152</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.01</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.160</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.00</div></div></div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:472px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:200px repeat(7, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">CoGym</div><div style="font-size:12px; color:#8A93A0;">分布外 · 旅遊規劃</div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.074</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.00</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center; border-left:1.5px solid #D5DAE1;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.276</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.19</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.353</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.25</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.365</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.08</div></div></div></div>
+    <div style="padding:6px 8px; display:flex; border-left:1.5px solid #D5DAE1;"><div style="flex:1; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2E7B4F;">0.199</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.13</div></div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#2B3340;">0.185</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">± 0.10</div></div></div>
+    <div style="padding:6px 8px; display:flex;"><div style="flex:1; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center;"><div style="text-align:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:19px; font-weight:600; color:#C8501F;">−0.034</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#6B7380;">± 0.17</div></div></div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:550px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">沒畫進來的兩個基線：MetaMetrics 在 EvalGen、CoGym 是負的；微調的 ModernBERT 只有 CoGym 較高（0.223 ± 0.20）。數字見正文的表 2。</div>
+
+  <div style="position:absolute; left:60px; top:596px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;"><span style="white-space:nowrap">Qwen3-32B</span>：五個任務都最高</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">AutoMetrics 在五欄都拿粗體，也高過現成的指標；<br>EvalGen 0.382 對 LLM 評審 0.272，<br>RealHumanEval 0.145 對現成最好的 0.138。</div>
+    <div style="font-size:13px; color:#8A93A0;">HelpSteer2 只高 0.008：0.342 對 0.334。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:596px; width:470px; height:196px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;"><span style="white-space:nowrap">GPT-4o-mini</span>：CoGym 是 −0.034</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">同骨幹的 LLM 評審 0.199，微調的 ModernBERT 0.223；<br>圖說寫四個任務在最佳的信賴區間內，<br>正文卻寫五個任務都贏。</div>
+    <div style="font-size:13px; color:#8A93A0;">HelpSteer2 的 0.324 也略低於現成最好的 0.327。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:596px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">33.4% 對不上這張表</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">圖說說在 EvalGen 比 LLM 評審高 33.4%；<br>表上是 0.382 對 0.272、0.334 對 0.161，<br>相對高約 40% 與一倍多（整理者算的）。</div>
+    <div style="font-size:13px; color:#8A93A0;">論文沒交代這個百分比怎麼算。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：綠底照表 2 的粗體，粗體只在同一個骨幹那一組裡比；「九格」是整理者數 AutoMetrics 兩欄的粗體，「相對高」是整理者用表上的數字算的。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 3.2 節先交代怎麼判斷一個指標好不好。作者借用研究方法與測驗領域的測量效度概念，看三種：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>第 3.2 節 · 效度</th><th>問什麼</th><th>這篇怎麼做</th></tr></thead>
+        <tbody>
+          <tr><td>內容效度</td><td>指標有沒有代表它想量的東西</td><td>很難直接量化；公開指標報告與 LLM 評審的推理軌跡，讓使用者自己檢查（第 6 章）</td></tr>
+          <tr><td>判準效度</td><td>和參考標準的相關</td><td>和人評的 Kendall τ（這一章）</td></tr>
+          <tr><td>構念效度</td><td>有沒有抓到「品質」這個抽象概念</td><td>用擾動測試量敏感度與穩定度（第 9 章）</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>作者說在自然語言處理裡，和人類標籤的相關是最常用的判準。選 Kendall τ，是因為它不假設分布，只檢查指標排出的先後和人評是不是一樣；作者說它比 Spearman 的 ρ 或 Pearson 的 r 保守。表 2 是測試集上的結果：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 2 · 方法</th><th>SimpEval</th><th>HelpSteer2</th><th>EvalGen</th><th>RealHumanEval</th><th>CoGym</th></tr></thead>
+        <tbody>
+          <tr><td>現成最好的指標</td><td>0.246 ± 0.00</td><td>0.327 ± 0.00</td><td>0.193 ± 0.00</td><td>0.138 ± 0.00</td><td>0.074 ± 0.00</td></tr>
+          <tr><td>MetaMetrics</td><td>0.127 ± 0.01</td><td>0.204 ± 0.00</td><td>−0.214 ± 0.01</td><td>0.025 ± 0.01</td><td>−0.119 ± 0.02</td></tr>
+          <tr><td>微調的 ModernBERT</td><td>0.076 ± 0.08</td><td>0.039 ± 0.03</td><td>0.054 ± 0.05</td><td>0.049 ± 0.06</td><td>0.223 ± 0.20</td></tr>
+          <tr><td>GPT-4o-mini · LLM 評審</td><td>0.272 ± 0.02</td><td>0.259 ± 0.01</td><td>0.161 ± 0.14</td><td>0.069 ± 0.01</td><td><strong>0.199</strong> ± 0.13</td></tr>
+          <tr><td>GPT-4o-mini · DnA-Eval</td><td>0.234 ± 0.03</td><td>0.255 ± 0.02</td><td>0.174 ± 0.16</td><td>0.152 ± 0.01</td><td>0.185 ± 0.10</td></tr>
+          <tr><td>GPT-4o-mini · AutoMetrics</td><td><strong>0.321</strong> ± 0.04</td><td><strong>0.324</strong> ± 0.01</td><td><strong>0.334</strong> ± 0.06</td><td><strong>0.160</strong> ± 0.00</td><td>−0.034 ± 0.17</td></tr>
+          <tr><td>Qwen3-32B · LLM 評審</td><td>0.294 ± 0.04</td><td>0.334 ± 0.02</td><td>0.272 ± 0.13</td><td>0.025 ± 0.01</td><td>0.276 ± 0.19</td></tr>
+          <tr><td>Qwen3-32B · DnA-Eval</td><td>0.042 ± 0.04</td><td>0.260 ± 0.02</td><td>0.232 ± 0.19</td><td>0.071 ± 0.15</td><td>0.353 ± 0.25</td></tr>
+          <tr><td>Qwen3-32B · AutoMetrics</td><td><strong>0.316</strong> ± 0.02</td><td><strong>0.342</strong> ± 0.01</td><td><strong>0.382</strong> ± 0.05</td><td><strong>0.145</strong> ± 0.00</td><td><strong>0.365</strong> ± 0.08</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>粗體照原表，是每個骨幹那一組裡最高的。作者的說法有四句。正文說 AutoMetrics 在五個任務都贏過所有基線；最強的基線會隨資料集換人（SimpEval、HelpSteer、EvalGen 是 LLM 評審，RealHumanEval 與 CoGym 是 DnA-Eval），也會隨骨幹換人（現成的指標贏得過用 GPT-4o-mini 的方法，贏不過用 Qwen3-32B 的），AutoMetrics 卻不論資料集或骨幹都最好。表 2 的圖說寫得比較保守：Qwen3-32B 五個任務都贏，GPT-4o-mini 有四個任務落在最佳結果的 95% 信賴區間內。正文又說，除了 HelpSteer 與 CoGym，其他資料集上 AutoMetrics 都以超過 95% 信賴區間的差距勝過所有基線。最後，圖說說在 EvalGen 上比最接近的基線（LLM 評審）高 33.4%。</p>
+
+    <div class="explain stone">
+      <span class="label">對表核對</span>
+      <h4>三句話和表 2 對不對得上</h4>
+      <p><strong>「五個任務都贏」：</strong>Qwen3-32B 這一組對得上。GPT-4o-mini 在 CoGym 是 −0.034，低於同骨幹的 LLM 評審 0.199 與微調的 ModernBERT 0.223；HelpSteer2 的 0.324 也略低於現成最好的 0.327，但落在信賴區間內。圖說的「四個任務在信賴區間內」對得上，正文的「五個都贏」對不上這兩格。</p>
+      <p><strong>「超過 95% 信賴區間」：</strong>這句有兩種讀法。若比的是「AutoMetrics 和最強基線的差距」是否大於 AutoMetrics 自己的區間半寬，SimpEval、EvalGen、RealHumanEval 在兩個骨幹都成立，HelpSteer2 與 CoGym 不成立，和作者列的例外一致。若比的是 AutoMetrics 的平均是否高過每個基線區間的上緣，只有 GPT-4o-mini 的 SimpEval 清楚成立：Qwen3-32B 的 SimpEval（LLM 評審 0.294 ± 0.04）與兩個骨幹的 RealHumanEval（DnA-Eval 的區間上緣都高過 AutoMetrics）不成立，GPT-4o-mini 的 EvalGen 剛好碰到 DnA-Eval 的上緣 0.334。論文沒有交代比法。</p>
+      <p><strong>「高 33.4%」：</strong>EvalGen 那一欄，Qwen3-32B 是 0.382 對 LLM 評審 0.272，差 0.110、相對高約 40%；GPT-4o-mini 是 0.334 對 0.161，相對高一倍多。兩種算法都得不到 33.4%，論文沒有交代這個百分比怎麼算，本頁照寫原文的說法並列出表上的數字。以上三段都是整理者算的。</p>
+    </div>
+
+    <p>還有兩個基線值得一提。MetaMetrics 在 EvalGen 與 CoGym 都是負的，排名和人評反過來；第 2 章說過，作者認為替新任務產生指標在低資料、新任務的情境裡是關鍵。微調的 ModernBERT 在 CoGym 是 0.223，是那一欄與骨幹無關的方法裡最高的，但信賴區間是 ± 0.20，其他四個任務都在 0.08 以下。</p>
+  </div>
+</section>
+
+
+<section id="robustness" data-toc="擾動測試">
+  <div class="container head">
+    <p class="chapter">Chapter 09 · Construct Validity (Robustness) · Appendix F.1, F.3</p>
+    <h2><span class="seg">該掉分時會掉，</span><span class="seg">換句話說時不亂動</span></h2>
+    <p class="lede">構念效度問的是指標有沒有抓到「品質」這個抽象的東西。作者借用收斂與區辨效度的想法，把它變成兩個量：品質變差時分數會不會掉（敏感度），品質不變時分數穩不穩（穩定度）。</p>
+    
+  </div>
+  <div class="cardband" id="card-08"><div class="cardlabel"><span class="n">圖卡 08 / 12</span><span class="t">敏感度與穩定度</span><button type="button" class="zoom" data-card="08">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">該掉分時會掉，換句話說時不亂動</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.2、4.4 節：構念效度拆成兩個量。同一筆輸出做兩種擾動，一種故意改差、一種品質不變，看指標的分數怎麼動</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">SENSITIVITY</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">敏感度：改差的版本，分數要變低</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">STABILITY</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">穩定度：等價的改寫，分數要不動</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:230px; top:222px; width:360px; height:44px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">原本的輸出（第 i 筆）</div>
+  <div style="position:absolute; left:110px; top:290px; width:600px; height:54px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">LLM 想出 1 到 3 種變差的策略</div><div style="font-size:12.5px; color:#6B7380;">依要優先破壞的評估面向（GeneratePerturbationStrategies）</div></div>
+  <div style="position:absolute; left:110px; top:366px; width:600px; height:54px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">照策略改寫：輕微或明顯</div><div style="font-size:12.5px; color:#6B7380;">每個策略交回一個改差的版本，不附理由（PerturbWorse）</div></div>
+  <div style="position:absolute; left:110px; top:442px; width:600px; height:46px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">比分數：改差的版本比原本低嗎？</div>
+  <div style="position:absolute; left:60px; top:510px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">敏感度＝N 筆裡，改差的版本拿到較低正規化分數的比例；<br>只看方向，不看差了多少。</div>
+
+  <div style="position:absolute; left:1010px; top:222px; width:360px; height:44px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">原本的輸出（第 i 筆）</div>
+  <div style="position:absolute; left:890px; top:290px; width:600px; height:54px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">一組固定、人工設計的等價改寫</div><div style="font-size:12.5px; color:#6B7380;">換句話說、調換順序、換同義字、改文風</div></div>
+  <div style="position:absolute; left:890px; top:366px; width:600px; height:54px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">要保住評的那個面向</div><div style="font-size:12.5px; color:#6B7380;">任何改動會傷到它，就原封不動交回（PerturbSame）</div></div>
+  <div style="position:absolute; left:890px; top:442px; width:600px; height:46px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">比分數：兩個分數差了多少？</div>
+  <div style="position:absolute; left:840px; top:510px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">穩定度＝1 減掉原本與等價版本分數差的平均；<br>越接近 1，越不受無關的變化影響。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">81.0% 到 97.8%</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">依資料集不同，AutoMetrics 替改差的版本打較低分的比例落在這個範圍；<br>50% 是隨機打分的基準，作者說顯著高於它。</div>
+    <div style="font-size:13px; color:#8A93A0;">圖 3：SimpEval、HelpSteer2、CoGym，各 30 次試驗；長條上沒有印數字。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">穩定度都高過基準</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">作者說三個資料集都以超過 95% 信賴區間的差距高過常態分布的基準。<br>附錄 F.3 人工標 150 筆 SimpEval：敏感度 0.8275、穩定度 0.8000。</div>
+    <div style="font-size:13px; color:#8A93A0;">人工核對確認擾動有效：改差的真的變差，等價的真的沒變。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩條式子是第 3.2 節的文字版；附錄 F.1 說現成最好的指標也很穩定，LLM 類的方法在穩健性上突出。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c08" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M410 266L410 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M410 344L410 364" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M410 420L410 440" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M1190 266L1190 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M1190 344L1190 364" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M1190 420L1190 440" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>作者的出發點是：人評與 AutoMetrics 都想逼近「品質」，一個有用的指標應該懲罰品質變差，同時對品質相同的變化保持穩定。為了做測試案例，要製造兩種擾動。品質變差的擾動交給 LLM：先依要優先破壞的評估面向，想出 1 到 3 種讓輸出變差的策略，再照策略改寫，強度分輕微與明顯兩種。品質不變的擾動用一組固定、人工設計的轉換：換句話說、調換順序、換同義字、改文風，目的是保住要評的那個面向。附錄 C.3 的 signature 還加了一條保險：任何改動若會傷到那個面向，就原封不動交回。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>第 3.2 節 · 量</th><th>定義（照式子寫成文字）</th><th>好的樣子</th></tr></thead>
+        <tbody>
+          <tr><td>敏感度 Sensitivity</td><td>N 筆資料裡，變差的版本拿到的正規化分數比原本低的比例</td><td>越高越好，代表會懲罰品質變差</td></tr>
+          <tr><td>穩定度 Stability</td><td>1 減掉「原本的分數和等價版本的分數差多少」的平均（分數先正規化）</td><td>越接近 1 越好，代表不被無關的變化帶著走</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>兩個量一起看，作者說它們提供了一個通用的角度，看一個指標推廣得好不好。敏感度只看方向（分數有沒有變低），穩定度看的是幅度（分數差了多少），這是整理者對兩條式子的讀法。</p>
+    <p>第 4.4 節在 SimpEval、HelpSteer2、CoGym 三個資料集上量這兩個數，每個做 30 次試驗，和常態分布的基準比較（圖 3）。結果：依資料集不同，AutoMetrics 在 81.0% 到 97.8% 的情況裡替變差的版本打了較低的分數，作者說顯著高於 50% 的基準，可以拿來偵測品質變差；穩定度也都以超過 95% 信賴區間的差距高過基準，品質不變的小修改之下分數一直很穩。</p>
+
+    <div class="explain stone">
+      <span class="label">怎麼讀圖 3</span>
+      <h4>長條沒有標數字，只看作者的描述</h4>
+      <p>圖 3 每個資料集畫兩根長條（敏感度、穩定度），加上信賴區間與一條虛線基準；長條上沒有印數字，所以本頁只用正文的 81.0% 到 97.8%，不替個別長條補數字。整理者的讀法是：三個資料集的兩根長條都高過各自的虛線，其中 CoGym 的敏感度看起來最低。</p>
+    </div>
+
+    <p>附錄 F.1 把所有方法都放進同一個測試（圖 7）。作者的讀法是：現成最好的指標往往很穩定，LLM 類的方法（DnA-Eval、LLM 評審、AutoMetrics）在穩健性上突出。圖 7 同樣沒有標數字。</p>
+    <p>擾動本身可不可信，附錄 F.3 做了一次人工核對。作者請一位沒參與專案的同事，照 SimpEval 論文原本的標註說明標 150 筆：30 筆原始的句子對、30 筆做了品質不變的擾動、90 筆刻意改差。用這些人評算出來的敏感度是 0.8275、穩定度是 0.8000，作者說這表示擾動達到了預期的效果。</p>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>人工核對只有一個人、一個資料集</h4>
+      <p>附錄 F.3 的核對來自一位標註者、150 筆 SimpEval 資料；HelpSteer2 與 CoGym 的擾動沒有人工核對。這段提醒是整理者依附錄 F.3 的範圍整理的。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="ablations" data-toc="設計消融">
+  <div class="container head">
+    <p class="chapter">Chapter 10 · Design Decisions (Hyperparameter Sweeps)</p>
+    <h2><span class="seg">四個設計決定，</span><span class="seg">靠開發集的消融定下來</span></h2>
+    <p class="lede">作者掃了三個部分：指標庫、檢索、回歸，全部在開發集上做，以 Qwen3 32B 跑 5 次。結論是兩種指標都要、指標卡有用、k＝30 與 n＝5 當預設；但最好的 k 與 n 每個任務不一樣。</p>
+    
+  </div>
+  <div class="cardband" id="card-09"><div class="cardlabel"><span class="n">圖卡 09 / 12</span><span class="t">預設設定對表 3 查一次</span><button type="button" class="zoom" data-card="09">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">預設的設定，是在開發集上一項項試出來的</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4.5 節、表 3：Qwen3 32B（推理模式）、五個任務、每種設定 5 次；所有掃描與消融都在開發集做，作者說從不依測試集的結果做決定</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:410px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:18px; font-weight:700; color:#FFFFFF;">預設設定（表 3 圖說）</div>
+  <div style="position:absolute; left:60px; top:198px; width:410px; height:236px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:22px 24px; display:flex; flex-direction:column; gap:12px;">
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">完整的 MetricBank：產生的＋現成的</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">檢索靠指標卡，留 k＝30 個</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">回歸留 n＝5 個</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">人評少於 80 筆：只用產生的</div></div>
+    <div style="margin-top:6px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">k=30 &#183; n=5 &#183; Full MetricBank</div>
+    <div style="font-size:13px; color:#8A93A0;">↑ 前三項都拿表 3 查一次；第四項見第 10 卡</div>
+  </div>
+
+  <div style="position:absolute; left:580px; top:120px; font-size:20px; font-weight:700; color:#1C2431;">四道檢查（對表 3 的開發集數字）</div>
+  <div style="position:absolute; left:580px; top:158px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">1</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">只用一種指標夠不夠？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">METRICBANK</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">完整的庫在五個任務不是最好就是第二；CoGym 比只用產生的低 0.104，EvalGen 低 0.029　✓ 兩種都要</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:250px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">2</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">指標卡有沒有用？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">METRIC CARDS</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">k＝20 時，有卡的檢索在五個任務都比只給一句說明好；EvalGen 0.522 對 0.427　✓ 有用</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:342px; width:960px; height:80px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#C8501F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">3</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">檢索留幾個 k？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">RETRIEVAL K</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">作者說大致隨 k 上升，例外是 CoGym；表上 SimpEval、EvalGen 在 k＝20 最高　△ 預設取 30</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:434px; width:960px; height:80px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#C8501F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">4</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">回歸留幾個 n？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">REGRESSION N</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">最好的 n 每個任務不同，HelpSteer2 不回歸（n＝1）反而最高 0.393；n＝5 便宜、變異小　△ 折衷</div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:545px; width:480px; height:130px; box-sizing:border-box; background-color:#1F2A3A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#FFFFFF;">判定：預設可用，k 與 n 看任務</div>
+    <div style="font-size:14px; color:rgba(255,255,255,0.78); line-height:1.6;">兩種指標都留、指標卡保留；k＝30、n＝5 是<br>五個任務平均下的折衷，不是每個任務的最佳。</div>
+  </div>
+  <div style="position:absolute; left:580px; top:545px; width:960px; height:130px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">為什麼只在開發集上選</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">作者說所有掃描與消融都在開發集上做，從不依測試集的結果做設計決定；<br>所以表 3 不能和表 2 的測試集數字直接比。正文寫「六個主要任務」，表 3 只有五欄。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:695px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:716px; font-size:20px; font-weight:700; color:#1C2431;">直接可以拿去用的三條（整理者歸納）</div>
+  <div style="position:absolute; left:60px; top:752px; font-size:16px; color:#2B3340;">① 資料夠多時，現成指標與產生的指標一起放進候選池。</div>
+  <div style="position:absolute; left:60px; top:784px; font-size:16px; color:#2B3340;">② 每個指標都寫一張卡：檢索靠的是卡的內容，不是一句名字。</div>
+  <div style="position:absolute; left:60px; top:816px; font-size:16px; color:#2B3340;">③ k、n 先用預設；任務特別時，在開發集上掃一次再決定。</div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：綠＝表上看得出這個設計有效，橘＝要小心、最好的值因任務而異；綠橘判定與 k＝20 的核對是整理者依表 3 做的。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c09" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M482 336L558 336" stroke="#9AA3AE" stroke-width="2" marker-end="url(#ag-c09)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 4.5 節強調，所有的掃描與消融都在各資料集的開發集上做，作者說從來不依測試集的結果做設計決定。所以表 3 的數字不能和第 8 章表 2 的測試集數字直接比（整理者的提醒）。正文說回報的是「六個主要任務」，表 3 只有五欄，兩處照錄。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 3 · 設定</th><th>SimpEval</th><th>HelpSteer2</th><th>EvalGen</th><th>RealHumanEval</th><th>CoGym</th></tr></thead>
+        <tbody>
+          <tr><td>只用現成指標（k＝30、n＝5）</td><td>0.238</td><td>0.376</td><td>0.389</td><td><strong>0.155</strong></td><td>0.258</td></tr>
+          <tr><td>只用產生的指標</td><td><strong>0.276</strong></td><td>0.308</td><td><strong>0.503</strong></td><td>0.132</td><td><strong>0.433</strong></td></tr>
+          <tr><td>完整的 MetricBank</td><td>0.275</td><td><strong>0.387</strong></td><td>0.474</td><td>0.152</td><td>0.329</td></tr>
+          <tr><td>檢索 k＝5（n＝5）</td><td>0.257</td><td>0.336</td><td>0.414</td><td>0.124</td><td><strong>0.385</strong></td></tr>
+          <tr><td>檢索 k＝10</td><td>0.245</td><td>0.352</td><td>0.469</td><td>0.128</td><td>0.371</td></tr>
+          <tr><td>沒有指標卡（k＝20）</td><td>0.281</td><td>0.328</td><td>0.427</td><td>0.134</td><td>0.292</td></tr>
+          <tr><td>檢索 k＝20</td><td><strong>0.286</strong></td><td>0.378</td><td><strong>0.522</strong></td><td>0.141</td><td>0.302</td></tr>
+          <tr><td>檢索 k＝30</td><td>0.275</td><td><strong>0.387</strong></td><td>0.474</td><td><strong>0.152</strong></td><td>0.329</td></tr>
+          <tr><td>不回歸（n＝1，k＝30）</td><td>0.232</td><td><strong>0.393</strong></td><td>0.353</td><td>0.145</td><td>0.356</td></tr>
+          <tr><td>回歸 n＝3</td><td>0.255</td><td>0.389</td><td><strong>0.503</strong></td><td>0.152</td><td>0.302</td></tr>
+          <tr><td>回歸 n＝5</td><td>0.275</td><td>0.387</td><td>0.474</td><td>0.152</td><td>0.329</td></tr>
+          <tr><td>回歸 n＝10</td><td><strong>0.309</strong></td><td>0.358</td><td>0.461</td><td>0.147</td><td>0.297</td></tr>
+          <tr><td>回歸 n＝20</td><td>0.268</td><td>0.350</td><td>0.498</td><td><strong>0.153</strong></td><td><strong>0.361</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>表格省略了 ± 的信賴區間，粗體照原表，是每一組消融裡最高的。</p>
+    <p><strong>兩種指標都有幫助。</strong>作者說在所有任務裡，完整的 MetricBank 不是最好就是第二好，第二好時通常也在 95% 信賴區間內。主要的例外是 CoGym，完整的庫比只用產生的低 0.104；EvalGen 也低 0.029，程度較輕。這兩個剛好是訓練集最小的（37 筆與 57 筆）。作者的假設是：在分布外的任務上，現成指標往往是有雜訊的預測量，回歸時可能碰巧和人評相關；產生的指標雜訊比較少；訓練集越大，越能把有用的指標篩出來。第 11 章的資料量實驗會回來驗這個假設。</p>
+    <p><strong>指標卡有幫助，k 越大越好。</strong>五個任務裡，k＝20 時用指標卡檢索都比只給一句說明好。作者說相關大致隨檢索的 k 線性上升，唯一的例外是 CoGym，歸因於小資料集的雜訊，以及產生的指標是雜訊較少的預測量：檢索出的前 5 個常常是產生的指標，降低了在小資料上推薦碰巧相關的現成指標的風險。整理者對表核對：SimpEval 與 EvalGen 的最高點也在 k＝20，不在 k＝30；HelpSteer2 與 RealHumanEval 才是一路上升。作者也提醒，所有檢索實驗都用 n＝5 回歸；將來檢索改進之後（也許加上歷史使用紀錄），k＝5 也可能追上 k＝30，只要推薦的是對的指標。</p>
+    <p><strong>回歸留幾個，因資料集而異。</strong>表現最好的 n 只重複出現一次（n＝20，在 RealHumanEval 與 CoGym），作者說這表示需要幾個指標，高度取決於評估任務與領域的複雜度。沒有明顯的贏家，所以選 n＝5 當預設：它在五個任務裡有兩個是第二好，也是還能保持較低變異的最便宜選項；n 越大，下游要跑的指標就越貴。表上最意外的一格是 HelpSteer2：不回歸、只用一個指標（n＝1）反而最高，0.393。</p>
+  </div>
+</section>
+
+
+<section id="data-needs" data-toc="要多少人評">
+  <div class="container head">
+    <p class="chapter">Chapter 11 · How Much Data Do You Need?</p>
+    <h2><span class="seg">約 80 筆人評就持平，</span><span class="seg">少於它只用生成的</span></h2>
+    <p class="lede">作者在三個夠大的資料集上，把訓練集從 5 筆加到 160 筆（兩個加到 640 筆）。約 80 筆之後相關就不再上升；分布外的小資料，只用產生的指標反而比較好，所以少於 80 筆時預設只用產生的。</p>
+    
+  </div>
+  <div class="cardband" id="card-10"><div class="cardlabel"><span class="n">圖卡 10 / 12</span><span class="t">少於 80 筆只用生成的</span><button type="button" class="zoom" data-card="10">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">少於 80 筆人評，就只用自己生成的指標</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4.6 節、圖 4：三個資料集的訓練集從 5 筆加到 160 筆（HelpSteer2 與 RealHumanEval 到 640 筆），兩種指標庫各跑多次，相關都在完整的測試集上量</div>
+
+  <div style="position:absolute; left:60px; top:286px; width:230px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:700; color:#FFFFFF;">新任務＋一批人評</div>
+  <div style="position:absolute; left:400px; top:276px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:17px; font-weight:700; color:#1C2431; line-height:1.35;">訓練用的人評<br>有幾筆？</div>
+
+  <div style="position:absolute; left:790px; top:232px; font-size:13px; font-weight:700; color:#2E7B4F;">少於 80 筆</div>
+  <div style="position:absolute; left:790px; top:352px; font-size:13px; font-weight:700; color:#2E7B4F;">80 筆以上</div>
+
+  <div style="position:absolute; left:940px; top:210px; width:600px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">只用產生的指標（Generated Only）</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">候選少、都是比較強的預測量；RealHumanEval 在 10、20 筆時比完整的庫好</div>
+  </div>
+  <div style="position:absolute; left:940px; top:330px; width:600px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">產生的＋現成的（Full MetricBank）</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">超過 80 筆後兩種都持平，完整的庫在三個資料集最後都停得比較高</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:506px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">三個資料集</div>
+    <div style="font-size:15px; color:#2B3340;">SimpEval、HelpSteer2、RealHumanEval 在兩種設定下都約 80 筆後持平；少於 80 筆時表現較低，作者說多半來自小訓練集上擬合回歸的高變異</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:580px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:592px; font-size:20px; font-weight:700; color:#1C2431;">作者的三個觀察</div>
+  <div style="position:absolute; left:60px; top:632px; width:470px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#2E7B4F;">約 80 筆就飽和</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">三個資料集、兩種設定，都在約 80 筆之後持平；<br>作者說用目前的架構，80 到 100 筆就夠。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">更好的產生或學習方法，也許能讓更多資料繼續有用。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:632px; width:470px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#2E7B4F;">分布外的小資料：只用產生的</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">RealHumanEval 在 10、20 筆時只用產生的比較好；<br>表 3 最小的 CoGym（37 筆）、EvalGen（57 筆）也是。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">作者：大多數任務本來就在分布外。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:632px; width:470px; height:180px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#C8501F;">高 p 低 n：碰巧的相關</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">候選指標多、資料少，弱的預測量容易碰巧和人評相關；<br>只用產生的，等於只留下比較強的訊號。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">這是作者提出的解釋。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：圖 4 的點沒有印數字，「持平」「比較好」是作者的讀法；少於 80 筆只用產生的，是作者依圖 4 與表 3 定的預設。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M290 318L398 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M700 318H770" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M770 318V258H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c10)"></path>
+    <path d="M770 318V378H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c10)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>這個實驗挑了三個夠大的資料集：相對簡單的分布內任務 SimpEval、比較難的分布內任務 HelpSteer2，以及分布外的 RealHumanEval。訓練集大小依序是 5、10、20、40、80、160 筆，RealHumanEval 與 HelpSteer2 再加上 320 與 640 筆。每個大小都跑兩種設定：只用產生的指標，以及完整的庫（加上現成指標）；相關一律在完整的測試集上量（圖 4）。</p>
+    <p><strong>約 80 筆就飽和。</strong>作者說三個資料集、兩種設定，表現都在約 80 筆之後持平。更好的指標產生或學習方法，也許能讓更多資料繼續有用；但以目前的架構，80 到 100 筆就夠了。少於 80 筆時，表現較低大多來自在小訓練集上擬合回歸的高變異。</p>
+    <p><strong>分布外的小資料，只用產生的比較好。</strong>RealHumanEval 在 10 筆與 20 筆時，只用產生的指標勝過完整的庫。作者把它和第 10 章的消融接起來：在又小、又在分布外的 CoGym 與 EvalGen，只用產生的也勝過完整的庫。作者說大多數任務本來就在分布外，所以使用者提供的訓練資料少於 80 筆時，預設只用產生的指標。超過 80 筆之後兩種設定都持平，但完整的庫在三個資料集上最後都停得比較高。</p>
+    <p>作者的解釋是回歸裡「預測量多、資料點少」（高 p 低 n）的問題：弱的預測量太多、資料又不夠，就容易出現假相關。資料少時只用產生的指標，等於強制只用比較強的預測訊號。</p>
+
+    <div class="explain stone">
+      <span class="label">怎麼讀圖 4</span>
+      <h4>點沒有標數字，只看走勢</h4>
+      <p>圖 4 的橫軸是訓練集大小，刻度依 5、10、20、40、80 這樣倍增；縱軸是 Kendall 相關。淡色的點是個別試驗，實心的點是同一個大小的平均。整理者的讀法是：三個資料集的平均都在前幾格快速上升、之後變平；小訓練集時淡色的點散得很開，也對得上作者說的高變異；RealHumanEval 整體比另外兩個低。圖上沒有印數字，本頁不替點補數字。</p>
+    </div>
+
+    <div class="thought">
+      <span class="label">思考題 · 02</span>
+      <h4>你手上的人評有幾筆？任務在分布內還是分布外？</h4>
+      <p>把你目前能拿到的回饋列出來：使用者的讚與倒讚、客服的評分、某個動作有沒有被接受。</p>
+      <p class="hint">照作者的預設：少於 80 筆，就只從產生的評審裡挑；超過之後再把現成的指標加進候選。也想想你的任務是不是有現成、專門的指標（翻譯、摘要這類）；沒有的話，就是這篇說的分布外，小資料時要特別小心碰巧相關的指標。這些判斷依第 4.6 節整理，套到你的情境是整理者的建議。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="tau-bench" data-toc="拿去最佳化 agent">
+  <div class="container head">
+    <p class="chapter">Chapter 12 · Case Study: AutoMetrics for Optimizing an Agentic Task</p>
+    <h2><span class="seg">沒有可驗證獎勵，</span><span class="seg">生成的指標也能帶最佳化</span></h2>
+    <p class="lede">作者把 AutoMetrics 當成 reward model 或可驗證獎勵的替代：先用少量帶標籤的軌跡學出指標，再拿指標去最佳化一個 τ-bench 的航空客服 agent。2,000 次 rollout 後，用產生的指標最佳化的 agent 在測試集是 0.720，用可驗證獎勵的是 0.680。</p>
+    
+  </div>
+  <div class="cardband" id="card-11"><div class="cardlabel"><span class="n">圖卡 11 / 12</span><span class="t">τ-bench：換掉最佳化的訊號</span><button type="button" class="zoom" data-card="11">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">沒有可驗證獎勵，生成的三個指標也能帶最佳化</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 5 節、圖 5、圖 6：τ-bench 的航空客服任務，同一個 agent、同一個最佳化器 GEPA，只換掉替 rollout 打分數的東西</div>
+
+  <div style="position:absolute; left:60px; top:134px; width:1480px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">共同的起點</div>
+    <div style="font-size:15px; color:#2B3340;">用 DSPy 寫的 ReAct agent · τ-airline 的 50 題切成訓練 25、測試 25 · 未最佳化時，測試平均 0.6（五次試驗）</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:198px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">VERIFIABLE REWARD</div>
+  <div style="position:absolute; left:60px; top:218px; font-size:20px; font-weight:700; color:#1C2431;">用 τ-bench 的可驗證獎勵打分</div>
+  <div style="position:absolute; left:840px; top:198px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">AUTOMETRICS</div>
+  <div style="position:absolute; left:840px; top:218px; font-size:20px; font-weight:700; color:#1C2431;">用生成的三個指標打分</div>
+  <div style="position:absolute; left:800px; top:196px; width:0px; height:396px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:150px; top:268px; width:520px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">25 題訓練任務</div>
+  <div style="position:absolute; left:150px; top:350px; width:520px; height:62px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">GEPA 最佳化</div><div style="margin-top:3px; font-size:12.5px; color:rgba(255,255,255,0.75);">每次 rollout 用 τ-bench 的獎勵打分</div></div></div>
+  <div style="position:absolute; left:150px; top:448px; width:520px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">2,000 次 rollout 後，量 25 題測試</div>
+  <div style="position:absolute; left:60px; top:520px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">兩邊都從同一個未最佳化的 agent 開始，也都跑 2,000 次 rollout；<br>差別只在替 rollout 打分數的東西。</div>
+
+  <div style="position:absolute; left:860px; top:262px; width:320px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">25 題 × 8 種溫度</div><div style="font-size:12px; color:#6B7380;">200 條軌跡（整理者算的）</div></div></div>
+  <div style="position:absolute; left:1210px; top:262px; width:320px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">可驗證獎勵當標籤</div><div style="font-size:12px; color:#6B7380;">模擬人評；實務上可換成人工標籤</div></div></div>
+  <div style="position:absolute; left:860px; top:336px; width:670px; height:44px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">只用產生的：單一標準 20、rubric 8；n＝5，刪掉 2 個負係數</div>
+  <div style="position:absolute; left:860px; top:398px; width:216px; height:34px; box-sizing:border-box; background-color:#F3F9F5; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:13px; color:#1C2431;">會員權益（rubric）<span style="margin-left:6px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; color:#2E7B4F;">0.08</span></div>
+  <div style="position:absolute; left:1087px; top:398px; width:216px; height:34px; box-sizing:border-box; background-color:#F3F9F5; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:13px; color:#1C2431;">該轉真人才轉（rubric）<span style="margin-left:6px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; color:#2E7B4F;">0.0599</span></div>
+  <div style="position:absolute; left:1314px; top:398px; width:216px; height:34px; box-sizing:border-box; background-color:#F3F9F5; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:13px; color:#1C2431;">遵守航空規定<span style="margin-left:6px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; color:#2E7B4F;">0.0567</span></div>
+  <div style="position:absolute; left:860px; top:452px; width:670px; height:46px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">GEPA 最佳化：用這三個指標的加權打分</div>
+  <div style="position:absolute; left:840px; top:520px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">作者提醒：軌跡只來自 25 題，指標可能學到資料本身的特徵；<br>刪負係數與人的監督都重要。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">可驗證獎勵：0.680 ± 0.11</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">GEPA 用 τ-bench 的獎勵最佳化，<br>2,000 次 rollout 後，<br>五次試驗的測試平均。</div>
+    <div style="font-size:13px; color:#8A93A0;">未最佳化的 agent 是 0.6。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">AutoMetrics：0.720 ± 0.06</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">改用三個生成指標打分，同樣 2,000 次 rollout；<br>作者說顯著高於 0.6 的基準（p &lt; 0.05），<br>能追平或超過可驗證獎勵。</div>
+    <div style="font-size:13px; color:#8A93A0;">檢定比的是基準；兩組的區間重疊。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">圖 6 的曲線怎麼讀</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">可驗證獎勵的曲線前段比較高，<br>後段降到 0.68；AutoMetrics 在中段<br>兩次往上跳，最後停在 0.72。</div>
+    <div style="font-size:13px; color:#8A93A0;">整理者對圖 6 的讀法；縱軸是平均 pass^1。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：這裡的「人評」其實是 τ-bench 的可驗證獎勵，作者說實務上可換成主觀的人工標籤；圖 5 印的係數是 0.08，附錄 G 寫 0.0803。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c11" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M410 314L410 348" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+    <path d="M410 412L410 446" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+    <path d="M1180 290L1208 290" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+    <path d="M1370 318L1370 334" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+    <path d="M1195 380L1195 396" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+    <path d="M1195 432L1195 450" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>自然的延伸是：拿手上有限的資料學出一組有用的指標，再用它來最佳化系統；這時 AutoMetrics 的角色就像 reward model 或可驗證獎勵。作者選的測試環境是 τ-bench，一個讓使用工具的 agent 和模擬使用者互動、完成任務的測試平台。τ-airline 的 50 個任務切成兩半：25 個訓練、25 個評估。</p>
+    <p><strong>模擬一個可驗證獎勵。</strong>作者把 25 個訓練任務各跑 8 次，溫度分別是 0.0、0.01、0.02、0.03、0.05、0.1、0.15、0.2，共 200 條軌跡（整理者算的），再取得每一條的真實獎勵。作者說實務上這一步可以換成主觀的人工標籤，不一定要可驗證獎勵。AutoMetrics 用「只用產生的」模式，並把資源多給產生的指標：單一標準的評審從 10 個加到 20 個、rubric 從 5 個加到 8 個；其他照預設（k＝30、n＝5）。</p>
+    <p>AutoMetrics 推薦了三個指標：兩個 rubric、一個單一標準（圖 5，附錄 G 有完整的 rubric）。會員權益的套用（rubric，係數 0.08，附錄 G 寫 0.0803），看的是依會員等級正確執行免費行李額度、保險資格與補償規則；該轉真人時才轉（rubric，0.0599），看的是遇到政策上限或需要例外處理時轉給真人客服；遵守航空公司規定（0.0567），例如沒有保險、又超過 24 小時，就不能取消基本經濟艙。附錄 G 印的整體 Kendall τ 是 0.2469。n＝5 原本推薦五個，最後的過濾刪掉兩個係數為負的。作者提醒，軌跡只來自 25 個任務，指標很可能開始學到資料本身的特徵；這說明了人的監督與指標過濾都重要。</p>
+    <p><strong>沒有可驗證獎勵的最佳化。</strong>作者用 DSPy 寫了一個簡單的 ReAct agent 做 τ-airline 的任務，未最佳化時在 25 個測試任務上平均 60% 的正確率（五次試驗）。基準的最佳化用 DSPy 的 GEPA 最佳化器，在 25 個訓練任務上以可驗證獎勵最佳化；另一組改用 AutoMetrics 當 GEPA 的指標。2,000 次 rollout 後，用可驗證獎勵的 GEPA 在五次試驗平均是 0.680 ± 0.11，用 AutoMetrics 的是 0.720 ± 0.06。作者說 AutoMetrics 在統計上顯著高於 0.6 的基準（p &lt; 0.05），並據此說它能追平、甚至超過可驗證獎勵當最佳化訊號。</p>
+
+    <div class="explain stone">
+      <span class="label">怎麼讀圖 6</span>
+      <h4>兩條曲線的走法不一樣</h4>
+      <p>圖 6 的標題是「Tau Bench, Qwen3 32B」，縱軸是測試集上的平均 pass^1，橫軸是 rollout 次數，虛線是 0.60 的未最佳化基準。整理者的讀法是：可驗證獎勵的曲線一開始就跳到最高、維持了大半段，後段才降到 0.68；AutoMetrics 的曲線前半段只略高於基準，中段兩次往上跳，最後停在 0.72。圖上沒有印中間的數字，本頁只用正文寫出的 0.680 與 0.720。</p>
+    </div>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>顯著的是對基準，不是對可驗證獎勵</h4>
+      <p>正文的統計檢定比的是 AutoMetrics 和 0.6 的未最佳化基準；0.720 ± 0.06 和 0.680 ± 0.11 的區間重疊，論文也沒有拿這兩組做檢定。「追平或超過」是作者的說法。另外，這裡的標籤其實就是 τ-bench 的可驗證獎勵，只是先拿 200 條軌跡把它學成指標；換成主觀的人評會怎樣，論文沒有做。這段提醒是整理者的讀法。</p>
+    </div>
+
+    <p>整理者的補充：圖 6 的縱軸是 pass^1，和這一講談的非確定性指標接得上。pass^k 要求同一個任務跑 k 次都成功，k＝1 時就是平均成功率，和 pass@1 相同；這個案例只報 k＝1，看不出 agent 在多次嘗試之間穩不穩。</p>
+
+    <div class="thought">
+      <span class="label">思考題 · 03</span>
+      <h4>如果拿學出來的指標當最佳化目標，你會怎麼防它被鑽漏洞？</h4>
+      <p>想一個你想最佳化的 agent：客服、寫作、程式修改都可以。</p>
+      <p class="hint">作者給的方向有三個：訓練資料要多樣，不然指標會學到資料本身的特徵；係數為負的產生指標要刪、碰巧相關的要請領域專家刪；最佳化時用觀測工具盯著指標的回饋與改善。也可以留一小批沒拿來學指標的人評，最佳化之後再對一次。前三個方向取自第 5、6 節，最後一個是整理者的建議。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="takeaways" data-toc="結論與限制">
+  <div class="container head">
+    <p class="chapter">Chapter 13 · Discussion and Conclusion · Limitations</p>
+    <h2><span class="seg">指標能自動長出來，</span><span class="seg">資料與人的監督不能省</span></h2>
+    <p class="lede">作者的結論是 AutoMetrics 只要約 80 筆人評，就有高的判準效度與構念效度，也能在 τ-bench 追上可驗證獎勵；給從業者的兩個教訓是資料要多樣、人的監督要保留。限制有四條，其中一條是還沒做正式的使用者研究。</p>
+    
+  </div>
+  <div class="cardband" id="card-12"><div class="cardlabel"><span class="n">圖卡 12 / 12</span><span class="t">結論與限制</span><button type="button" class="zoom" data-card="12">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">指標可以自動長出來，資料與人不能省</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 6 節與 Limitations：作者說 AutoMetrics 是在新領域收集初步人評時，探索資料、引導最佳化的實用第一步</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:330px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">01　從訊號反推標準</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">讚與倒讚說不出原因，<br>標準要從資料裡找</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">讓 LLM 從好壞例子找出差異的軸、<br>寫成評審；再用回歸決定哪幾條<br>真的預測得了人評。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 先寫好 rubric，再請 LLM 照打<br>✓ 先收人評，讓標準從資料裡長出來</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:330px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">02　讓指標看得懂</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">權重、卡片、推理軌跡，<br>都攤在報告裡</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">每個指標都有說明與指標卡；<br>報告寫出權重與和人評的相關，<br>評審的推理軌跡也看得到。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 一個說不出理由的總分<br>✓ 幾個有說明、有權重的指標</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:330px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">03　資料與人的監督</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">資料要多樣，<br>碰巧的相關要有人刪</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">約 80 筆人評就夠到中等相關；<br>但資料來源太窄，指標會學到資料的特徵；<br>領域專家要刪掉自動過濾漏掉的指標。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 從少數來源放大合成資料<br>✓ 收能代表評估對象的真實人評</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:536px; font-size:20px; font-weight:700; color:#1C2431;">作者列的限制與提醒（不排順序）</div>
+  <div style="position:absolute; left:60px; top:576px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">01</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">換了模型要重新產生</div>
+  </div>
+  <div style="position:absolute; left:360px; top:576px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">02</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">資料要有代表性</div>
+  </div>
+  <div style="position:absolute; left:660px; top:576px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">03</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">相關不顯著時會警告</div>
+  </div>
+  <div style="position:absolute; left:960px; top:576px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">04</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">還沒有正式的使用者研究</div>
+  </div>
+  <div style="position:absolute; left:1260px; top:576px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">05</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">最佳化時盯著指標的回饋</div>
+  </div>
+  <div style="position:absolute; left:60px; top:668px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">前四格出自 Limitations，第五格出自第 6 節。第一格：用一個模型產生的指標換到別的模型上跑，表現會掉，新模型推出時要用 AutoMetrics 重新最佳化，而不是只換底層的 LLM。<br>第三格：候選多、資料少時仍可能有碰巧的相關，推薦指標和人評的相關不顯著（p &gt; 0.05）時，報告會加上警告。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三條原則與 ✗／✓ 是整理者依第 6 節與 Limitations 歸納的；下排五格是作者列的限制與提醒，原文沒有排順序。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 6 節先總結：AutoMetrics 是一個替主觀任務產生指標、讓指標和人評相關的方法。只要約 80 筆人工標好的例子，就有高的判準效度（第 8 章）與構念效度（第 9 章）；和人評的 Kendall 相關比現有基線最多高 33.4%（第 8 章說明了這個數字對不上表 2）；在 τ-bench 的案例裡，追平或超過用可驗證獎勵最佳化的成果。</p>
+    <p>作者給從業者兩個教訓。第一，資料的多樣性很關鍵：約 80 筆回饋就夠得到中等的相關，但從有限的來源放大合成資料，可能做出反映資料特徵、而不是系統品質的指標（第 12 章的 τ-bench 就是例子）。第二，人的監督仍然必要：領域專家可以刪掉自動過濾漏掉的、碰巧相關的指標；拿指標做最佳化時，從業者應該用觀測工具盯著指標的回饋與改善（作者引 Chavez 2025）。整體來說，作者說 AutoMetrics 是在新領域收集初步人評時，探索資料、引導最佳化的實用第一步；產出的指標看得懂、能拿來行動，也對改進系統有幫助。作者公開了工具，也邀請社群貢獻新的指標與方法。</p>
+    <p>限制一節列了四條。第一，指標是針對特定 LLM 建構與最佳化的，作者發現用一個模型產生的指標換到另一個模型上跑，表現會下降；所以更好的模型推出時，應該用 AutoMetrics 重新最佳化指標，而不是只換掉底層的 LLM。第二，AutoMetrics 只推廣得到資料涵蓋的範圍；收集真實、多樣的人類資料仍是評估的必要部分，使用者應該收集能代表評估要涵蓋的意見與族群的資料。第三，它要在有限的資料點上對很多預測量做回歸，雖然回歸步驟已經考慮到，還是可能碰上高 p 低 n 的假相關；為了避免誤用，推薦指標和人評的相關不顯著（p &gt; 0.05）時，報告會加警告。第四，論文沒有做正式的使用者研究，證明從業者會採用 AutoMetrics；作者只和 AI 開發者做過非正式的測試、收到正面的回饋，希望開源之後和社群一起測試與改進。</p>
+
+    <div class="explain">
+      <span class="label">整理者的讀法</span>
+      <h4>放回這一講：把三種 grader 接成一條管線</h4>
+      <p>下面是整理者的連結。這一講把 grader 分成程式、模型、人三種；AutoMetrics 把三種接在一起：人給少量訊號，LLM 依訊號寫出評審，程式與模型算的現成指標一起進候選，回歸決定誰留下。judge prompt 怎麼設計，這篇的回答是不要只靠人寫，讓 LLM 從好壞例子裡找軸，再用資料挑。已知的偏誤在這裡換了個樣子：不只評審會偏，回歸也會抓到碰巧的相關，所以要刪負係數、看 p 值、請人把關。pairwise、harness 與 Anthropic 的路線圖，論文都沒有處理。</p>
+    </div>
+
+    <dl class="faq">
+      <div><dt>AutoMetrics 需要多少人評？</dt><dd>摘要說不到 100 筆回饋；第 4.6 節在三個資料集上看到約 80 筆之後就持平。少於 80 筆時，作者預設只用產生的指標，不放現成的指標。</dd></div>
+      <div><dt>產生出來的指標，可以換一個模型來跑嗎？</dt><dd>作者不建議。限制一節說，用一個模型產生的指標換到另一個模型上跑，表現會下降；新模型推出時要用 AutoMetrics 重新產生，而不是只換底層的 LLM。</dd></div>
+      <div><dt>回歸挑出的指標一定可信嗎？</dt><dd>不一定。資料少、候選多時仍可能有假相關；報告在相關不顯著（p &gt; 0.05）時會加警告，作者也建議請領域專家刪掉自動過濾漏掉的指標。</dd></div>
+    </dl>
+
+    <div class="pullquote bronze">
+      指標可以從人評裡長出來；長得好不好，要看餵它的資料，也要看盯著它的人。
+      <cite>整理自第 6 節與 Limitations</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="glossary" class="nocard glossary" data-toc="名詞速查">
+  <div class="wide">
+    <p class="eyebrow">Reference · 名詞速查</p>
+    <h2><span class="seg">關鍵名詞，</span><span class="seg">與它們在論文裡的位置</span></h2>
+    <p class="lede">先列系統與它的四個步驟，再列產生評審的方法、效度與實驗用到的量，最後是案例與討論裡的名詞。</p>
+    <dl class="glossary-grid">
+      <div class="term"><dt>AutoMetrics</dt><span class="zh-name">自動產生的指標</span><dd>這篇的方法：從任務說明與少量人評出發，產生評審、檢索現成指標、用回歸組合成會對齊人評的指標（第 3 節）。</dd></div>
+      <div class="term"><dt>MetricBank</dt><span class="zh-name">指標庫</span><dd>作者整理並實作的 48 個自然語言生成指標，29 個要參考答案、19 個不用（附錄 B、表 4）。</dd></div>
+      <div class="term"><dt>Metric Card</dt><span class="zh-name">指標卡</span><dd>仿照 Model Cards 寫的指標說明，七個部分；檢索時當成文件（附錄 B、D）。</dd></div>
+      <div class="term"><dt>Generate</dt><span class="zh-name">產生</span><dd>第一步：預設產生 10 個單一標準、5 個 rubric、1 個附範例、1 個 MIPROv2 最佳化過的評審（第 3.1 節）。</dd></div>
+      <div class="term"><dt>Retrieve</dt><span class="zh-name">檢索</span><dd>第二步：指標卡當文件、任務說明當查詢，ColBERT 先篩到 k′ 張，LLM 再挑出 k 個（預設 30）。</dd></div>
+      <div class="term"><dt>Regress</dt><span class="zh-name">回歸</span><dd>第三步：z 分數加 PLS，依權重取前 n 個（預設 5）再擬合，刪掉係數為負的產生指標。</dd></div>
+      <div class="term"><dt>Report</dt><span class="zh-name">報告</span><dd>第四步：寫出權重、和人評的相關與採用的細節；相關不顯著時加警告。</dd></div>
+      <div class="term"><dt>LLM-as-a-Judge</dt><span class="zh-name">LLM 評審</span><dd>讓 LLM 依一段說明替輸出打分；實驗的基線用原本給標註者的說明。</dd></div>
+      <div class="term"><dt>axis of variation</dt><span class="zh-name">差異的軸</span><dd>LLM 比較好壞例子後提出的評分面向；每條軸成為一個單一標準的評審（附錄 C.3、E.2）。</dd></div>
+      <div class="term"><dt>Single Criterion judge</dt><span class="zh-name">單一標準的評審</span><dd>只評一條軸、輸出 1 到 5 整數分的評審；附錄 F.2 裡被推薦最多的一類（67 個）。</dd></div>
+      <div class="term"><dt>rubric</dt><span class="zh-name">評分說明</span><dd>替一條軸寫出 1 到 5 分各長什麼樣；AutoMetrics 讓 LLM 依好壞例子產生。</dd></div>
+      <div class="term"><dt>Examples-based judge</dt><span class="zh-name">附範例的評審</span><dd>把人評例子分五等份抽樣放進 prompt，試 5 組、挑最接近人評的一組（附錄 E.2）。</dd></div>
+      <div class="term"><dt>MIPROv2</dt><span class="zh-name">prompt 最佳化器</span><dd>DSPy 內建的最佳化器，這裡拿來改寫評審 prompt、挑例子，當成一種昂貴的產生器。</dd></div>
+      <div class="term"><dt>ColBERT → LLMRec</dt><span class="zh-name">兩段式檢索</span><dd>ColBERT 先篩、再交給讀文件的 LLM 排序；附錄 E.1 在 16 種設定裡贏 14 種。</dd></div>
+      <div class="term"><dt>PLS regression</dt><span class="zh-name">偏最小平方回歸</span><dd>找出讓指標分數投影和人評共變異數最大的方向，再沿著它回歸；適合預測量多、又高度相關的情況。</dd></div>
+      <div class="term"><dt>Kendall's τ</dt><span class="zh-name">Kendall 相關</span><dd>兩組排名一致的程度；作者說它不假設分布，比 Spearman 與 Pearson 保守（第 3.2 節）。</dd></div>
+      <div class="term"><dt>criterion validity</dt><span class="zh-name">判準效度</span><dd>指標和參考標準的相關；這裡是和人評的 Kendall τ（表 2）。</dd></div>
+      <div class="term"><dt>construct validity</dt><span class="zh-name">構念效度</span><dd>指標有沒有抓到「品質」這個抽象概念；作者用敏感度與穩定度來量。</dd></div>
+      <div class="term"><dt>content validity</dt><span class="zh-name">內容效度</span><dd>指標有沒有代表它想量的東西；難以量化，作者用公開報告與評審的推理軌跡處理。</dd></div>
+      <div class="term"><dt>Sensitivity</dt><span class="zh-name">敏感度</span><dd>刻意改差的輸出拿到較低分的比例；AutoMetrics 在 81.0% 到 97.8% 之間（第 4.4 節）。</dd></div>
+      <div class="term"><dt>Stability</dt><span class="zh-name">穩定度</span><dd>1 減掉原本與等價改寫的分數差的平均；越接近 1 越不受無關變化影響。</dd></div>
+      <div class="term"><dt>in-distribution、out-of-distribution</dt><span class="zh-name">分布內、分布外</span><dd>MetricBank 裡有沒有專為這個任務設計的指標；五個任務裡三個是分布外。</dd></div>
+      <div class="term"><dt>high-p, low-n</dt><span class="zh-name">高 p 低 n</span><dd>預測量多、資料點少的回歸問題，容易出現假相關；少於 80 筆時只用產生的指標就是為了避開它。</dd></div>
+      <div class="term"><dt>verifiable reward</dt><span class="zh-name">可驗證獎勵</span><dd>可以用程式判定對錯的獎勵；第 5 節拿 τ-bench 的獎勵當標籤學指標，再和它比最佳化的效果。</dd></div>
+      <div class="term"><dt>τ-bench</dt><span class="zh-name">工具型 agent 測試平台</span><dd>agent 和模擬使用者互動、完成任務的測試平台；這篇用它的 50 個航空客服任務。</dd></div>
+      <div class="term"><dt>GEPA</dt><span class="zh-name">反思式 prompt 最佳化器</span><dd>DSPy 裡的 prompt 最佳化器；案例裡分別用可驗證獎勵與 AutoMetrics 當它的指標。</dd></div>
+    </dl>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>資料來源：arXiv，〈AutoMetrics: Approximate Human Judgments with Automatically Generated Evaluators〉，Michael J. Ryan、Yanzhe Zhang、Amol Salunkhe、Yi Chu、Di Xu、Diyi Yang（Stanford University、American Express），2025-12-19（v1）。頁面上的數字依 arXiv v1，表號與圖號照 PDF。會議名 ICLR 2026 依課程書單標注，arXiv 版本本身沒有寫（PDF 頁首是 Preprint）。arXiv 摘要頁的標題拼作 Judgements，這裡照 PDF 的 Judgments。<br><a href="https://arxiv.org/abs/2512.17267">arxiv.org/abs/2512.17267</a></p>
+    <p class="credit">整理於 2026-09-24</p>
+    <p class="disclaimer">本頁為學習用的重述與整理，不是原文逐句翻譯。觀點與著作權屬於原作者。程式片段為教學用精簡版，實際用法請以原文與官方文件為準。</p>
+  </div>
+</footer>
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="圖卡大圖"><button type="button" class="close">關閉（Esc）</button><div class="frame"></div></div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fitFrames() {
+    var frames = document.querySelectorAll('.cardband .frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  var KEY = 'rearranged-article-mode';
+  function setMode(m, save) {
+    document.body.classList.toggle('mode-cards', m === 'cards');
+    var btns = document.querySelectorAll('.modebar button[data-mode]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-mode') === m ? 'true' : 'false');
+    }
+    if (save) { try { localStorage.setItem(KEY, m); } catch (e) {} }
+    fitFrames();
+  }
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  setMode(saved === 'cards' ? 'cards' : 'full', false);
+
+  var box = document.getElementById('lightbox');
+  var boxFrame = box.querySelector('.frame');
+  function fitLightbox() {
+    if (!box.classList.contains('open')) return;
+    var root = boxFrame.firstElementChild;
+    if (!root) return;
+    var s = Math.min(1, (window.innerWidth - 48) / W, (window.innerHeight - 48) / H);
+    root.style.transform = 'scale(' + s + ')';
+    boxFrame.style.width = Math.round(W * s) + 'px';
+    boxFrame.style.height = Math.round(H * s) + 'px';
+  }
+  function openLightbox(num) {
+    var bandEl = document.getElementById('card-' + num);
+    if (!bandEl) return;
+    var root = bandEl.querySelector('.frame > div');
+    boxFrame.innerHTML = '';
+    var clone = root.cloneNode(true);
+    clone.style.transform = '';
+    boxFrame.appendChild(clone);
+    box.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    fitLightbox();
+  }
+  function closeLightbox() {
+    box.classList.remove('open');
+    boxFrame.innerHTML = '';
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var b = t.closest('.modebar button[data-mode]');
+    if (b) { setMode(b.getAttribute('data-mode'), true); return; }
+    var z = t.closest('.cardlabel .zoom');
+    if (z) { openLightbox(z.getAttribute('data-card')); return; }
+    if (t.closest('.lightbox') && !t.closest('.lightbox .frame')) { closeLightbox(); }
+  });
+  document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') closeLightbox(); });
+  window.addEventListener('resize', function () { fitFrames(); fitLightbox(); });
+  window.addEventListener('load', fitFrames);
+  fitFrames();
+})();
+</script>
+</body>
+</html>

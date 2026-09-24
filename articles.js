@@ -793,6 +793,42 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "autometrics-evaluators",
+      "path": "articles/autometrics-evaluators/index.html",
+      "title": "AutoMetrics：用不到 100 筆人評，自動長出一組貼近人類判斷的評估指標",
+      "summary": "Stanford 與 American Express 團隊的 AutoMetrics，把少量而且說不出原因的人評（讚與倒讚、分數、接受或拒絕）變成一組看得懂的自動評估指標：LLM 依好壞例子寫出候選評審，再從 48 個現成指標組成的 MetricBank 檢索，最後用偏最小平方回歸挑出幾個指標、配上權重。在五個任務上，它和人評的 Kendall 相關多數高於 LLM 評審等基線，約 80 筆人評就持平，拿來最佳化 τ-bench 的客服 agent 也追得上可驗證獎勵。這份整理逐章重述方法、實驗與限制，並對照表格核對論文的說法，每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "arXiv · Michael J. Ryan、Yanzhe Zhang、Amol Salunkhe、Yi Chu、Di Xu、Diyi Yang（Stanford University、American Express）",
+        "url": "https://arxiv.org/abs/2512.17267",
+        "date": "2025-12-19"
+      },
+      "date": "2026-09-24",
+      "tags": [
+        "llm-evaluation",
+        "llm-as-a-judge",
+        "evaluation-metrics",
+        "metric-learning",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 8,
+        "kind": "必讀",
+        "section": "Evaluation for Agentic Systems",
+        "lecture": "LLM-as-Judge & Evaluation Infrastructure",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/autometrics-evaluators/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "autolibra-agent-metrics",
       "path": "articles/autolibra-agent-metrics/index.html",
       "title": "AutoLibra：把人對 agent 的一句回饋，歸納成有定義、有正反例的評估指標",
