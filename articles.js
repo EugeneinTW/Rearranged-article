@@ -1,6 +1,42 @@
 window.ARTICLES = {
   "articles": [
     {
+      "slug": "memgpt-virtual-context",
+      "path": "articles/memgpt-virtual-context/index.html",
+      "title": "MemGPT：把脈絡視窗當記憶體管理，讓 LLM 自己把記憶換進換出",
+      "summary": "UC Berkeley 團隊在 2023 年提出 MemGPT：借作業系統的虛擬記憶體，把 LLM 的脈絡視窗當成有限的主記憶體，完整的對話紀錄與文件放在視窗外的資料庫，由模型用函式呼叫自己決定存什麼、找什麼，事件觸發推論、heartbeat 讓它連續呼叫。深度記憶檢索與巢狀鍵值查詢裡，三個模型包進 MemGPT 之後都勝過各自的基線；多文件問答裡，MemGPT 的表現不受視窗長度影響，但配 GPT-3.5 時明顯變差。每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "arXiv · Charles Packer、Sarah Wooders、Kevin Lin、Vivian Fang、Shishir G. Patil、Ion Stoica、Joseph E. Gonzalez（UC Berkeley）",
+        "url": "https://arxiv.org/abs/2310.08560",
+        "date": "2023-10-12"
+      },
+      "date": "2026-09-24",
+      "tags": [
+        "memgpt",
+        "agent-memory",
+        "context-management",
+        "llm-agents",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 4,
+        "kind": "必讀",
+        "section": "Memory & Multi-Agent Systems",
+        "lecture": "Agent Memory Architectures",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/memgpt-virtual-context/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "mcp-specification",
       "path": "articles/mcp-specification/index.html",
       "title": "MCP 規格讀法：先看誰守哪條邊界，再看訊息怎麼走（2025-06-18 版）",

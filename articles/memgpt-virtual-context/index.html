@@ -1,0 +1,1921 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MemGPT（Packer et al. 2023）</title>
+<meta name="description" content="UC Berkeley 團隊在 2023 年提出 MemGPT：借作業系統的虛擬記憶體，把 LLM 的脈絡視窗當成有限的主記憶體，完整的對話紀錄與文件放在視窗外的資料庫，由模型用函式呼叫自己決定存什麼、找什麼，事件觸發推論、heartbeat 讓它連續呼叫。深度記憶檢索與巢狀鍵值查詢裡，三個模型包進 MemGPT 之後都勝過各自的基線；多文件問答裡，MemGPT 的表現不受視窗長度影響，但配 GPT-3.5 時明顯變差。每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="memgpt, agent-memory, context-management, llm-agents, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2310.08560">
+<meta name="date" content="2026-09-24">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Theme: tech-modern 變體「測試報告語意色」
+   藍 = 主色 / 綠 = pass / 琥珀 = 注意 / 紅 = fail
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --paper: #ffffff;
+  --paper-soft: #f3f5f8;
+  --paper-shadow: #dde2e8;
+  --ink: #121821;
+  --ink-soft: #3b4450;
+  --ink-mute: #6b7481;
+  --primary: #1e56a8;
+  --primary-deep: #143a72;
+  --primary-bg: #e6eef9;
+  --accent: #157a52;
+  --accent-deep: #0d5236;
+  --accent-bg: #e1f3e9;
+  --warm: #b8620e;
+  --warm-deep: #7d4108;
+  --warm-bg: #fbeddc;
+  --danger: #b83228;
+  --danger-bg: #f9e3e0;
+  --stone: #5a6370;
+  --stone-bg: #eceff3;
+  --code-bg: #0f1720;
+  --code-ink: #e6edf3;
+  --code-mute: #8b98a8;
+  --code-blue: #7cc4ff;
+  --code-green: #7ee2b8;
+  --code-amber: #ffc46b;
+
+  --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-cjk: 'Noto Sans TC', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --content-width: 780px;
+  --wide-width: 1100px;
+  --gutter: 24px;
+}
+
+/* ---------- reset & 排版 ---------- */
+* { box-sizing: border-box; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+body {
+  margin: 0; padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-cjk);
+  font-size: 18px;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: var(--content-width); margin: 0 auto; padding: 0 var(--gutter); }
+.wide { max-width: var(--wide-width); margin: 0 auto; padding: 0 var(--gutter); }
+section { padding-block: 64px; }
+section + section { border-top: 1px solid var(--paper-shadow); }
+
+h1, h2, h3, h4 { font-family: var(--font-cjk); font-weight: 700; text-wrap: balance; }
+h1 { font-size: 56px; line-height: 1.14; margin: 0 0 24px; font-weight: 800; }
+h2 { font-size: 36px; line-height: 1.25; margin: 0 0 18px; letter-spacing: -0.01em; }
+h3 { font-size: 25px; line-height: 1.35; margin: 44px 0 14px; }
+h4 { font-size: 20px; line-height: 1.4; margin: 26px 0 10px; }
+p { margin: 0 0 18px; }
+ul, ol { padding-left: 26px; margin: 0 0 18px; }
+li { margin-bottom: 8px; }
+em { font-style: normal; color: var(--primary-deep); font-weight: 600; }
+strong { font-weight: 700; }
+a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+code {
+  font-family: var(--font-mono); font-size: 0.86em;
+  background: var(--stone-bg); color: var(--primary-deep);
+  padding: 2px 6px; border-radius: 4px;
+}
+.mono { font-family: var(--font-mono); }
+
+/* ---------- Hero ---------- */
+.hero {
+  padding-block: 84px 60px;
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-soft) 100%);
+  border-bottom: 2px solid var(--primary-deep);
+  position: relative;
+}
+.hero::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: linear-gradient(90deg,
+    var(--primary) 0%, var(--primary) 25%,
+    var(--accent) 25%, var(--accent) 50%,
+    var(--warm) 50%, var(--warm) 75%,
+    var(--danger) 75%, var(--danger) 100%);
+}
+.hero-meta {
+  display: flex; flex-wrap: wrap; gap: 10px 22px;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  margin-bottom: 32px;
+}
+.hero-meta span::before { content: "—"; margin-right: 10px; color: var(--paper-shadow); }
+.hero-meta span:first-child::before { content: ""; margin: 0; }
+.hero h1 { font-size: 60px; font-weight: 800; word-break: keep-all; }
+.hero h1 .accent {
+  display: block; margin-top: 12px;
+  font-size: 0.55em; font-weight: 600; line-height: 1.3;
+  color: var(--primary-deep);
+}
+.hero .lede { font-size: 22px; max-width: 720px; }
+.hero-keystat {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 28px; margin: 44px 0 0; padding-top: 34px;
+  border-top: 1px dashed var(--paper-shadow);
+}
+.hero-keystat dt {
+  font-family: var(--font-sans);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--ink-mute); margin-bottom: 6px;
+}
+.hero-keystat dd {
+  margin: 0; font-family: var(--font-mono);
+  font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1;
+}
+.hero-keystat dd small { font-family: var(--font-cjk); font-size: 14px; color: var(--ink-mute); font-weight: 400; margin-left: 6px; }
+
+/* ---------- Chapter / lede / eyebrow ---------- */
+.chapter {
+  font-family: var(--font-mono);
+  font-size: 12.5px; color: var(--primary);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 0 0 10px;
+}
+.chapter::before { content: "§ "; color: var(--paper-shadow); margin-right: 4px; }
+.lede {
+  font-size: 22px; line-height: 1.6; color: var(--ink-soft);
+  margin: 0 0 28px; font-weight: 400;
+}
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--primary); margin: 0 0 14px;
+}
+
+/* ---------- Pull quote ---------- */
+.pullquote {
+  margin: 48px -16px; padding: 32px 40px;
+  font-family: var(--font-cjk);
+  font-size: 27px; line-height: 1.5; font-weight: 600;
+  color: var(--primary-deep);
+  border-left: 5px solid var(--primary);
+  background: linear-gradient(90deg, var(--primary-bg) 0%, transparent 100%);
+}
+.pullquote.bronze {
+  color: var(--accent-deep); border-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-bg) 0%, transparent 100%);
+}
+.pullquote.terra {
+  color: var(--warm-deep); border-color: var(--warm);
+  background: linear-gradient(90deg, var(--warm-bg) 0%, transparent 100%);
+}
+.pullquote cite {
+  display: block; margin-top: 16px; font-style: normal; font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  letter-spacing: 0.06em;
+}
+.pullquote cite::before { content: "— "; }
+
+/* ---------- English quote ---------- */
+.quote-en {
+  margin: 28px 0;
+  font-family: var(--font-sans); font-style: italic;
+  font-size: 21px; line-height: 1.5; color: var(--ink);
+  padding-left: 20px; border-left: 3px solid var(--accent);
+}
+.quote-en .zh {
+  display: block; margin-top: 10px;
+  font-family: var(--font-cjk); font-style: normal;
+  font-size: 15px; color: var(--ink-soft); line-height: 1.6;
+}
+
+/* ---------- Story ---------- */
+.story {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 14px;
+  padding: 38px 44px; margin: 48px 0;
+  position: relative;
+}
+.story::before {
+  content: "❝"; position: absolute; top: -6px; left: 24px;
+  font-size: 72px; color: var(--warm); line-height: 1;
+  font-family: var(--font-sans);
+}
+.story .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.18em;
+  color: var(--warm); margin-bottom: 10px; padding-left: 42px;
+}
+.story h4 { margin: 0 0 16px; font-size: 22px; color: var(--warm-deep); }
+.story p { margin-bottom: 14px; font-size: 17px; line-height: 1.7; }
+.story p:last-child { margin-bottom: 0; }
+
+/* ---------- Explain ---------- */
+.explain {
+  background: var(--primary-bg);
+  border-left: 4px solid var(--primary);
+  border-radius: 4px;
+  padding: 26px 30px; margin: 36px 0;
+  font-family: var(--font-cjk); position: relative;
+}
+.explain.bronze { background: var(--accent-bg); border-color: var(--accent); }
+.explain.terra { background: var(--warm-bg); border-color: var(--warm); }
+.explain.stone { background: var(--stone-bg); border-color: var(--stone); }
+.explain .label {
+  position: absolute; top: -12px; left: 16px;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.15em; padding: 4px 12px;
+  border-radius: 3px; text-transform: uppercase;
+}
+.explain.bronze .label { background: var(--accent); }
+.explain.terra .label { background: var(--warm); }
+.explain.stone .label { background: var(--stone); }
+.explain h4 { margin: 4px 0 12px; font-size: 19px; color: var(--primary-deep); }
+.explain.bronze h4 { color: var(--accent-deep); }
+.explain.terra h4 { color: var(--warm-deep); }
+.explain.stone h4 { color: var(--ink); }
+.explain p { font-size: 16.5px; }
+.explain p:last-child { margin-bottom: 0; }
+.explain ul, .explain ol { margin: 8px 0 0; padding-left: 22px; }
+.explain li { margin-bottom: 6px; font-size: 16px; }
+.explain code { background: rgba(255,255,255,0.75); }
+
+/* ---------- Stat grid ---------- */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.stat-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 28px 24px; text-align: center;
+  border-top: 4px solid var(--primary);
+}
+.stat-card.bronze { border-color: var(--accent); }
+.stat-card.terra { border-color: var(--warm); }
+.stat-card.danger { border-color: var(--danger); }
+.stat-card .big {
+  font-family: var(--font-mono);
+  font-size: 46px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1; margin-bottom: 10px;
+}
+.stat-card.bronze .big { color: var(--accent-deep); }
+.stat-card.terra .big { color: var(--warm-deep); }
+.stat-card.danger .big { color: var(--danger); }
+.stat-card .big small { font-family: var(--font-cjk); font-size: 16px; opacity: 0.75; margin-left: 4px; font-weight: 500; }
+.stat-card .label {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.stat-card .note { margin-top: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.55; }
+
+/* ---------- Compare table ---------- */
+.table-scroll { overflow-x: auto; margin: 36px 0; }
+.compare {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-cjk); font-size: 15.5px;
+  background: var(--paper-soft);
+  border-radius: 10px; overflow: hidden;
+  min-width: 560px;
+}
+.compare th, .compare td {
+  padding: 15px 18px; text-align: left;
+  border-bottom: 1px solid var(--paper-shadow);
+  vertical-align: top; line-height: 1.6;
+}
+.compare th {
+  background: var(--primary-deep); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+}
+.compare tr:last-child td { border-bottom: none; }
+.compare td:first-child { font-weight: 700; color: var(--primary-deep); width: 24%; }
+.compare .id { font-family: var(--font-mono); font-size: 13px; display: block; color: var(--ink-mute); font-weight: 500; margin-bottom: 2px; }
+.compare .yes { color: var(--accent-deep); font-weight: 700; }
+.compare .no { color: var(--danger); font-weight: 700; }
+
+/* ---------- Value cards ---------- */
+.values {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.value-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 26px 24px;
+  border-top: 5px solid var(--primary);
+}
+.value-card:nth-child(2) { border-top-color: var(--accent); }
+.value-card:nth-child(3) { border-top-color: var(--warm); }
+.value-card:nth-child(4) { border-top-color: var(--primary-deep); }
+.value-card:nth-child(5) { border-top-color: var(--stone); }
+.value-card .num {
+  font-family: var(--font-mono);
+  font-size: 38px; font-weight: 700;
+  color: var(--primary); line-height: 1; margin-bottom: 12px;
+}
+.value-card:nth-child(2) .num { color: var(--accent); }
+.value-card:nth-child(3) .num { color: var(--warm); }
+.value-card:nth-child(4) .num { color: var(--primary-deep); }
+.value-card:nth-child(5) .num { color: var(--stone); }
+.value-card .tag {
+  display: inline-block; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--primary); margin-bottom: 10px;
+}
+.value-card:nth-child(2) .tag { color: var(--accent); }
+.value-card:nth-child(3) .tag { color: var(--warm); }
+.value-card:nth-child(4) .tag { color: var(--primary-deep); }
+.value-card h4 { margin: 0 0 10px; font-size: 19px; line-height: 1.4; }
+.value-card p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin: 0; }
+
+/* ---------- 擴充檢查卡（附成本標籤） ---------- */
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px; margin: 40px 0;
+}
+.card {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 12px;
+  padding: 24px 24px 22px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.card .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card h4 { margin: 0; font-size: 18.5px; line-height: 1.4; }
+.card p { margin: 0; font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); }
+.card .signal { font-family: var(--font-mono); font-size: 12.5px; color: var(--primary-deep); background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 6px; padding: 6px 10px; margin-top: 4px; overflow-x: auto; white-space: nowrap; }
+.pill {
+  flex: none; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px;
+}
+.pill.fast { background: var(--accent-bg); color: var(--accent-deep); }
+.pill.mid { background: var(--warm-bg); color: var(--warm-deep); }
+.pill.slow { background: var(--danger-bg); color: var(--danger); }
+
+/* ---------- Thought ---------- */
+.thought {
+  background: var(--accent-bg);
+  border-left: 4px solid var(--accent);
+  padding: 26px 30px; margin: 40px 0;
+  border-radius: 4px; position: relative;
+}
+.thought .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--accent-deep); margin-bottom: 10px;
+}
+.thought h4 { font-size: 19px; margin: 0 0 14px; color: var(--accent-deep); line-height: 1.45; }
+.thought p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin-bottom: 8px; }
+.thought .hint {
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px dashed rgba(13, 82, 54, 0.3);
+  font-size: 14px; color: var(--accent-deep);
+}
+.thought .hint::before { content: "建議方向："; font-weight: 700; }
+
+/* ---------- Code block ---------- */
+.codeblock { margin: 30px 0; }
+.codeblock .file {
+  display: inline-block; font-family: var(--font-mono);
+  font-size: 12px; color: var(--ink-mute);
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow); border-bottom: none;
+  border-radius: 8px 8px 0 0; padding: 7px 14px;
+}
+pre.code {
+  margin: 0; background: var(--code-bg); color: var(--code-ink);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65;
+  padding: 22px 24px; border-radius: 0 10px 10px 10px;
+  overflow-x: auto; tab-size: 2; white-space: pre;
+}
+pre.code.solo { border-radius: 10px; }
+pre.code .c { color: var(--code-mute); }
+pre.code .k { color: var(--code-blue); }
+pre.code .s { color: var(--code-green); }
+pre.code .a { color: var(--code-amber); font-weight: 700; }
+
+/* ---------- Flow（eval 迴圈圖） ---------- */
+.flow { display: flex; align-items: stretch; margin: 40px 0; }
+.flow-step {
+  flex: 1 1 0; min-width: 0;
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow);
+  border-radius: 10px; padding: 18px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.flow-step .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--primary); letter-spacing: 0.1em; }
+.flow-step strong { font-size: 17px; line-height: 1.3; }
+.flow-step span.d { font-size: 14px; line-height: 1.55; color: var(--ink-soft); }
+.flow-step.score { border-color: var(--accent); background: var(--accent-bg); }
+.flow-step.score .k { color: var(--accent-deep); }
+.flow-arrow { flex: none; width: 30px; position: relative; }
+.flow-arrow::before {
+  content: ""; position: absolute; top: 50%; left: 2px; right: 2px; height: 2px;
+  background: var(--primary); transform: translateY(-50%);
+}
+.flow-arrow::after {
+  content: ""; position: absolute; top: 50%; right: 4px; width: 9px; height: 9px;
+  border-top: 2px solid var(--primary); border-right: 2px solid var(--primary);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+/* ---------- Cascade（編號步驟） ---------- */
+.cascade { display: flex; flex-direction: column; gap: 14px; margin: 32px 0; }
+.cascade-step {
+  display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px;
+}
+.cascade-step .n {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-mono); font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.cascade-step .t { font-size: 16.5px; line-height: 1.65; }
+.cascade-step .t strong { display: block; margin-bottom: 2px; }
+
+/* ---------- Checklist ---------- */
+.checklist { list-style: none; padding: 0; margin: 32px 0; display: flex; flex-direction: column; gap: 12px; }
+.checklist li {
+  display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px; margin: 0;
+  font-size: 16.5px; line-height: 1.65;
+}
+.checklist .box {
+  width: 24px; height: 24px; margin-top: 3px;
+  border: 2px solid var(--accent); border-radius: 6px; background: var(--paper);
+}
+.checklist strong { display: block; }
+.checklist small { display: block; color: var(--ink-soft); font-size: 15px; }
+
+/* ---------- Glossary ---------- */
+.glossary { background: var(--primary-deep); color: var(--paper); padding-block: 64px; }
+.glossary h2 { color: var(--paper); margin-top: 0; }
+.glossary .eyebrow { color: var(--accent-bg); }
+.glossary .lede { color: var(--paper); opacity: 0.8; }
+.glossary-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 26px; margin: 42px 0 0;
+}
+.term { border-top: 2px solid var(--accent); padding-top: 16px; }
+.term:nth-child(3n+2) { border-color: var(--warm); }
+.term:nth-child(3n+3) { border-color: var(--paper); }
+.term dt {
+  font-family: var(--font-mono);
+  font-size: 14px; font-weight: 700;
+  color: var(--accent-bg); letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+.term .zh-name { font-family: var(--font-cjk); font-size: 16px; font-weight: 600; color: var(--paper); margin-bottom: 8px; display: block; }
+.term dd { margin: 0; font-family: var(--font-cjk); font-size: 14.5px; line-height: 1.65; color: rgba(255, 255, 255, 0.8); }
+
+/* ---------- TOC ---------- */
+.toc {
+  position: fixed; right: 24px; top: 50%; transform: translateY(-50%); z-index: 10;
+  font-family: var(--font-sans); font-size: 12px;
+  background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 10px;
+  padding: 18px 20px; max-width: 236px;
+  box-shadow: 0 4px 18px rgba(18, 24, 33, 0.08);
+}
+.toc h5 { margin: 0 0 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-mute); }
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc -1; }
+.toc li { margin-bottom: 6px; counter-increment: toc; font-size: 12px; line-height: 1.45; display: flex; gap: 8px; }
+.toc li::before { content: counter(toc, decimal-leading-zero); font-family: var(--font-mono); color: var(--ink-mute); font-size: 10.5px; padding-top: 2px; }
+.toc a { color: var(--ink-soft); text-decoration: none; }
+.toc a:hover { color: var(--primary); }
+@media (max-width: 1340px) { .toc { display: none; } }
+
+/* ---------- Footer ---------- */
+footer {
+  padding-block: 48px 64px;
+  background: var(--paper-soft);
+  text-align: center;
+  font-family: var(--font-cjk);
+  font-size: 13.5px; color: var(--ink-mute);
+}
+footer p { margin: 0 0 8px; }
+footer .credit { font-family: var(--font-sans); }
+footer .disclaimer { margin-top: 14px; font-size: 12px; opacity: 0.75; max-width: 640px; margin-inline: auto; }
+
+/* ---------- 響應式 ---------- */
+@media (max-width: 768px) {
+  body { font-size: 17px; }
+  .hero { padding-block: 56px 42px; }
+  .hero h1 { font-size: 36px; }
+  .hero .lede { font-size: 18px; }
+  h2 { font-size: 27px; }
+  h3 { font-size: 22px; }
+  section { padding-block: 46px; }
+  .lede { font-size: 19px; }
+  .pullquote { font-size: 21px; margin: 34px 0; padding: 24px; }
+  .story { padding: 30px 24px; }
+  .stat-card .big { font-size: 36px; }
+  .flow { flex-direction: column; }
+  .flow-arrow { width: auto; height: 30px; }
+  .flow-arrow::before { top: 2px; bottom: 2px; left: 50%; right: auto; width: 2px; height: auto; transform: translateX(-50%); }
+  .flow-arrow::after { top: auto; bottom: 4px; left: 50%; right: auto; transform: translateX(-50%) rotate(135deg); }
+  .compare td:first-child { width: auto; }
+}
+
+/* ---------- 列印 ---------- */
+@media print {
+  .toc { display: none; }
+  body { font-size: 12pt; }
+  .hero, .glossary {
+    color: var(--ink) !important; background: white !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .glossary h2, .glossary .term dt, .glossary .lede, .glossary .term .zh-name { color: var(--ink) !important; }
+  .glossary .term dd { color: var(--ink-soft) !important; }
+  pre.code { background: #f3f5f8 !important; color: #121821 !important; border: 1px solid #ccd; white-space: pre-wrap; }
+  pre.code .c, pre.code .k, pre.code .s, pre.code .a { color: inherit !important; }
+  section { page-break-inside: avoid; }
+}
+
+/* ---------- 整合版：模式列、圖卡帶、燈箱 ---------- */
+.modebar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; padding: 10px var(--gutter); background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--paper-shadow); font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.modebar .brand { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.modebar .left { display: flex; align-items: center; gap: 14px; }
+.modebar .homelink { font-size: 12px; font-weight: 600; color: var(--ink-mute); text-decoration: none; }
+.modebar .homelink:hover { color: var(--primary); text-decoration: underline; }
+.modebar .switch { display: flex; gap: 6px; }
+.modebar button { font: inherit; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.modebar button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+.modebar button:focus-visible, .cardlabel .zoom:focus-visible, .lightbox .close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.modebar .canvaslink { font-size: 12px; color: var(--ink-mute); }
+.cardband { max-width: 1600px; margin: 4px auto 40px; padding: 0 var(--gutter); }
+.cardlabel { display: flex; align-items: baseline; gap: 14px; padding: 0 2px 8px; font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.cardlabel .n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--warm); }
+.cardlabel .zoom { margin-left: auto; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--paper-shadow); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; font-size: 16px; color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(18, 24, 33, 0.86); display: none; align-items: center; justify-content: center; padding: 24px; }
+.lightbox.open { display: flex; }
+.lightbox .frame { border: none; border-radius: 8px; max-width: none; width: auto; flex: none; }
+.lightbox .close { position: absolute; top: 14px; right: 18px; font: inherit; font-family: var(--font-sans); font-size: 13px; color: #FFFFFF; background: transparent; border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.faq { margin: 36px 0 8px; padding: 0; }
+.faq > div { padding: 18px 0; border-top: 1px solid var(--paper-shadow); }
+.faq > div:last-child { border-bottom: 1px solid var(--paper-shadow); }
+.faq dt { margin: 0 0 6px; font-weight: 700; font-size: 17px; color: var(--ink); }
+.faq dt::before { content: "問"; display: inline-block; margin-right: 10px; padding: 1px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; color: #FFFFFF; background: var(--primary); vertical-align: 2px; }
+.faq dd { margin: 0; font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+body.mode-cards section .prose { display: none; }
+body.mode-cards section.nocard { display: none; }
+body.mode-cards section { padding-block: 44px; }
+body.mode-cards .toc li.nocard { display: none; }
+@media (max-width: 768px) { .cardband { margin-bottom: 32px; } .modebar { font-size: 12px; } }
+@media print {
+  .modebar, .lightbox, .cardlabel .zoom { display: none !important; }
+  body.mode-cards section .prose { display: block !important; }
+  body.mode-cards section.nocard { display: block !important; }
+  section { page-break-inside: auto; }
+  .cardband, .story, .explain, .thought, .stat-grid, .values, .cards, .table-scroll { page-break-inside: avoid; }
+  .frame { height: auto !important; border: none; border-radius: 0; }
+  .frame > div { transform: none !important; zoom: 0.44; }
+}
+
+</style>
+</head>
+<body>
+<div class="modebar">
+  <div class="left"><a class="homelink" href="../../">← 首頁</a><span class="brand">MemGPT · 圖卡 + 教材</span></div>
+  <div class="switch" role="group" aria-label="閱讀模式">
+    <button type="button" data-mode="full" aria-pressed="true">圖卡＋詳解</button>
+    <button type="button" data-mode="cards" aria-pressed="false">只看圖卡</button>
+  </div>
+  <a class="canvaslink" href="cards.html">圖卡連續閱讀版</a>
+</div>
+<nav class="toc" aria-label="目錄">
+  <h5>目錄</h5>
+  <ol>
+    <li class="nocard"><a href="#prologue">第 4 週為什麼讀它</a></li>
+    <li><a href="#fixed-window">固定視窗裝不下</a></li>
+    <li><a href="#virtual-context">作業系統的類比</a></li>
+    <li><a href="#memory-tiers">主脈絡與外部脈絡</a></li>
+    <li><a href="#queue-manager">佇列管理器與逐出</a></li>
+    <li><a href="#function-executor">函式執行器</a></li>
+    <li><a href="#control-flow">事件與 heartbeat</a></li>
+    <li class="nocard"><a href="#experiment-setup">實驗怎麼設計</a></li>
+    <li><a href="#deep-memory">深度記憶檢索</a></li>
+    <li class="nocard"><a href="#opener">對話開場白</a></li>
+    <li><a href="#document-qa">多文件問答</a></li>
+    <li><a href="#nested-kv">巢狀鍵值檢索</a></li>
+    <li class="nocard"><a href="#related">相關工作的位置</a></li>
+    <li><a href="#takeaways">結論與代價</a></li>
+    <li class="nocard"><a href="#glossary">名詞速查</a></li>
+  </ol>
+</nav>
+<header class="hero">
+  <div class="container">
+    <div class="hero-meta">
+      <span>arXiv · 2023-10-12（v2 2024-02-12）</span>
+      <span>研究論文（UC Berkeley）</span>
+      <span>作者 Charles Packer、Sarah Wooders、Kevin Lin、Vivian Fang、Shishir G. Patil、Ion Stoica、Joseph E. Gonzalez</span>
+    </div>
+    <p class="eyebrow">MEMGPT · TOWARDS LLMS AS OPERATING SYSTEMS · 圖卡＋教材整合版</p>
+    <h1>把脈絡視窗當記憶體， 讓 LLM 自己換頁<span class="accent">MemGPT：主脈絡在視窗內， 其餘放在視窗外， 由模型用函式呼叫搬進搬出</span></h1>
+    <p class="lede">LLM 的脈絡視窗長度固定：最常用的開源模型只撐得住幾十則訊息，長文件更放不下。這篇論文不去加長視窗，而是借作業系統的虛擬記憶體：視窗是有限的主記憶體，完整的對話紀錄與文件放在視窗外的資料庫，模型用函式呼叫自己決定什麼時候存、什麼時候找；事件觸發推論，一個 heartbeat 參數讓它連續呼叫好幾個函式。作者在多段對話與文件分析兩個領域測試，結論是 MemGPT 都勝過只靠固定視窗的做法，但效果很依賴底層模型會不會呼叫函式。每章開頭先放一張圖解卡講重點，往下是詳細作法；想速讀就切到「只看圖卡」。</p>
+    <dl class="hero-keystat">
+      <div><dt>深度記憶檢索 · GPT-4</dt><dd>92.5<small>% · 不加 MemGPT 是 32.1%</small></dd></div>
+      <div><dt>開場白與人設的相似度</dt><dd>0.868<small>SIM-1 · 人寫的是 0.800</small></dd></div>
+      <div><dt>巢狀鍵值 · GPT-4 基線</dt><dd>0<small>% · 到第 3 層；包進 MemGPT 不受層數影響</small></dd></div>
+      <div><dt>Llama 2 的視窗</dt><dd>4k<small>tokens · 約 60 則訊息</small></dd></div>
+    </dl>
+  </div>
+</header>
+
+
+<section id="prologue" data-toc="第 4 週為什麼讀它" class="nocard">
+  <div class="container">
+    <p class="chapter">Prologue · 整理者的引言</p>
+    <h2>用管記憶體的方法管脈絡，這個想法出自 MemGPT</h2>
+    <p class="lede">Stanford CS 329Z 第 4 週「Agent Memory Architectures」那一講，談短期與長期記憶、把記憶當成工具動作、用檔案系統當外部記憶、結構化記憶，以及跨 agent 的記憶。這篇 2023 年的論文排在這一講的必讀，它是「用作業系統的虛擬記憶體比喻來管理 LLM 脈絡」的出處。</p>
+
+    <p>一個 agent 在某一刻「知道」的東西，全部都在它這一次的 prompt 裡；prompt 以外的一切，都得先被放進來才用得上。所以談 agent 的記憶，繞不開兩個問題：視窗裡放什麼，以及由誰、在什麼時候把東西搬進搬出。MemGPT 用作業系統的語言回答：脈絡視窗是容量有限的主記憶體，視窗外的資料庫是磁碟，模型自己用函式呼叫做換頁。這一講的五個講題，幾乎都能在這個切法上找到位置，結論章會逐一對回來。</p>
+    <p>論文的作者是 UC Berkeley 的七位研究者，第一作者 Charles Packer，Ion Stoica 與 Joseph E. Gonzalez 也在作者群裡。第一版在 2023 年 10 月貼上 arXiv，2024 年 2 月更新成第二版，這一頁依第二版整理；實驗用的是 GPT-3.5 Turbo、GPT-4、GPT-4 Turbo 這些 2023 年底的 OpenAI 模型，數字只對它們成立。後來的 Letta 公司就是從這個專案出來的；這一句是整理者的補充，論文裡沒有。</p>
+    <p>這一頁怎麼處理論文，先說清楚。章節跟著論證走，不跟著節號走：第 1、2 章是問題與想法，第 3 到 6 章把系統拆成四個元件（記憶階層、佇列管理器、函式執行器、事件與函式連鎖），第 7 到 11 章是實驗設計與四個任務，第 12 章是相關工作，第 13 章是結論與代價。數字只用正文與表 1 到表 3 寫出來的；圖 5、圖 7 的點沒有標數字，這裡不替它們估。附錄的提示詞改寫成中文說明，函式名照原文保留。哪些歸納是整理者的，每張圖卡的腳註都會說。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>論文的用語（2023）</th><th>其他叫法（整理者加的對照）</th><th>這一頁怎麼寫</th></tr></thead>
+        <tbody>
+          <tr><td>main context</td><td>放進 context window 的內容、短期記憶</td><td>主脈絡</td></tr>
+          <tr><td>external context</td><td>長期記憶、外部記憶</td><td>外部脈絡</td></tr>
+          <tr><td>working context</td><td>附錄的提示詞稱它 core memory</td><td>工作脈絡</td></tr>
+          <tr><td>archival storage</td><td>放在向量資料庫、可以搜尋的長期記憶</td><td>照原文寫 archival storage</td></tr>
+          <tr><td>recall storage</td><td>完整的對話紀錄資料庫</td><td>照原文寫 recall storage</td></tr>
+          <tr><td>function call</td><td>tool call、工具呼叫</td><td>函式呼叫</td></tr>
+          <tr><td>LLM processor</td><td>模型本身</td><td>LLM 處理器，或直接寫模型</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>先把幾個名詞對齊</h4>
+      <ul>
+        <li><strong>脈絡視窗（context window）</strong>：模型一次推論能讀進的最大 token 數，prompt 與它的輸出都算在裡面。超過就得刪減或截斷。</li>
+        <li><strong>token</strong>：模型處理文字的單位，一個英文單字大約一到兩個 token。表 1 用每則訊息約 50 tokens 來估算。</li>
+        <li><strong>函式呼叫（function calling）</strong>：模型不直接回話，而是輸出「呼叫哪個函式、帶什麼參數」，由外面的程式執行後把結果交回給它。</li>
+        <li><strong>虛擬記憶體與分頁（virtual memory、paging）</strong>：作業系統把暫時用不到的資料寫到磁碟，要用時再讀回主記憶體，讓程式以為記憶體比實際的多。</li>
+        <li><strong>檢索增強（retrieval augmentation）</strong>：先用檢索器找出相關文件，再放進 prompt 讓模型回答，也就是常說的 RAG。</li>
+      </ul>
+    </div>
+
+    <div class="pullquote">
+      模型推論時只看得到視窗裡的東西；記憶設計要回答的，是由誰、在什麼時候，把什麼搬進視窗。
+      <cite>整理者的引言</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="fixed-window" data-toc="固定視窗裝不下">
+  <div class="container head">
+    <p class="chapter">Chapter 01 · Introduction · Table 1</p>
+    <h2>最常用的開源模型，只裝得下幾十則訊息</h2>
+    <p class="lede">依表 1 的估算，Llama 2 的 4k tokens 大約放得下 60 則訊息；直接加長視窗，成本隨長度平方成長，長脈絡模型也不一定用得好多出來的內容。</p>
+    
+  </div>
+  <div class="cardband" id="card-02"><div class="cardlabel"><span class="n">圖卡 02 / 11</span><span class="t">固定視窗：只裝得下幾十則</span><button type="button" class="zoom" data-card="02">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">最常用的開源模型，只裝得下幾十則訊息</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 1（2024 年 1 月收集）：十個模型的脈絡視窗，以及大約放得下幾則訊息（假設前置 prompt 1k tokens、每則約 50 tokens）。橫軸是對數量尺</div>
+
+  <div style="position:absolute; left:60px; top:150px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>開源或開放權重</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>只能透過 API</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:0px; height:14px; border-left:1.5px dashed #C8501F;"></div>超過視窗的文件</div>
+    <div style="color:#8A93A0;">位置照表 1 的 token 數；點旁是表 1 估的訊息數</div>
+  </div>
+  <div style="position:absolute; left:1040px; top:178px; width:450px; text-align:right; font-size:13px; font-weight:500; color:#C8501F;">右端 100 萬 tokens：一份 10-K 年報就可能超過（第 3.2 節）</div>
+
+  <div style="position:absolute; left:60px; top:248px; font-size:18px; font-weight:700; color:#1C2431;">開源</div>
+  <div style="position:absolute; left:180px; top:262px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:222px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+
+  <div style="position:absolute; left:303px; top:253px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:328px; top:252px; font-size:13px; color:#2B3340;">Llama（1）<span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">2k</span> · 20 則</div>
+  <div style="position:absolute; left:436px; top:213px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:461px; top:212px; font-size:13px; color:#2B3340;">Llama 2 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">4k</span> · 60 則</div>
+  <div style="position:absolute; left:568px; top:253px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:593px; top:252px; font-size:13px; color:#2B3340;">Mistral 7B <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">8k</span> · 140 則</div>
+  <div style="position:absolute; left:1183px; top:253px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1208px; top:252px; font-size:13px; color:#2B3340;">Yi-34B-200k <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">200k</span> · 約 4,000 則</div>
+
+  <div style="position:absolute; left:60px; top:310px; font-size:14px; font-weight:700; color:#1C2431;">視窗長度</div>
+  <div style="position:absolute; left:180px; top:300px; width:1320px; height:40px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:311px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">1k</div>
+  <div style="position:absolute; left:604px; top:311px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">10k</div>
+  <div style="position:absolute; left:1040px; top:311px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">100k</div>
+  <div style="position:absolute; left:1464px; top:311px; width:28px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">1M</div>
+  <div style="position:absolute; left:1336px; top:344px; font-size:12px; color:#8A93A0;">tokens，對數量尺</div>
+
+  <div style="position:absolute; left:60px; top:386px; font-size:18px; font-weight:700; color:#1C2431;">只有 API</div>
+  <div style="position:absolute; left:180px; top:400px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:440px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:480px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+
+  <div style="position:absolute; left:436px; top:391px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:461px; top:390px; font-size:13px; color:#2B3340;">GPT-3.5 Turbo（初版）<span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">4k</span> · 60 則</div>
+  <div style="position:absolute; left:833px; top:391px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:858px; top:390px; font-size:13px; color:#2B3340;">GPT-4 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">32k</span> · 約 600 則</div>
+  <div style="position:absolute; left:1098px; top:391px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:1123px; top:390px; font-size:13px; color:#2B3340;">GPT-4 Turbo <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">128k</span> · 約 2,600 則</div>
+  <div style="position:absolute; left:568px; top:431px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:593px; top:430px; font-size:13px; color:#2B3340;">GPT-4（初版）<span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">8k</span> · 140 則</div>
+  <div style="position:absolute; left:1051px; top:431px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:1076px; top:430px; font-size:13px; color:#2B3340;">Claude 2 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">100k</span> · 約 2,000 則</div>
+  <div style="position:absolute; left:701px; top:471px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:726px; top:470px; font-size:13px; color:#2B3340;">GPT-3.5 Turbo <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">16k</span> · 300 則</div>
+
+  <div style="position:absolute; left:1498px; top:198px; width:0px; height:300px; border-left:1.5px dashed #C8501F;"></div>
+
+  <div style="position:absolute; left:60px; top:526px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">訊息數是表 1 的估算，不是實測。GPT-3.5 Turbo 與 GPT-4 各有初版與較新的一列；實驗用的 GPT-4 是 8k 視窗的端點（第 3 節），不是表上 32k 的那一個。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:190px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">開源模型：幾十則就滿</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">最常用的開源 LLM，超過上限前只撐得住幾十來回；表 1 的 Llama 2 是 4k tokens、約 60 則。要陪使用者好幾個月的對話代理，遠遠不夠。</div>
+    <div style="font-size:13px; color:#8A93A0;">出自第 1 節；訊息數是作者依平均長度估的。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:190px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">加長視窗：成本平方成長</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">自注意力讓運算時間與記憶體隨長度平方增加；就算撐得起，長脈絡模型也不一定用得好多出來的脈絡（Liu 等人 2023a）。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者的結論：需要別的技術來支援長脈絡。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">文件更長，還常常不只一份</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">10-K 年報這類法律或財務文件，輕易超過 100 萬 tokens；真實的文件分析還要在好幾份長文件之間找關聯（第 3.2 節）。</div>
+    <div style="font-size:13px; color:#8A93A0;">OpenAI 的模型當時最多 128k tokens。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：點的位置照表 1 的 token 數畫在對數量尺上；右端「100 萬 tokens」那條線取自第 3.2 節的文字，不在表 1 裡。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>論文從限制講起。以 transformer 為基礎的 LLM 已經是對話式 AI 的基石，撐起大量消費與企業應用；但固定長度的脈絡視窗，讓它們很難處理長時間的對話，也很難針對長文件推理。作者舉的例子是：最常用的開源 LLM，在超過輸入上限之前，只撐得住幾十則來回的訊息，或一份很短的文件。</p>
+    <p>表 1 把這件事量化，資料收集於 2024 年 1 月。作者假設前置 prompt 佔 1k tokens、每則訊息平均約 50 tokens（約 250 個字元），估計每個模型的視窗大約放得下幾則訊息：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 1 · 模型或 API</th><th>開源或開放權重</th><th>視窗（tokens）</th><th>約幾則訊息</th></tr></thead>
+        <tbody>
+          <tr><td>Llama（1）</td><td>是</td><td>2k</td><td>20</td></tr>
+          <tr><td>Llama 2</td><td>是</td><td>4k</td><td>60</td></tr>
+          <tr><td>GPT-3.5 Turbo（初版）</td><td>否</td><td>4k</td><td>60</td></tr>
+          <tr><td>Mistral 7B</td><td>是</td><td>8k</td><td>140</td></tr>
+          <tr><td>GPT-4（初版）</td><td>否</td><td>8k</td><td>140</td></tr>
+          <tr><td>GPT-3.5 Turbo</td><td>否</td><td>16k</td><td>300</td></tr>
+          <tr><td>GPT-4</td><td>否</td><td>32k</td><td>約 600</td></tr>
+          <tr><td>Claude 2</td><td>否</td><td>100k</td><td>約 2,000</td></tr>
+          <tr><td>GPT-4 Turbo</td><td>否</td><td>128k</td><td>約 2,600</td></tr>
+          <tr><td>Yi-34B-200k</td><td>是</td><td>200k</td><td>約 4,000</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>直接把視窗加長呢？作者列了兩個障礙。第一是成本：transformer 的自注意力機制讓運算時間與記憶體用量隨長度平方增加，所以設計新的長脈絡架構本身就是一個迫切的研究題目。第二是效果：就算克服了運算上的難題，近期研究（Liu 等人，2023a）發現，長脈絡模型也很難有效運用多出來的脈絡。再加上訓練頂尖 LLM 要耗費大量資源、加長脈絡的回報又遞減，作者的結論是需要別的技術來支援長脈絡。</p>
+    <p>文件分析的處境更明顯，論文在第 3.2 節補充：OpenAI 的模型當時最多 128k tokens，但像美國證管會 10-K 年報這類法律或財務文件，很容易超過一百萬 tokens；真實的文件分析還常常要在好幾份這樣的長文件之間找關聯。Liu 等人也觀察到大視窗模型的注意力分布不均，模型比較容易想起視窗開頭與結尾的內容，中間的較差。作者因此認為，一味加大視窗很難當成固定脈絡問題的解法。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>Liu 等人（2023a）是哪一篇</h4>
+      <p>這篇論文多次引用 Liu 等人（2023a）：它就是常被稱為「Lost in the Middle」的長脈絡研究（這個通稱是整理者補的，參考文獻的標題寫的是它如何使用長脈絡）。第 10、11 章的多文件問答與鍵值檢索任務，也都取自這篇研究。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="virtual-context" data-toc="作業系統的類比">
+  <div class="container head">
+    <p class="chapter">Chapter 02 · Introduction: virtual context management</p>
+    <h2>借作業系統的虛擬記憶體，讓固定視窗看起來無限大</h2>
+    <p class="lede">作業系統在主記憶體與磁碟之間分頁，讓程式以為記憶體比實體多。MemGPT 把脈絡視窗當成主記憶體，讓模型用函式呼叫把資料換進換出，固定視窗的模型於是好像有了無限的脈絡。</p>
+    
+  </div>
+  <div class="cardband" id="card-03"><div class="cardlabel"><span class="n">圖卡 03 / 11</span><span class="t">作業系統的類比：虛擬脈絡</span><button type="button" class="zoom" data-card="03">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">借作業系統的虛擬記憶體，讓視窗看起來無限大</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 1、2 節：作業系統在主記憶體與磁碟之間搬資料，讓程式以為記憶體比實體多；MemGPT 用同一招，讓固定視窗的 LLM 以為脈絡沒有上限</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">類比</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">作業系統</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">MemGPT</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">由誰來做</div>
+  </div>
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">記憶體階層</div><div style="font-size:13px; color:#8A93A0;">快的一層放正在用的東西</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">快的主記憶體（RAM）＋慢的磁碟</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>主脈絡（prompt tokens）<br>＋外部脈絡（兩個資料庫）</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">架構先切好；主脈絡固定大小，例如 8k tokens</div>
+  </div>
+  <div style="position:absolute; left:60px; top:306px; width:1480px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#2E7B4F;">虛擬記憶體</div><div style="font-size:13px; color:#8A93A0;">這篇論文的核心想法</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">程式以為可用的記憶體比實體的多</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">模型以為脈絡比視窗長：虛擬脈絡管理</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">整個 MemGPT，作者稱它為 LLM OS</div>
+  </div>
+  <div style="position:absolute; left:60px; top:402px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">分頁與逐出</div><div style="font-size:13px; color:#8A93A0;">資料在兩層之間搬</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">溢出的資料寫到磁碟，用到時透過 page fault 讀回</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">不相關的逐出到外部儲存，要用的再用函式找回來</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>多半是模型自己呼叫函式；<br>佇列滿了由佇列管理器逐出</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:498px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">中斷</div><div style="font-size:13px; color:#8A93A0;">誰來叫醒處理器</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">中斷打斷目前的執行，改變控制流程</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">事件觸發推論；函式可以要求立刻再跑一輪</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">使用者訊息、系統警告、使用者動作、定時事件</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:630px; width:470px; height:176px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">視窗是有限的主記憶體</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">作者把脈絡視窗當成受限的記憶體資源，照傳統作業系統的記憶體分層，替 LLM 設計一個記憶階層（第 1 節）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">直接加長視窗是另一條路，見第 02 卡。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:630px; width:470px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">搬資料的，是模型自己</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">作業系統替程式透明地換頁；MemGPT 把換頁做成函式交給模型，何時搬、搬什麼，由它看情況決定（第 2.3 節）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">和核心自動換頁的對照是整理者加的。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:630px; width:470px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">三個零件合起來</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">記憶階層、作業系統式的函式、事件驅動的控制流程，合起來讓有限視窗的 LLM 處理沒有上限的脈絡（第 1 節）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">第 04 到 07 卡依序拆開。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：「作業系統」與「MemGPT」兩欄是原文第 1、2 節的類比；列的分法與「由誰來做」一欄是整理者整理的。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>作者把問題換了一個問法：不去改模型，能不能繼續用固定視窗的模型，卻給出「脈絡沒有上限」的效果？論文的原話是這樣描述研究目標的：</p>
+
+    <div class="quote-en">
+      "the illusion of an infinite context while continuing to use fixed-context models"
+      <span class="zh">「在繼續使用固定脈絡模型的同時，營造出脈絡無限的錯覺」：第 1 節對研究目標的描述。</span>
+    </div>
+
+    <p>靈感來自作業系統的虛擬記憶體。它當初是為了讓應用程式處理遠大於可用記憶體的資料而發明的：作業系統把溢出的資料分頁寫到磁碟，程式要用時再透過 page fault 讀回主記憶體，程式因此以為可用的記憶體比實體的多。MemGPT 把同一套想法搬到 LLM：脈絡視窗對應實體的主記憶體，視窗外的儲存對應磁碟，負責管理的系統就是作者說的「LLM OS」，也就是 MemGPT 本身。模型可以把視窗裡缺少的歷史資料找回來，也可以把比較不相關的資料逐出到外部儲存。</p>
+    <p>能這樣做，靠的是 LLM 代理當時剛成熟的函式呼叫能力（作者引用 Schick 等人與 Liu 等人 2023b 的研究）。透過函式呼叫，模型能讀寫外部資料來源、修改自己的脈絡，並選擇什麼時候回應使用者。同樣的函式呼叫也用來管控制流程，讓模型在管理脈絡、產生回應、和使用者互動之間切換。所以在單一個任務裡，模型可以反覆調整視窗裡放什麼，把有限的脈絡用得更有效。</p>
+    <p>論文的圖 1 與圖 2 是兩個小例子。圖 1 裡，使用者提到男友 James 烤了生日蛋糕給自己，模型回完話，系統隨即發出一則「記憶壓力」警告；模型接著呼叫兩次 <code>working_context.append</code>，把「生日是 2 月 7 日」與「男友叫 James」寫進常駐的工作脈絡。圖 2 裡，使用者說「我們去了六旗樂園」，模型呼叫 <code>recall_storage.search</code> 搜尋舊對話，找到三筆提過六旗樂園的訊息，其中一筆提到使用者和 James 就是在那裡認識的，於是順著這件事回問。</p>
+    <p>作者把三樣東西並列為 MemGPT 能處理無界脈絡的原因：記憶體階層、作業系統式的函式，以及事件驅動的控制流程。接下來四章依序拆開：記憶階層（第 3 章）、佇列管理器（第 4 章）、函式執行器（第 5 章）、事件與函式連鎖（第 6 章）。</p>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>類比的邊界</h4>
+      <p>作業系統的分頁對程式是透明的：程式不知道哪一頁在磁碟上，換頁由核心自動完成。MemGPT 裡大部分的搬移，反而是模型自己看情況呼叫函式做的，只有佇列滿了才由系統自動逐出（第 4、5 章）。這個對照是整理者加的，論文沒有這樣比；但它說明了為什麼後面的實驗結果，那麼依賴底層模型的函式呼叫能力。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="memory-tiers" data-toc="主脈絡與外部脈絡">
+  <div class="container head">
+    <p class="chapter">Chapter 03 · MemGPT · Main context</p>
+    <h2>模型只看得到主脈絡，其他記憶都在視窗外</h2>
+    <p class="lede">MemGPT 的記憶分兩種：主脈絡就是 prompt tokens，推論時模型看得到；外部脈絡是視窗外的兩個資料庫，裡面的東西一定要先搬進主脈絡才用得上。</p>
+    
+  </div>
+  <div class="cardband" id="card-04"><div class="cardlabel"><span class="n">圖卡 04 / 11</span><span class="t">記憶階層：主脈絡與外部脈絡</span><button type="button" class="zoom" data-card="04">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">模型只看得到主脈絡，其他記憶都在視窗外</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 3：固定視窗的 LLM 處理器；prompt tokens 切成三段，完整的對話紀錄與任意長度的文字放在視窗外的兩個資料庫，要用函式搬進主脈絡才看得到</div>
+
+  <div style="position:absolute; left:60px; top:200px; width:220px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#1C2431;">事件</div><div style="font-size:12px; color:#6B7380;">使用者訊息、系統警告……</div></div></div>
+  <div style="position:absolute; left:60px; top:320px; width:220px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#FFFFFF;">LLM 處理器</div><div style="font-size:12px; color:rgba(255,255,255,0.75);">固定視窗，例如 8k tokens</div></div></div>
+  <div style="position:absolute; left:60px; top:440px; width:220px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#1C2431;">輸出緩衝</div><div style="font-size:12px; color:#6B7380;">completion tokens</div></div></div>
+  <div style="position:absolute; left:60px; top:516px; width:220px; font-size:13px; color:#8A93A0; line-height:1.55; text-align:center;">輸出不直接給使用者，<br>由函式執行器解讀成函式呼叫</div>
+
+  <div style="position:absolute; left:470px; top:196px; font-size:13px; font-weight:700; color:#2B3340;">讀：主脈絡串成一個字串，當每輪推論的輸入</div>
+  <div style="position:absolute; left:470px; top:486px; font-size:13px; font-weight:700; color:#2B3340;">寫：函式呼叫在兩層之間搬、改、找</div>
+
+  <div style="position:absolute; left:840px; top:150px; width:700px; height:400px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #D5DAE1; border-radius:14px;"></div>
+  <div style="position:absolute; left:870px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">記憶階層（圖 3）</div>
+  <div style="position:absolute; left:870px; top:214px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">主脈絡 · MAIN CONTEXT · 在視窗內，每輪都讀得到</div>
+  <div style="position:absolute; left:870px; top:236px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">系統指令 · 唯讀</div>
+    <div style="padding:9px 16px; border:1.5px solid #B4D5C0; border-radius:999px; font-size:15px; color:#2E7B4F; background-color:#EEF6F0;">工作脈絡 · 函式可寫</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">FIFO 佇列 · 佇列管理器寫</div>
+  </div>
+  <div style="position:absolute; left:870px; top:296px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">外部脈絡 · EXTERNAL CONTEXT · 在視窗外，要搬進來才看得到</div>
+  <div style="position:absolute; left:870px; top:318px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1.5px solid #B4D5C0; border-radius:999px; font-size:15px; color:#2E7B4F; background-color:#EEF6F0;">archival storage · 函式讀寫</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">recall storage · 函式讀、佇列管理器寫</div>
+  </div>
+  <div style="position:absolute; left:870px; top:378px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">主脈絡各段放什麼</div>
+  <div style="position:absolute; left:870px; top:400px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">工作脈絡：使用者與人設的關鍵事實</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">FIFO：最近的訊息，第一格是摘要</div>
+  </div>
+  <div style="position:absolute; left:870px; top:460px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">兩個資料庫的分工</div>
+  <div style="position:absolute; left:870px; top:482px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">archival：任意長度的文字，文件放這裡</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">recall：每則訊息的原文</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; width:1480px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">函式執行器 ＋ 佇列管理器：解析輸出、執行函式、把訊息寫進 recall storage、快滿時逐出舊訊息 —— 兩層之間的每一次搬移都經過這一層</div>
+
+  <div style="position:absolute; left:60px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#C8501F;">視窗外的資料，模型看不到</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">外部脈絡裡的東西，一定要明確搬進主脈絡，推論時才傳得到 LLM 處理器（第 2 節）。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">所以什麼時候搬，是整個設計的核心。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#2E7B4F;">讀寫權限寫在架構裡</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">系統指令唯讀；工作脈絡只能用函式改；FIFO 佇列由佇列管理器寫，第一格是遞迴摘要。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">權限照圖 3 的標示。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">兩個資料庫分工不同</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">recall 自動存下每一則訊息，模型只能搜；archival 讀寫都靠函式，放任意長度的文字。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">兩個都用分頁搜尋，一次回一頁。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：各段的讀寫權限照圖 3；左欄與面板的排法、「各段放什麼」的歸納是整理者的，函式名取自圖 1、2、4、6 的例子。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+    </defs>
+    <path d="M170 258L170 316" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c04)"></path>
+    <path d="M170 378L170 436" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c04)"></path>
+    <path d="M838 226C620 226 520 334 284 334" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c04)"></path>
+    <path d="M280 366C520 366 620 470 834 470" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c04)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 2 節的第一段就把記憶分成兩類。主脈絡（main context）對應主記憶體或 RAM，就是 LLM 的 prompt tokens；放在主脈絡裡的東西都算「在脈絡中」，LLM 處理器推論時讀得到。外部脈絡（external context）對應磁碟，指任何放在 LLM 固定視窗之外的資訊。視窗外的資料一定要明確搬進主脈絡，推論時才會交到 LLM 處理器手上；MemGPT 提供一組函式，讓處理器不需要使用者介入，就能自己管理記憶。</p>
+    <p>主脈絡的 prompt tokens 再切成三段連續的區塊：</p>
+
+    <div class="values">
+      <div class="value-card"><span class="num">01</span><h4>系統指令</h4><p>唯讀、固定不變。寫著 MemGPT 的控制流程、各層記憶的用途，以及怎麼使用 MemGPT 的函式，例如怎麼取回視窗外的資料。</p></div>
+      <div class="value-card"><span class="num">02</span><h4>工作脈絡</h4><p>固定大小、可讀可寫的一塊非結構化文字，只能透過函式寫入。在對話情境裡，存使用者的關鍵事實、偏好與其他重要資訊，以及代理採用的人設。</p></div>
+      <div class="value-card"><span class="num">03</span><h4>FIFO 佇列</h4><p>滾動的訊息歷史：代理與使用者的對話、系統訊息（例如記憶警告）、函式呼叫的輸入與輸出。第一格固定是一則系統訊息，裝著被逐出訊息的遞迴摘要。</p></div>
+    </div>
+
+    <p>圖 3 把整個架構畫在一張圖上。最上面是 LLM 有限的脈絡視窗（圖上舉的例子是 8k tokens），左邊是上面三段 prompt tokens，右邊是模型輸出的 completion tokens，進到輸出緩衝。輸出不是直接拿給使用者看的文字，而是由函式執行器解讀成函式呼叫。視窗下方是外部脈絡的兩個資料庫，以及兩個負責搬資料的元件：函式執行器與佇列管理器。每一段的讀寫權限，圖 3 都標了出來：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>圖 3 · 區塊</th><th>在哪一層</th><th>模型怎麼讀</th><th>誰來寫</th></tr></thead>
+        <tbody>
+          <tr><td>系統指令</td><td>主脈絡</td><td>直接讀（唯讀）</td><td>固定的 MemGPT 系統 prompt</td></tr>
+          <tr><td>工作脈絡</td><td>主脈絡</td><td>直接讀</td><td>函式</td></tr>
+          <tr><td>FIFO 佇列</td><td>主脈絡</td><td>直接讀</td><td>佇列管理器</td></tr>
+          <tr><td>archival storage</td><td>外部脈絡</td><td>透過函式</td><td>函式</td></tr>
+          <tr><td>recall storage</td><td>外部脈絡</td><td>透過函式</td><td>佇列管理器</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>兩個資料庫的差別在寫入的方式。recall storage 是 MemGPT 的訊息資料庫：每一則進來的訊息和模型的每一次輸出，都由佇列管理器自動寫進去（第 4 章），模型只能用函式搜尋它。archival storage 是讀寫都靠函式的資料庫，存任意長度的文字物件；模型可以主動把東西存進去，文件分析的實驗也把整批文件預先放在這裡（第 10 章）。</p>
+
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>工作脈絡和 archival storage 都能「記住」東西，差在哪</h4>
+      <p>工作脈絡在視窗裡，每次推論都看得到，但大小固定，只放得下最重要的幾件事；archival storage 在視窗外，容量不受視窗限制，但要用函式搜尋才看得到。圖 1 的生日與男友名字寫進的是工作脈絡，因為這類事實之後幾乎每次對話都用得到。這段對照是整理者的說明，依據是第 2.1 到 2.3 節的描述。</p>
+    </div>
+
+    <div class="pullquote">
+      視窗外的資料不會自己跑進來：每一筆都得有人把它搬進主脈絡，MemGPT 讓這個人是模型自己。
+      <cite>整理自第 2 節</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="queue-manager" data-toc="佇列管理器與逐出">
+  <div class="container head">
+    <p class="chapter">Chapter 04 · Queue Manager</p>
+    <h2>佇列快滿時先警告模型，滿了才把舊訊息換出去</h2>
+    <p class="lede">佇列管理器把每一則訊息放進 FIFO 佇列，也寫進 recall storage。prompt 超過警告門檻就插入記憶壓力警告，超過清空門檻就逐出一批訊息、重寫遞迴摘要；被逐出的訊息仍留在 recall storage。</p>
+    
+  </div>
+  <div class="cardband" id="card-05"><div class="cardlabel"><span class="n">圖卡 05 / 11</span><span class="t">佇列管理器：先警告再逐出</span><button type="button" class="zoom" data-card="05">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">佇列快滿先發警告，滿了才把舊訊息換出</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2.2 節：prompt tokens 超過警告門檻（例如視窗的 70%）就插入記憶壓力警告；超過清空門檻（例如 100%）就逐出一批訊息（例如視窗的 50%）並重寫遞迴摘要</div>
+
+  <div style="position:absolute; left:60px; top:140px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1;"></div>系統指令＋工作脈絡（常駐）</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF6F0; border:1px solid #B4D5C0;"></div>遞迴摘要（佇列第一格）</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FFFFFF; border:1px solid #9AA3AE;"></div>FIFO 佇列裡的訊息</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FCF1EA; border:1px solid #E6B49A;"></div>記憶壓力警告</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FFFFFF; border:1px dashed #D5DAE1;"></div>還空著的視窗</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:222px; font-size:16px; font-weight:700; color:#1C2431;">到警告門檻</div>
+  <div style="position:absolute; left:180px; top:188px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">視窗的開頭</div>
+  <div style="position:absolute; left:1096px; top:184px; font-size:14px; color:#C8501F;">▼</div>
+  <div style="position:absolute; left:1116px; top:188px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#C8501F;">警告門檻（例：70%）</div>
+  <div style="position:absolute; left:180px; top:206px; width:198px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">系統指令＋工作脈絡</div>
+  <div style="position:absolute; left:378px; top:206px; width:66px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">摘要</div>
+  <div style="position:absolute; left:444px; top:206px; width:634px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2B3340;">訊息、函式的輸入與輸出，一則則往後接</div>
+  <div style="position:absolute; left:1078px; top:206px; width:56px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">警告</div>
+  <div style="position:absolute; left:1134px; top:206px; width:366px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1px dashed #D5DAE1; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#8A93A0;">還空著</div>
+  <div style="position:absolute; left:180px; top:286px; font-size:13px; color:#8A93A0;">佇列管理器在佇列尾端插入一則系統訊息：記憶壓力警告。模型可以趁還沒逐出，用函式把重點存進工作脈絡或 archival storage（圖 1）</div>
+
+  <div style="position:absolute; left:60px; top:362px; font-size:16px; font-weight:700; color:#1C2431;">清空之後</div>
+  <div style="position:absolute; left:180px; top:328px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2E7B4F;">超過清空門檻（例：100%）→ 逐出約半個視窗的舊訊息；舊摘要＋被逐出的訊息，寫成新摘要</div>
+  <div style="position:absolute; left:180px; top:346px; width:198px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">系統指令＋工作脈絡</div>
+  <div style="position:absolute; left:378px; top:346px; width:92px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">新摘要</div>
+  <div style="position:absolute; left:470px; top:346px; width:370px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2B3340;">較新的訊息</div>
+  <div style="position:absolute; left:840px; top:346px; width:660px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1px dashed #D5DAE1; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#8A93A0;">空出來的位置：被逐出的訊息已經不在視窗裡</div>
+  <div style="position:absolute; left:180px; top:426px; font-size:13px; color:#8A93A0;">被逐出的訊息模型不能直接看到；但每一則進來時就寫進了 recall storage，要用時用函式搜尋，找到的會被接回佇列尾端</div>
+
+  <div style="position:absolute; left:60px; top:470px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">兩個門檻</div>
+    <div style="font-size:15px; color:#2B3340;">警告門檻給模型機會自己存重點，清空門檻才真的逐出；原文的 70%、100%、50% 都寫成「例如」，不是固定值</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:560px; width:470px; height:220px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">警告是給模型的機會</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">記憶壓力警告讓模型在逐出之前自己決定：哪些事實寫進工作脈絡、哪些長內容存進 archival storage。等到清空門檻，就由佇列管理器直接逐出。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">圖 1：收到警告後，模型把生日與男友的名字寫進工作脈絡。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:560px; width:470px; height:220px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">逐出不等於忘記</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">佇列管理器把每一則進來的訊息，和模型的每一次輸出，都寫進 recall storage；被逐出之後，模型照樣可以用函式把它們找回來。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">找回來的訊息，會被接回佇列的尾端，重新進到視窗。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:560px; width:470px; height:220px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">摘要一層層疊上去</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">每次清空，都用「舊的遞迴摘要＋這次被逐出的訊息」寫出新摘要，放在佇列第一格；視窗裡因此一直留著一份整段歷史的濃縮版。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">第 08 卡的基線，拿到的就是模擬這種摘要的有損版本。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：70%、100%、50% 都是原文舉的例子；各段的長度是整理者的示意，不是實測的比例。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>佇列管理器管兩樣東西：recall storage 與 FIFO 佇列。系統收到新訊息時，它把訊息接到 FIFO 佇列尾端，串起 prompt tokens，觸發一次 LLM 推論，產生輸出（completion tokens）。進來的訊息和模型產生的輸出，它都寫進 recall storage。模型用函式從 recall storage 找回來的訊息，也由它接回佇列尾端，重新放進視窗。</p>
+    <p>它也負責處理脈絡溢出，做法是一條佇列的逐出政策，有兩個門檻：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>超過警告門檻</strong>prompt tokens 超過底層模型視窗的某個比例（原文舉的例子是 70%），佇列管理器就在佇列裡插入一則系統訊息，警告模型佇列即將被逐出，也就是「記憶壓力」警告。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>趁逐出前存好</strong>模型收到警告後，可以用 MemGPT 的函式，把 FIFO 佇列裡的重要資訊存進工作脈絡，或存進 archival storage。圖 1 就是這一步。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>超過清空門檻</strong>prompt tokens 超過另一個比例（例子是 100%），佇列管理器清空佇列騰出空間：逐出一定數量的訊息，例子是視窗的 50%。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>重寫遞迴摘要</strong>用既有的遞迴摘要，加上這一次被逐出的訊息，產生新的遞迴摘要，放在佇列的第一格。</div></div>
+      <div class="cascade-step"><div class="n">5</div><div class="t"><strong>逐出不等於刪除</strong>被逐出的訊息不再出現在視窗裡，模型沒辦法直接看到；但它們無限期留在 recall storage，可以用函式讀回來。</div></div>
+    </div>
+
+    <div class="codeblock">
+      <span class="file">逐出政策 · 整理者依第 2.2 節寫的虛擬碼，不是論文的程式</span>
+<pre class="code">WARNING = <span class="k">0.70</span> * window      <span class="c"># 原文的例子：視窗的 70%</span>
+FLUSH   = <span class="k">1.00</span> * window      <span class="c"># 例子：100%</span>
+EVICT   = <span class="k">0.50</span> * window      <span class="c"># 例子：一次逐出約半個視窗</span>
+
+def on_message(msg):
+    fifo.append(msg)
+    recall_storage.write(msg)             <span class="c"># 每一則都存，模型的輸出也一樣</span>
+    if tokens(main_context) &gt; FLUSH:
+        evicted = fifo.pop_oldest(EVICT)
+        fifo[<span class="k">0</span>] = summarize(fifo[<span class="k">0</span>], evicted)  <span class="c"># 第一格換成新的遞迴摘要</span>
+    elif tokens(main_context) &gt; WARNING:
+        fifo.append(system_alert(<span class="s">"memory pressure"</span>))   <span class="c"># 記憶壓力警告</span>
+    run_inference()</pre>
+    </div>
+
+    <p>兩個門檻之間，留的是給模型的機會：系統先警告，模型就能在佇列被清空之前，自己挑出值得留在視窗裡的東西。沒被挑中的內容也沒有消失，只是從「看得到」變成「要搜尋才看得到」，視窗裡另外留著一份越疊越新的摘要。第 8 章的深度記憶檢索，比的正是這兩種狀態：手上只有摘要，還是能把原話搜回來。</p>
+
+    <div class="thought">
+      <span class="label">思考題 · 01</span>
+      <h4>你的 agent 什麼時候丟掉舊對話？丟之前有沒有讓模型先存重點？</h4>
+      <p>很多聊天應用在超過長度時，直接截掉最舊的訊息，或把它們壓成一段摘要。</p>
+      <p class="hint">對照第 2.2 節的兩個門檻：先警告、再逐出、逐出的原文另外存著。至少檢查兩件事：被截掉的內容之後還找不找得回來，以及模型在截掉之前有沒有被告知。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="function-executor" data-toc="函式執行器">
+  <div class="container head">
+    <p class="chapter">Chapter 05 · Function executor</p>
+    <h2>要搬哪些記憶，由模型自己用函式呼叫決定</h2>
+    <p class="lede">記憶的編輯與檢索完全由模型主導。每一輪推論，主脈絡串成一個字串交給 LLM，輸出被解析成函式呼叫，參數驗證過才執行，結果和執行時的錯誤都送回給模型。</p>
+    
+  </div>
+  <div class="cardband" id="card-06"><div class="cardlabel"><span class="n">圖卡 06 / 11</span><span class="t">函式執行器：模型自己搬記憶</span><button type="button" class="zoom" data-card="06">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">要搬哪些記憶，由模型自己用函式決定</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2.3 節：每一輪推論，主脈絡串成一個字串交給 LLM；輸出先被解析、驗證參數，通過才執行函式，結果連同執行時的錯誤都寫回主脈絡</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　串成一個字串</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">系統指令＋工作脈絡＋<br>FIFO 佇列，當成輸入</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　LLM 推論</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">產生一個輸出字串<br>（completion tokens）</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　解析、驗證</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">確認格式、驗證函式參數</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">不合法就不執行</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　執行函式</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">在兩層之間搬、改、找記憶</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">例：search、replace</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　寫回主脈絡</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">結果與執行時的錯誤，<br>都送回給模型</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:300px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">寫在系統指令</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">讓模型自己管記憶的兩樣東西：① 記憶階層與各層用途的詳細說明　② 函式 schema，每個函式附自然語言描述。模型照著它們決定何時搬、搬什麼。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:420px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:444px; font-size:20px; font-weight:700; color:#1C2431;">三個讓模型自己管記憶行得通的設計</div>
+
+  <div style="position:absolute; left:60px; top:486px; width:470px; height:250px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">① 何時搬，模型自己判斷</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">記憶的編輯與檢索完全由模型主導：對話太長時把事實存起來（圖 1），理解改變時改寫工作脈絡，例如把「男友」改成「前男友」（圖 4）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">沒有外部規則替它決定該存什麼、該找什麼；<br>佇列滿了的逐出，才由佇列管理器自動處理。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:486px; width:470px; height:250px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">② 錯誤也是回饋</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">執行時的錯誤，例如主脈絡已滿還要往裡面加，會和結果一起送回模型；作者說這個回饋迴圈讓系統能從自己的行動學習、調整行為。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">錯誤訊息進的是主脈絡，下一輪就看得到；<br>參數沒通過驗證的呼叫，不會被執行。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:486px; width:470px; height:250px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">③ 知道自己的上限</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">模型要意識到脈絡有上限，自我編輯才有效：系統用 token 上限的警告提示它，檢索函式也做了分頁，一次呼叫不會撐爆視窗。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">分頁也是第 07 卡連鎖呼叫的起點：<br>一頁不夠，就帶著頁碼再查一次。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：五格是整理者依第 2.3 節的文字排的；下一輪什麼時候開始，由事件與 heartbeat 決定（第 07 卡）。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M769 262L769 298" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="4 4"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>主脈絡與外部脈絡之間的資料搬移，全靠 LLM 處理器自己產生的函式呼叫。作者強調這是自我導向的：MemGPT 依據目前的脈絡，自主地更新和搜尋自己的記憶。它可以決定什麼時候在兩層之間搬東西，例如對話歷史變得太長的時候（圖 1）；也可以修改主脈絡，反映它對目前目標與責任的最新理解。</p>
+    <p>圖 4 是修改的例子。使用者說自己和 James 分手了，模型呼叫 <code>working_context.replace</code>，把工作脈絡裡的「男友叫 James」改成「前男友叫 James」，然後安慰對方。這筆資訊存在工作脈絡，也就是 prompt tokens 的裡面，之後每一輪推論看到的都是改過的版本。</p>
+
+    <div class="codeblock">
+      <span class="file">圖 4 的函式呼叫 · 教學用精簡版（原圖的字串是英文，這裡改寫成中文）</span>
+<pre class="code"><span class="c"># 使用者：我和 James 分手了</span>
+working_context.replace(
+    <span class="s">"男友叫 James"</span>,        <span class="c"># 舊的事實</span>
+    <span class="s">"前男友叫 James"</span>)      <span class="c"># 新的事實</span>
+<span class="c"># 之後每一輪推論，工作脈絡裡都是新的版本</span></pre>
+    </div>
+
+    <p>模型怎麼知道可以這樣做？靠系統指令裡明寫的說明。作者說這些指令有兩個主要部分：第一，詳細描述記憶階層，以及各層分別拿來做什麼；第二，一份函式 schema，每個函式都附自然語言的描述，列出系統可以呼叫哪些函式來存取或修改記憶。</p>
+    <p>每一輪推論的流程是固定的。LLM 處理器把主脈絡串成單一個字串當作輸入，產生一個輸出字串。MemGPT 解析這個字串，確認它格式正確；解析器驗證了函式參數，函式才會被執行。執行的結果，連同執行時發生的任何錯誤（例如主脈絡已經滿了還要往裡面加東西），都由 MemGPT 送回處理器。作者說，這個回饋迴圈讓系統能從自己的行動中學習、調整行為。</p>
+    <p>自我編輯要有效，模型得知道脈絡的上限在哪裡。MemGPT 因此會用 token 上限的警告提示處理器（也就是第 4 章的記憶壓力警告），引導它做記憶管理的決定；檢索函式也把 token 限制考慮進去，做了分頁，避免一次檢索的結果把視窗撐爆。圖 2 的 <code>recall_storage.search</code> 回傳時，就標著這是第 1 頁、共 1 頁。</p>
+
+    <div class="explain bronze">
+      <span class="label">實作提示</span>
+      <h4>函式 schema 就是模型的操作手冊</h4>
+      <p>論文沒有列出完整的函式清單，作者也說附錄裡的提示詞為了篇幅刪減過。從圖 1、2、4、6、8 的例子看得到的有：<code>working_context.append</code>、<code>working_context.replace</code>、<code>recall_storage.search</code>，以及可以帶 <code>page</code> 參數翻頁的 <code>archival_storage.search</code>。自己設計類似的系統時，每個函式的描述最好寫清楚它碰的是哪一層記憶、會不會改動視窗內容、一次回傳多少筆；這一句是整理者的建議。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="control-flow" data-toc="事件與 heartbeat">
+  <div class="container head">
+    <p class="chapter">Chapter 06 · Control flow and function chaining</p>
+    <h2>事件叫醒模型，heartbeat 讓它連續呼叫函式</h2>
+    <p class="lede">MemGPT 的推論由事件觸發：使用者訊息、系統警告、使用者的動作，以及定時事件。函式帶上 request_heartbeat=true，控制權就立刻回到處理器、再推論一輪；沒帶就是 yield，等下一個事件。</p>
+    
+  </div>
+  <div class="cardband" id="card-07"><div class="cardlabel"><span class="n">圖卡 07 / 11</span><span class="t">事件與 heartbeat：連鎖或 yield</span><button type="button" class="zoom" data-card="07">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">事件叫醒模型，heartbeat 讓它連續呼叫函式</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2.4 節：使用者訊息、系統訊息、使用者動作、定時事件都會觸發推論；函式帶 request_heartbeat=true 就立刻再跑一輪，沒帶就交回控制，等下一個事件</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　事件進來</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">使用者訊息、容量警告、<br>登入或上傳完成、定時器</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　轉成純文字</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">解析器把事件變成訊息，<br>接進主脈絡</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 3　LLM 推論</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">讀整個主脈絡，<br>輸出一次函式呼叫</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　執行函式</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">解析、驗證、執行<br>（第 06 卡的流程）</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #4B5866; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 5　帶 heartbeat 嗎？</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">看輸出裡有沒有<br><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">request_heartbeat=true</span></div>
+  </div>
+
+  <div style="position:absolute; left:924px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 6　有：馬上再跑</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">輸出放進主脈絡，回到 Step 3</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">函式連鎖</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 7　沒有：yield</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">處理器暫停，等下一個事件</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">交回控制</div>
+  </div>
+
+  <div style="position:absolute; left:1116px; top:270px; font-size:13px; font-weight:700; color:#2E7B4F;">有</div>
+  <div style="position:absolute; left:1354px; top:268px; font-size:13px; font-weight:700; color:#6B7380;">沒有</div>
+  <div style="position:absolute; left:778px; top:296px; font-size:12px; font-weight:700; color:#2E7B4F;">回到 Step 3</div>
+  <div style="position:absolute; left:60px; top:318px; width:680px; font-size:14px; color:#6B7380; line-height:1.6;">一個使用者問題，背後可能是好幾輪推論：例如圖 6，模型搜尋 archival storage 拿到第 1 頁，帶著 heartbeat 再查第 2 頁，最後才回答。沒帶旗標的那次呼叫就是 yield。</div>
+  <div style="position:absolute; left:1040px; top:440px; width:290px; text-align:right; font-size:13px; color:#8A93A0;">下一個事件來了，從 Step 1 重新開始</div>
+
+  <div style="position:absolute; left:60px; top:480px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:504px; font-size:20px; font-weight:700; color:#1C2431;">三個讓它不必等使用者開口的設計</div>
+
+  <div style="position:absolute; left:60px; top:546px; width:470px; height:236px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">① 定時事件：不用等人開口</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">事件不只有使用者訊息，還有系統訊息（例如容量警告）、使用者動作（剛登入、剛上傳完文件）與定時事件；定時事件讓 MemGPT 在沒人提示時也會自己跑。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">所有事件都先由解析器轉成純文字，<br>再接進主脈絡，成為處理器的輸入。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:546px; width:470px; height:236px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">② 連鎖呼叫：多步才做得完</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">翻同一個查詢的多頁結果、從不同文件彙整資料，都要連續呼叫好幾個函式；帶 heartbeat 的呼叫做完，控制權立刻回到處理器，由它決定下一步。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">圖 3 的圖說：多步檢索靠的就是函式連鎖；<br>圖 6 就是連查兩頁才回答。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:546px; width:470px; height:236px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">③ yield：把控制權交回去</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">沒帶旗標的函式呼叫就是 yield：MemGPT 不再跑 LLM 處理器，直到下一個外部事件，例如使用者的新訊息，或排定的中斷。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">yield 是作業系統的用詞：主動讓出執行權；<br>下一次推論，要等外部事件叫醒。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：request_heartbeat=true 出自圖 3 的圖說；「帶 heartbeat 嗎」那一格，是整理者把第 2.4 節的兩種情況畫成的分岔。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M1250 262L1154 298" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c07)"></path>
+    <path d="M1345 262L1345 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M922 350H769V264" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c07)"></path>
+    <path d="M1345 402V452H1560V128H193V158" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="6 5" marker-end="url(#ag-c07)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>作業系統靠中斷管理控制流程，MemGPT 對應的是事件：事件是 MemGPT 泛稱的輸入。原文列了四種：聊天應用裡的使用者訊息；系統訊息，例如主脈絡的容量警告；使用者的動作，例如「使用者剛登入」或「使用者剛上傳完一份文件」的通知；以及排程、定時執行的事件，讓 MemGPT 在沒有使用者介入時也能自己運作。MemGPT 用一個解析器把事件轉成純文字訊息，接進主脈絡，最後成為 LLM 處理器的輸入。</p>
+    <p>很多實際的任務，要依序呼叫好幾個函式才做得完，例如翻閱同一個查詢的多頁結果，或從不同查詢拿到的不同文件裡彙整資料。函式連鎖（function chaining）讓 MemGPT 在把控制權交回使用者之前，連續執行好幾個函式。做法是呼叫函式時加一個特別的旗標。帶了旗標，函式執行完之後，輸出放進主脈絡，控制權立刻回到處理器，不會暫停；沒帶旗標，就是一次 yield，MemGPT 不會再跑 LLM 處理器，直到下一個外部事件發生，例如使用者的新訊息或排定的中斷。</p>
+    <p>圖 3 的圖說寫出了這個旗標的名字：模型在輸出裡產生關鍵字參數 <code>request_heartbeat=true</code>，就能要求立刻再推論一次。作者說，MemGPT 能做多步檢索來回答使用者的問題，靠的就是函式連鎖。圖 6 的文件問答是一個例子：模型搜尋 archival storage 拿到第 1 頁，再帶著頁碼查第 2 頁，才回答。</p>
+
+    <div class="codeblock">
+      <span class="file">圖 6 的連鎖呼叫 · 教學用精簡版（heartbeat 參數與最後的 yield 是依第 2.4 節加上的示意）</span>
+<pre class="code"><span class="c"># 事件：archival storage 上傳完成（系統訊息）</span>
+<span class="c"># 事件：使用者問「第一座諾貝爾物理獎頒給了誰？」</span>
+archival_storage.search(<span class="s">"nobel physics"</span>, request_heartbeat=<span class="k">true</span>)
+<span class="c">#   → 124 筆結果中的 10 筆（第 1 頁，共 13 頁）</span>
+archival_storage.search(<span class="s">"nobel physics"</span>, page=<span class="k">2</span>, request_heartbeat=<span class="k">true</span>)
+<span class="c">#   → 第 2 頁，共 13 頁：找到 1901 年得獎的那一段</span>
+<span class="c"># 回答使用者；這一步不帶 heartbeat，等下一個事件</span></pre>
+    </div>
+
+    <p>這個設計把「做一步」和「要不要接著做」分開：模型每一輪只輸出一次函式呼叫，要不要緊接著再跑一輪，由它在同一次輸出裡用 heartbeat 表態。所以一個使用者問題，背後可能是好幾輪推論。作者在相關工作一節也提到，Yao 等人（2022）顯示穿插推理能改善互動式代理的規劃，而 MemGPT 裡的模型在執行函式時同樣會「邊想邊說」（plan out loud）。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>yield 這個詞</h4>
+      <p>yield 是作業系統與程式語言裡的用語，意思是主動讓出執行權。第 2.4 節用它指「沒有要求立刻再推論」的函式呼叫：處理器停下來，等下一個事件叫醒它。事件可能是使用者的新訊息，也可能是排程的中斷，所以 MemGPT 在沒有人開口的時候，也能被定時事件叫醒。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="experiment-setup" data-toc="實驗怎麼設計" class="nocard">
+  <div class="container">
+    <p class="chapter">Chapter 07 · Experiments</p>
+    <h2>每個實驗都拿同一個模型，比有沒有包進 MemGPT</h2>
+    <p class="lede">實驗分兩個長脈絡領域：對話代理與文件分析，一共四個任務。底層模型是 OpenAI 的三個端點，每一個都分別當基線，也包進 MemGPT 跑一次。</p>
+
+    <p>第 3 節先交代設計。對話代理這一邊，作者擴充了既有的 Multi-Session Chat（MSC）資料集，提出兩個新的對話任務，測代理能不能在長對話裡保住知識。文件分析這一邊，作者用 Liu 等人（2023a）既有的長文件問答與鍵值檢索任務，再提出一個新的巢狀鍵值檢索任務，要求代理從多個資料來源彙整資訊，也就是多跳檢索。作者公開了擴充後的 MSC 資料集、巢狀鍵值資料集，以及 2,000 萬篇 Wikipedia 文章的嵌入向量資料集。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>四個任務</th><th>領域</th><th>測什麼</th><th>比較的對象</th><th>這一頁</th></tr></thead>
+        <tbody>
+          <tr><td>深度記憶檢索（DMR）</td><td>對話</td><td>一致性：記不記得舊對話裡的細節</td><td>基線只拿到前五段對話的有損摘要</td><td>第 8 章</td></tr>
+          <tr><td>對話開場白</td><td>對話</td><td>投入感：開場白能不能用上對使用者的了解</td><td>人寫的開場白（表 3 沒有不加 MemGPT 的列）</td><td>第 9 章</td></tr>
+          <tr><td>多文件問答</td><td>文件</td><td>從檢索到的 Wikipedia 文件裡回答問題</td><td>基線拿到檢索器取出的前 K 篇</td><td>第 10 章</td></tr>
+          <tr><td>巢狀鍵值檢索</td><td>文件</td><td>多跳查詢：值本身可能是另一個鍵</td><td>基線拿到整份鍵值資料（約 8k tokens）</td><td>第 11 章</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>實作細節：除非另外說明，GPT-4 Turbo 指 <code>gpt-4-1106-preview</code> 端點（視窗 128,000 tokens），GPT-4 指 <code>gpt-4-0613</code>（視窗 8,192），GPT-3.5 Turbo 指 <code>gpt-3.5-turbo-1106</code>（視窗 16,385）。作者把三個模型都包進 MemGPT 各跑一次，用來看底層模型的能力怎麼影響 MemGPT 的表現。表 1 裡標成 GPT-4 的那一列是 32k；實驗用的 <code>gpt-4-0613</code> 視窗是 8,192，讀數字時要分清楚。</p>
+    <p>對話代理的部分先定義目標。虛擬伴侶、個人助理這類代理，希望和使用者自然地互動好幾週、好幾個月，甚至好幾年；固定長度的視窗只能參照有限的對話歷史，很難做到。作者說，一個「無限脈絡」的代理應該能持續交談，不需要邊界或重置，而且要滿足兩個標準：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>標準</th><th>意思</th><th>作者問的問題</th><th>對應的任務</th></tr></thead>
+        <tbody>
+          <tr><td>一致性（consistency）</td><td>新提到的事實、偏好、事件，要和雙方先前說過的一致</td><td>能不能靠記憶記住舊對話裡的事實、偏好與事件，保持前後連貫？</td><td>深度記憶檢索</td></tr>
+          <tr><td>投入感（engagement）</td><td>用對使用者的長期了解，讓回應更個人化</td><td>會不會主動把很久以前的使用者資訊用進訊息裡？</td><td>對話開場白</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>資料集是 Xu 等人（2021）的 MSC。它的多段對話由人類標註者產生，每位標註者在所有段落裡都維持同一個固定的人設；每組對話有五段，每段大約十幾則訊息。為了測一致性，作者另外做了第 6 段：同樣兩個人設之間，只有一問一答。</p>
+
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>persona（人設）</h4>
+      <p>MSC 裡每位說話者都有一份人設：幾條描述他是誰的短句，例如附錄例子裡的「我喜歡衝浪」「我在舊金山市區工作」。在 MSC 裡，人設等於先前所有段落累積下來的知識摘要。後面兩個任務都刻意和人設區隔：DMR 的問題不能只靠人設回答，開場白則拿人設當比對的標準答案。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="deep-memory" data-toc="深度記憶檢索">
+  <div class="container head">
+    <p class="chapter">Chapter 08 · Deep memory retrieval task (consistency)</p>
+    <h2>翻得到完整舊對話的代理，才答得出前幾段的細節</h2>
+    <p class="lede">DMR 在第 6 段問一個只有前五段對話才答得出的問題。基線看得到前五段的有損摘要，MemGPT 看不到原文、但能分頁搜尋完整紀錄；三個模型包進 MemGPT 之後，準確率都大幅提高。</p>
+    
+  </div>
+  <div class="cardband" id="card-08"><div class="cardlabel"><span class="n">圖卡 08 / 11</span><span class="t">深度記憶檢索：摘要對上搜尋</span><button type="button" class="zoom" data-card="08">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">基線只讀到摘要，MemGPT 翻得到整段舊對話</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">深度記憶檢索（DMR）：MSC 的前 5 段對話之後，第 6 段只問一個問題，答案只在舊對話裡；準確率由 LLM 評審判定，另報 ROUGE-L 召回（表 2）</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 固定脈絡的基線</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 包進 MemGPT</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:230px; top:200px; width:300px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:500; color:#FFFFFF;">前 5 段對話，每段約十幾則</div>
+  <div style="position:absolute; left:230px; top:284px; width:300px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; color:#2B3340;">壓成一份有損的摘要</div>
+  <div style="position:absolute; left:230px; top:362px; width:300px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; color:#2B3340;">摘要＋問題放進 prompt</div>
+  <div style="position:absolute; left:230px; top:440px; width:300px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:500; color:#C8501F;">細節被摘掉，就回 NO ANSWER</div>
+  <div style="position:absolute; left:548px; top:297px; width:230px; font-size:13px; color:#6B7380; line-height:1.5;">模擬長時間累積的遞迴摘要</div>
+  <div style="position:absolute; left:548px; top:375px; width:230px; font-size:13px; color:#6B7380; line-height:1.5;">答題時，手上只有這份摘要</div>
+  <div style="position:absolute; left:548px; top:453px; width:230px; font-size:13px; color:#C8501F; line-height:1.5;">附錄 6.1.1：資訊不夠就這樣答</div>
+  <div style="position:absolute; left:60px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">DMR 的問題刻意考某一次對話裡的具體細節，例如那天午餐吃了哪一家；這種細節正是摘要最容易丟掉的東西。</div>
+
+  <div style="position:absolute; left:1010px; top:200px; width:300px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:500; color:#FFFFFF;">前 5 段的完整紀錄都在 recall</div>
+  <div style="position:absolute; left:1010px; top:284px; width:300px; height:46px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:500; color:#FFFFFF;">用函式分頁搜尋舊對話</div>
+  <div style="position:absolute; left:1010px; top:362px; width:300px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; color:#2B3340;">找到的訊息放回主脈絡</div>
+  <div style="position:absolute; left:1010px; top:440px; width:300px; height:46px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:500; color:#2E7B4F;">照著原話回答</div>
+  <div style="position:absolute; left:1328px; top:290px; width:212px; font-size:13px; color:#6B7380; line-height:1.5;">附錄稱為對話搜尋<br>（conversation_search）</div>
+  <div style="position:absolute; left:1328px; top:375px; width:212px; font-size:13px; color:#6B7380; line-height:1.5;">一次回一頁，不夠就再查</div>
+  <div style="position:absolute; left:1328px; top:446px; width:212px; font-size:13px; color:#2E7B4F; line-height:1.5;">人設指示：依核心記憶<br>與對話搜尋的結果作答</div>
+  <div style="position:absolute; left:840px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">MemGPT 看不到舊對話的原文，但原文全部在 recall storage；搜得到那一則訊息，就答得出那個細節。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#C8501F;">準確率 32.1% 到 38.7%</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">三個基線：GPT-3.5 Turbo 38.7%、GPT-4 32.1%、GPT-4 Turbo 35.3%；ROUGE-L 召回 0.296 到 0.394。</div>
+    <div style="font-size:13px; color:#8A93A0;">基線裡 GPT-4 反而最低，原文沒有解釋原因。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#2E7B4F;">準確率 66.9% 到 93.4%</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">包進 MemGPT：GPT-3.5 Turbo 66.9%、GPT-4 92.5%、GPT-4 Turbo 93.4%；ROUGE-L 召回 0.629 到 0.827。</div>
+    <div style="font-size:13px; color:#8A93A0;">同一個模型，差別只在有沒有包進 MemGPT。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：數字全部取自表 2；問題由另一個 LLM 依舊對話出題，LLM 評審只要回答碰到同一個主題就判對（附錄 6.1.2、6.1.3）。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c08" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c08" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c08" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M380 250L380 282" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M380 330L380 360" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M380 408L380 438" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c08)"></path>
+    <path d="M1160 250L1160 282" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M1160 330L1160 360" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c08)"></path>
+    <path d="M1160 408L1160 438" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c08)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>深度記憶檢索（deep memory retrieval，DMR）是作者提出的新任務，用 MSC 測對話代理的一致性。使用者問代理一個明確指回先前對話的問題，預期的答案範圍很窄。問答對由另一個 LLM 產生：它被要求寫一個只有靠過去幾段對話的知識才能答對的問題。</p>
+    <p>附錄 6.1.3 的出題提示詞寫得很具體。出題的 LLM 拿到兩位使用者的人設和一段舊的對話紀錄，要替其中一人寫一個考另一人記憶的問題；問題要讓對方真的參與過那段對話才答得出來，只讀過人設不行，而且絕對不能出答案能從人設推出來的題目。附錄的例子是兩人約好去 Pacifica 衝浪、順便在海灘旁的 Taco Bell 吃飯：好問題是「那次我們去吃午餐的地方叫什麼？」，壞問題是「你喜歡衝浪嗎？」，因為人設裡就寫了喜歡衝浪。</p>
+    <p>評分用兩種方式。第一是 ROUGE-L：作者發現 MemGPT 與基線的回答通常都比標準答案囉嗦，所以改用 ROUGE-L 的召回率（recall），抵銷回答長度的影響。第二是 LLM 評審：由 LLM 判斷產生的回答和標準答案是否一致，作者引用 Zheng 等人的研究，說 GPT-4 當評審和人類評估者的一致性高。附錄 6.1.2 的評審提示詞相當寬鬆：只要回答碰到和標準答案相同的主題，就算對。例如標準答案是「一條貝殼項鍊」，回答裡列了好幾樣紀念品、其中有項鍊，也算對；只提到其他東西，或說不記得，才算錯。</p>
+    <p>兩邊看得到的資訊不一樣。基線看得到前五段對話的有損摘要，用來模擬長時間累積的遞迴摘要；附錄 6.1.1 的基線提示詞把這份摘要給它，要它用人設的口吻回答，資訊不夠時就回答「NO ANSWER」。MemGPT 則握有完整的對話歷史，但只能用分頁的搜尋查詢，把需要的內容找回主脈絡；它的人設指示要它依據核心記憶（core memory）與對話搜尋的結果，給出最好的猜測。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 2 · 模型</th><th>不加 MemGPT：準確率</th><th>ROUGE-L（R）</th><th>加 MemGPT：準確率</th><th>ROUGE-L（R）</th></tr></thead>
+        <tbody>
+          <tr><td>GPT-3.5 Turbo</td><td>38.7%</td><td>0.394</td><td>66.9%</td><td>0.629</td></tr>
+          <tr><td>GPT-4</td><td>32.1%</td><td>0.296</td><td>92.5%</td><td>0.814</td></tr>
+          <tr><td>GPT-4 Turbo</td><td>35.3%</td><td>0.359</td><td><strong>93.4%</strong></td><td><strong>0.827</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>結果很一致：三個模型從 MemGPT 版本換回基線，準確率與 ROUGE 分數都明顯下降。包進 MemGPT 的 GPT-4 從 32.1% 升到 92.5%，GPT-4 Turbo 從 35.3% 升到 93.4%，GPT-3.5 Turbo 從 38.7% 升到 66.9%；三者分別提高 60.4、58.1 與 28.2 個百分點，這三個差距是整理者算的。基線裡 GPT-4 反而比 GPT-3.5 Turbo 低，原文沒有解釋。</p>
+
+    <div class="story">
+      <div class="label">關鍵觀念 · 一</div>
+      <h4>摘要記得主題，搜尋記得原話</h4>
+      <p>整理者的讀法：DMR 的問題刻意避開人設推得出的答案，考的是某一次對話裡的具體細節，例如那天午餐吃了哪一家。這類細節正是摘要最容易丟掉的東西；基線的摘要寫得再好，也只是前五段的濃縮版。MemGPT 雖然看不到原文，但原文全部在 recall storage 裡，搜得到就答得出。</p>
+      <p>表 2 裡 GPT-3.5 Turbo 的進步最小。論文沒有在 DMR 這一節解釋原因；但在文件問答裡，作者把 MemGPT 配 GPT-3.5 的退步歸因於它有限的函式呼叫能力（第 10 章），可以對照著看。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="opener" data-toc="對話開場白" class="nocard">
+  <div class="container">
+    <p class="chapter">Chapter 09 · Conversation opener task (engagement)</p>
+    <h2>記在工作脈絡的事實，讓開場白接得上前幾次的對話</h2>
+    <p class="lede">開場白任務看代理在新一段對話的開頭，會不會主動提起先前累積的了解。MemGPT 的開場白和人設的相似度，三個模型都高過人寫的開場白；和人寫開場白本身比，落在 0.767 到 0.817 之間。</p>
+
+    <p>對話開場白（conversation opener）任務評估代理能不能寫出吸引人的第一句話，而且用上先前對話累積的知識。怎麼量「吸引人」？作者的想法是：好的開場白應該取材自人設裡的一項或幾項資料，而在 MSC 裡，人設就是先前所有段落累積下來的知識摘要。所以作者拿產生的開場白去和標準人設比對，也和人寫的標準開場白比對；後者是下一段對話的第一句回應。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 3 · 開場白</th><th>SIM-1</th><th>SIM-3</th><th>SIM-H</th></tr></thead>
+        <tbody>
+          <tr><td>人寫的</td><td>0.800</td><td>0.800</td><td>1.000</td></tr>
+          <tr><td>MemGPT · GPT-3.5 Turbo</td><td>0.830</td><td>0.812</td><td><strong>0.817</strong></td></tr>
+          <tr><td>MemGPT · GPT-4</td><td><strong>0.868</strong></td><td><strong>0.843</strong></td><td>0.773</td></tr>
+          <tr><td>MemGPT · GPT-4 Turbo</td><td>0.857</td><td>0.828</td><td>0.767</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>表 3 的分數，原文稱為 CSIM。依圖說，SIM-1 與 SIM-3 是和標準人設標籤的相似度，SIM-H 是和人寫開場白的相似度；「1」與「3」的確切定義、相似度用什麼模型算，論文都沒有說明。人寫開場白的 SIM-H 是 1.000，因為它就是被拿來比對的那一句。</p>
+    <p>作者的結論是：MemGPT 寫的開場白表現和人寫的相近，有時更好；三個模型的 SIM-1、SIM-3 都高於人寫開場白的 0.800。他們觀察到 MemGPT 的開場白通常比人寫的囉嗦，涵蓋的人設面向也更多。作者也說，從結果看得出來，把資訊存在工作脈絡裡，是寫出吸引人開場白的關鍵。</p>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>這張表比的是誰</h4>
+      <p>表 3 沒有「不加 MemGPT」的基線列，只有 MemGPT 的三個版本和人寫的開場白。另外，相似度高代表開場白提到了人設裡的內容，不直接等於使用者覺得它有趣；作者拿它當投入感的指標，這一點讀的時候要記得。後一句是整理者的提醒。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="document-qa" data-toc="多文件問答">
+  <div class="container head">
+    <p class="chapter">Chapter 10 · MemGPT for document analysis · Multi-document QA</p>
+    <h2>基線被檢索器卡住，MemGPT 可以一頁頁往下翻</h2>
+    <p class="lede">多文件問答裡，基線和 MemGPT 用同一個檢索器。基線只讀得到一次塞進視窗的前 K 篇，準確率的上限大約就是檢索器；MemGPT 能反覆搜尋、翻頁，不受視窗放得下幾篇的限制，但常常沒翻完就停了。</p>
+    
+  </div>
+  <div class="cardband" id="card-09"><div class="cardlabel"><span class="n">圖卡 09 / 11</span><span class="t">多文件問答：一頁頁往下翻</span><button type="button" class="zoom" data-card="09">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">基線的上限是檢索器，MemGPT 可以一頁頁往下翻</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">多文件問答：NaturalQuestions-Open 抽 50 題，兩邊用同一個檢索器（ada-002 向量、餘弦相似度）；基線一次拿前 K 篇塞進視窗，MemGPT 把整批文件放進 archival storage 自己查</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 固定脈絡：一次拿前 K 篇</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ MemGPT：自己查、自己翻頁</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:80px; top:200px; width:260px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:500; color:#FFFFFF;">檢索器：取前 K 篇</div>
+  <div style="position:absolute; left:80px; top:280px; width:260px; height:206px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #4B5866; border-radius:10px;"></div>
+  <div style="position:absolute; left:96px; top:290px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.1em; color:#8A93A0;">脈絡視窗 · 固定大小</div>
+  <div style="position:absolute; left:96px; top:314px; width:228px; height:32px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">第 1 篇</div>
+  <div style="position:absolute; left:96px; top:354px; width:228px; height:32px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">第 2 篇</div>
+  <div style="position:absolute; left:96px; top:392px; width:228px; text-align:center; font-size:16px; color:#8A93A0;">⋯</div>
+  <div style="position:absolute; left:96px; top:436px; width:228px; height:32px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#C8501F;">第 K 篇（被截短）</div>
+
+  <div style="position:absolute; left:400px; top:296px; width:360px; height:70px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#C8501F;">金牌文章排在第 K 名之後</div><div style="font-size:13px; color:#6B7380;">它沒被放進視窗，基線保證看不到</div></div>
+  <div style="position:absolute; left:400px; top:417px; width:360px; height:70px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#C8501F;">K 大到塞不下，每篇就被截短</div><div style="font-size:13px; color:#6B7380;">相關片段可能正好被切掉</div></div>
+  <div style="position:absolute; left:60px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">基線只用得到放進視窗的文件，準確率的上限大約就是檢索器。要比到超過視窗長度時，作者把每篇截短，讓同樣篇數塞得進去。</div>
+
+  <div style="position:absolute; left:860px; top:200px; width:640px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">archival storage：整批 Wikipedia 段落</div><div style="font-size:12px; color:rgba(255,255,255,0.75);">PostgreSQL＋pgvector，HNSW 索引，查詢在一秒內</div></div></div>
+  <div style="position:absolute; left:1000px; top:268px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">archival_storage.search(問題, page=n)</div>
+  <div style="position:absolute; left:860px; top:300px; width:130px; height:64px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">第 1 頁</div><div style="font-size:12px; color:#6B7380;">10 筆</div></div></div>
+  <div style="position:absolute; left:1030px; top:300px; width:130px; height:64px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">第 2 頁</div><div style="font-size:12px; color:#6B7380;">10 筆</div></div></div>
+  <div style="position:absolute; left:1200px; top:318px; width:130px; text-align:center; font-size:18px; color:#8A93A0;">⋯</div>
+  <div style="position:absolute; left:1370px; top:300px; width:130px; height:64px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#6B7380;">第 13 頁</div><div style="font-size:12px; color:#8A93A0;">最後一頁</div></div></div>
+  <div style="position:absolute; left:1330px; top:372px; width:210px; text-align:right; font-size:13px; font-weight:500; color:#C8501F;">常在翻到這裡之前就停了</div>
+  <div style="position:absolute; left:860px; top:410px; width:300px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; color:#2B3340;">每次只把一頁放進主脈絡</div>
+  <div style="position:absolute; left:1200px; top:410px; width:300px; height:46px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:500; color:#2E7B4F;">回答，並附上出處文件</div>
+  <div style="position:absolute; left:840px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">MemGPT 對檢索器發出多次查詢、一頁頁翻，能用的文件數不再受視窗限制；但作者觀察到，它常在翻完檢索結果之前就停下來。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#C8501F;">上限約等於檢索器</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">檢索器沒撈到金牌文章，基線就一定答不對；視窗塞不下時只好截短每一篇，截得越短，相關片段越容易被切掉，準確率跟著降。</div>
+    <div style="font-size:13px; color:#8A93A0;">圖 5；作者觀察：金牌文件常排在前十幾筆之後。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#2E7B4F;">不受視窗限制，但常太早停</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">配 GPT-4 表現最好，和配 GPT-4 Turbo 的結果相同；配 GPT-3.5 因為函式呼叫能力有限，明顯變差。</div>
+    <div style="font-size:13px; color:#8A93A0;">圖 5 上，MemGPT 是不隨 K 改變的水平線。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：圖 5 的點沒有標數字，這張卡不寫準確率；「每頁 10 筆、共 13 頁」取自圖 6 的例子（124 筆結果），不是實驗設定。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c09" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c09" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c09" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M210 250L210 278" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M398 331H344" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c09)"></path>
+    <path d="M398 452H344" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c09)"></path>
+    <path d="M925 258L925 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M992 332H1028" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c09)"></path>
+    <path d="M1162 332H1246" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c09)"></path>
+    <path d="M1284 332H1368" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c09)"></path>
+    <path d="M925 366L925 408" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M1095 366L1095 408" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M1162 433H1198" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c09)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>任務取自 Liu 等人（2023a）的 retriever-reader 文件問答：從 NaturalQuestions-Open 資料集選一個問題，檢索器替它找出相關的 Wikipedia 文件，再把這些文件交給讀者模型（也就是 LLM）回答。和原研究一樣，作者看檢索文件數 K 增加時，讀者的準確率怎麼變化。</p>
+    <p>兩邊用同一個檢索器：以 OpenAI 的 <code>text-embedding-ada-002</code> 嵌入向量做餘弦相似度搜尋，取前 K 篇。MemGPT 用預設的儲存設定，archival storage 是啟用了 pgvector 擴充的 PostgreSQL；嵌入向量預先算好載入資料庫，用 HNSW 索引做近似搜尋，查詢時間在一秒以內。MemGPT 把整批嵌入過的文件都載進 archival storage，檢索器就自然成了 archival storage 的搜尋功能；基線則在 LLM 推論之外獨立取出前 K 篇，和原本的 retriever-reader 設定一樣。資料是 2018 年底的 Wikipedia 傾印檔，照 NaturalQuestions-Open 先前研究的做法；作者抽了 50 題評估，題目與嵌入後的段落都有公開。</p>
+    <p>評分用 LLM 評審，確認答案真的是從檢索到的文件裡推出來的，也避免字串不完全相同的正確答案被判錯。附錄的提示詞要求兩邊都同時給出答案與出處文件。基線被告知文件裡可能有無關的，找不到答案就回答「資訊不足」（INSUFFICIENT INFORMATION）；MemGPT 被告知答案一定在它的 archival memory 裡，找不到就繼續搜；兩邊都被要求假設現在是 2018 年。評審只在回答同時有正確答案與對應的文件文字時判對，回答資訊不足、或缺了出處文件，都算錯。</p>
+    <p>結果在圖 5：橫軸是檢索回來的文件數（0 到 200），縱軸是準確率，圖上的點沒有標數字。作者的解讀是，基線的表現大約被檢索器封頂：它們只能用視窗裡被放進來的資訊，只要嵌入式檢索器用這個問題撈不到金牌文章，基線就保證看不到它。MemGPT 則能對檢索器發出多次查詢，主動搜尋 archival storage，還能一頁一頁翻下去，所以它能用的文件總數，不再受限於視窗裡放得下幾篇。</p>
+    <p>這個任務對所有方法都難，原因在嵌入式相似度搜尋本身：作者觀察到，NaturalQuestions-Open 標註的金牌文件，常常排在前十幾筆之後，甚至更後面。檢索器的表現直接反映在基線的結果：GPT-4 在文件少時準確率偏低，隨著更多文件放進視窗而提高，因為它確實只根據檢索到的文件回答。MemGPT 理論上不受檢索器排序不佳的限制，只要金牌文件在完整的排名裡，翻得夠多頁就找得到；但作者觀察到，MemGPT 常常在翻完檢索結果之前就停下來。</p>
+    <p>要讓基線和 MemGPT 比到超過預設視窗的長度，作者把檢索器回傳的文件截短，讓同樣數量的文件塞得進視窗。不出所料，文件截得越短，金牌文件裡相關片段被切掉的機會越大，準確率跟著下降。MemGPT 配 GPT-3.5 的表現明顯變差，作者歸因於它有限的函式呼叫能力；配 GPT-4 表現最好，圖 5 的圖說也說配 GPT-4 與配 GPT-4 Turbo 的結果相同。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>怎麼讀圖 5</h4>
+      <p>圖 5 有三條隨 K 變化的基線（GPT-4、GPT-3.5 Turbo、GPT-4 Turbo）和兩條水平線。水平線是 MemGPT：它自己決定搜幾次，準確率不隨 K 改變。配 GPT-4 與 GPT-4 Turbo 的那一條，位置在所有基線的點之上；配 GPT-3.5 的那一條明顯較低。圖說還有一句：截短能讓固定視窗的模型延長有效的脈絡長度，但需要壓縮得越多，表現掉得越多。圖上的點沒有數字，這一頁不替它們估數字。</p>
+    </div>
+
+    <div class="thought">
+      <span class="label">思考題 · 02</span>
+      <h4>你的 RAG 是一次塞滿，還是讓模型自己翻頁？</h4>
+      <p>多數 RAG 管線取固定的前 K 段，一次放進 prompt；K 太小會漏，K 太大又得截短。</p>
+      <p class="hint">先統計檢索失敗裡，有幾成是「正確段落排在前 K 名之後」。比例高的話，讓模型能帶頁碼再查一次、並在提示詞裡寫清楚什麼時候該繼續找，可能比調大 K 有用；但也要量它會不會太早停，這是第 3.2.1 節自己承認的問題。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="nested-kv" data-toc="巢狀鍵值檢索">
+  <div class="container head">
+    <p class="chapter">Chapter 11 · Nested key-value retrieval</p>
+    <h2>巢狀的鍵值要一層層查，MemGPT 查到值不再是鍵才停</h2>
+    <p class="lede">鍵值對全部放得進 GPT-4 的視窗，基線照樣失敗：GPT-3.5 在第 1 層就降到 0%，GPT-4 與 GPT-4 Turbo 到第 3 層降到 0%。MemGPT 配 GPT-4 反覆查詢，不受層數影響。</p>
+    
+  </div>
+  <div class="cardband" id="card-10"><div class="cardlabel"><span class="n">圖卡 10 / 11</span><span class="t">巢狀鍵值：一次查一層</span><button type="button" class="zoom" data-card="10">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">一次查一層，查到值不再是鍵才停</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">巢狀鍵值檢索：140 組 UUID 鍵值對（約 8k tokens，剛好是 GPT-4 基線的視窗），值本身可能也是鍵；層數 0 到 4，抽 30 種排列（第 3.2.2 節）</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　拿到一個鍵</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">例：831…ea5；鍵值對<br>都在 archival storage</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　搜尋這個鍵</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">archival_storage.search</span><br>讀出它的值</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　拿值再搜一次</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">看它有沒有以「鍵」的<br>身分出現在結果裡</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　數結果筆數</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">1 筆：它只是值，停<br>2 筆：它也是鍵，繼續</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　回答這個值</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">例：f37…617，<br>它不是任何一組的鍵</div>
+  </div>
+
+  <div style="position:absolute; left:924px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 6　也是鍵：再查一層</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">拿到它的值，回到 Step 3</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">多跳查詢</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">給 MemGPT 的人設指示</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">確認值不是鍵之前，不要停</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">附錄 6.1.6</div>
+  </div>
+
+  <div style="position:absolute; left:1066px; top:268px; font-size:12px; font-weight:700; color:#6B7380;">2 筆</div>
+  <div style="position:absolute; left:778px; top:296px; font-size:12px; font-weight:700; color:#2E7B4F;">回到 Step 3</div>
+  <div style="position:absolute; left:60px; top:318px; width:680px; font-size:14px; color:#6B7380; line-height:1.6;">圖 8 的例子有兩層：831…ea5 → 5b8…4c3 → f37…617。搜 5b8…4c3 回 2 筆（它也是鍵），搜 f37…617 只回 1 筆（它只是值），於是回答 f37…617。</div>
+
+  <div style="position:absolute; left:60px; top:480px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:504px; font-size:20px; font-weight:700; color:#1C2431;">結果：圖 7 的點沒有數字，這裡只寫正文給的</div>
+
+  <div style="position:absolute; left:60px; top:546px; width:470px; height:236px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">基線：資料都在視窗裡，還是失敗</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">140 組鍵值對整份放得進 GPT-4 基線的視窗，基線照樣失敗：GPT-3.5 在第 1 層就降到 0%，GPT-4 與 GPT-4 Turbo 到第 3 層也降到 0%。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">GPT-3.5 最常見的錯：直接回傳原本那一個值，<br>等於停在第一層。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:546px; width:470px; height:236px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">MemGPT 配 GPT-4：層數不影響</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">它用重複的函式查詢一層層追下去；圖 7 的圖說說，MemGPT 是唯一能穩定做完 2 層以上的方法。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">同一個 GPT-4，差在一次看完，還是一次查一層；<br>附錄的人設也要它確認值不是鍵才停。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:546px; width:470px; height:236px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">查得不夠多，一樣會掉</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">MemGPT 配 GPT-4 Turbo 與配 GPT-3.5 仍勝過各自的基線，但從第 2 層開始下滑，原因是沒有做足夠的查詢。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">GPT-4 Turbo 當基線比 GPT-4 好，<br>包進 MemGPT 反而較差（圖 7 的圖說）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：迴圈依圖 8 與附錄 6.1.6 畫；「一次看完、一次查一層」是整理者的說法。正文說測到第 4 層，圖 7 的橫軸只畫到第 3 層。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#C8501F"></path>
+    <path d="M1057 262L1057 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M922 350H769V264" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c10)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>這是作者提出的新任務，改自 Liu 等人（2023a）的合成鍵值檢索，用來展示 MemGPT 能從多個資料來源彙整資訊。原本的任務是：一個合成資料集裡有許多鍵值對，每個鍵和值都是 128 位元的 UUID（通用唯一識別碼）；給代理一個鍵，要它回傳對應的值。作者的巢狀版本讓值本身也可能是另一個鍵，代理必須做多跳查詢。</p>
+    <p>設定是：UUID 鍵值對固定 140 組，大約 8k tokens，正好是 GPT-4 基線的視窗長度。巢狀層數從 0（起始鍵的值不是任何鍵）變到 4（要查 4 次才找到最終的值），並抽 30 種不同的排列，包括起始鍵的位置與各層鍵的位置。基線拿到的是整份鍵值 JSON，提示詞說明如果某個值也是鍵，就要回傳那個鍵的值；MemGPT 的人設則要它持續搜尋，在確認值不是鍵之前不要停。</p>
+    <p>圖 8 是一個兩層的例子，UUID 都縮短了。系統先通知 archival storage 上傳完成，使用者要 831…ea5 的值。MemGPT 第一次搜尋 831…ea5，得到 1 筆結果，值是 5b8…4c3。再搜 5b8…4c3，得到 2 筆：一筆是它自己當鍵、值是 f37…617，另一筆是剛才那一組。最後搜 f37…617，只回 1 筆，f37…617 在裡面的身分是值，代表它不是任何一組的鍵，於是 MemGPT 回答 f37…617。</p>
+
+    <div class="codeblock">
+      <span class="file">圖 8 的查詢順序 · 教學用精簡版</span>
+<pre class="code">archival_storage.search(<span class="s">"831…ea5"</span>)   <span class="c"># 1 筆：831…ea5 → 5b8…4c3</span>
+archival_storage.search(<span class="s">"5b8…4c3"</span>)   <span class="c"># 2 筆：它也是鍵，5b8…4c3 → f37…617</span>
+archival_storage.search(<span class="s">"f37…617"</span>)   <span class="c"># 1 筆：只以值的身分出現</span>
+<span class="c"># 停止：f37…617 不是任何一組的鍵，回答它</span></pre>
+    </div>
+
+    <p>結果在圖 7，點沒有標數字，正文寫出了幾個。GPT-3.5 與 GPT-4 在原本的鍵值任務上表現不錯，換成巢狀版本都很吃力。GPT-3.5 完全做不了巢狀版本，一有巢狀就立刻下滑，在第 1 層就到 0%；作者觀察到它主要的失敗方式，是直接回傳原本那一個值。GPT-4 與 GPT-4 Turbo 比 GPT-3.5 好，但也有類似的下滑，到第 3 層時準確率為 0%。MemGPT 配 GPT-4 則不受層數影響，能透過重複的函式查詢完成巢狀查找。MemGPT 配 GPT-4 Turbo 與配 GPT-3.5 也都比各自的基線好，但從第 2 層開始下滑，原因是沒有做足夠的查詢。圖 7 的圖說補了一個反差：GPT-4 Turbo 當基線時比 GPT-4 好，包進 MemGPT 之後卻不如 MemGPT 配 GPT-4。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>正文、圖 7 與圖 8 有三處對不上</h4>
+      <p>第一，正文說層數測到 4，圖 7 的橫軸只畫到 3。第二，正文說 MemGPT 配 GPT-3.5 從第 2 層開始下滑，但圖 7 上那條線在第 1 層就已經往下（整理者對圖的讀法，不寫數字）。第三，正文說 MemGPT 反覆查詢的是「存在主脈絡裡」的鍵值對，圖 8 的例子卻是搜尋 archival storage；這一頁的圖卡照圖 8 畫。</p>
+    </div>
+
+    <div class="story">
+      <div class="label">關鍵觀念 · 二</div>
+      <h4>資料都在視窗裡，問題就不在視窗大小</h4>
+      <p>140 組鍵值對約 8k tokens，基線的 GPT-4 其實整份都看得到。它失敗的原因不是資料被截掉，而是要在一次推論裡連續追好幾層。MemGPT 把這件事拆成好幾次函式呼叫：每一次只查一層，看了結果再決定要不要繼續。</p>
+      <p>整理者的讀法：這個實驗量到的，比較像是「把多步查找拆成多次呼叫」的價值，而不只是記憶容量。停止條件也寫得很乾淨：查到只剩一筆、而且它是值，就停。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="related" data-toc="相關工作的位置" class="nocard">
+  <div class="container">
+    <p class="chapter">Chapter 12 · Related Work</p>
+    <h2>MemGPT 站在長脈絡模型與檢索增強上，補的是長期記憶</h2>
+    <p class="lede">相關工作分三條：加長視窗的研究讓 MemGPT 的主記憶體變大；檢索增強的研究是它外部記憶的基礎；LLM 當代理的研究很多，MemGPT 聚焦在替代理配上對使用者輸入的長期記憶。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>第 4 節 · 研究方向</th><th>原文舉的例子</th><th>和 MemGPT 的關係</th></tr></thead>
+        <tbody>
+          <tr><td>長脈絡 LLM</td><td>稀疏化注意力（Child 等人 2019、Beltagy 等人 2020）、低秩近似（Wang 等人 2020）、神經記憶（Lee 等人 2019）；把視窗延長到超過訓練時的長度（Press 等人 2021、Chen 等人 2023）</td><td>視窗變長，MemGPT 的主記憶體就變大；作者說主要貢獻是一個分層的記憶，用長脈絡 LLM 當主記憶體的實作</td></tr>
+          <tr><td>檢索增強模型</td><td>用外部檢索器替 LLM 取相關輸入的一系列研究（Ram、Borgeaud、Karpukhin、Lewis、Guu、Lin 等人）；FLARE（Jiang 等人 2023）讓 LLM 在生成過程中主動決定何時檢索、檢索什麼；Trivedi 等人（2022）把檢索穿插進思維鏈，改善多步問答</td><td>MemGPT 外部記憶的設計建立在這些研究上</td></tr>
+          <tr><td>LLM 當代理</td><td>Park 等人（2023）替 LLM 加上記憶、讓它當規劃者，在仿《模擬市民》的沙盒裡觀察到湧現的社交行為；Nakano 等人（2021）訓練模型先搜網頁再回答，也用分頁控制脈絡大小；Yao 等人（2022）顯示穿插思維鏈能改善規劃；Liu 等人（2023b）的代理基準</td><td>MemGPT 裡的模型執行函式時也會邊想邊說；它聚焦在讓代理擁有對使用者輸入的長期記憶</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>三條脈絡裡，作者對第一條的定位最清楚：MemGPT 不和長脈絡模型競爭，而是把它們當成更大的主記憶體來用。對第二條，作者說 MemGPT 外部記憶的設計建立在檢索增強的大量研究上；其中 FLARE 讓模型自己決定何時檢索，和 MemGPT 讓模型自己呼叫搜尋函式的方向相近，這個對照是整理者的讀法。第三條裡，Nakano 等人在網頁瀏覽環境中用分頁控制脈絡大小，原文說這和 MemGPT 的分頁概念相似；而整個代理研究裡，作者把自己的位置定在「替代理配上對使用者輸入的長期記憶」。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>這些引用的常見名稱</h4>
+      <p>原文只寫作者與年份，對應的常見名稱由整理者補在這裡：Liu 等人（2023a）是 Lost in the Middle；Park 等人（2023）是 Generative Agents；Nakano 等人（2021）是 WebGPT；Yao 等人（2022）是 ReAct；Liu 等人（2023b）是 AgentBench；第 2 章提到的 Schick 等人（2023）是 Toolformer。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="takeaways" data-toc="結論與代價">
+  <div class="container head">
+    <p class="chapter">Chapter 13 · Conclusion</p>
+    <h2>分層記憶、函式呼叫與事件，讓固定視窗也撐得起長期記憶</h2>
+    <p class="lede">結論一節把 MemGPT 的成果歸給兩個作業系統技巧：分層的記憶管理與中斷。論文沒有獨立的限制一節，代價散在實驗裡，而且大多指向同一件事：底層模型能不能好好呼叫函式。</p>
+    
+  </div>
+  <div class="cardband" id="card-11"><div class="cardlabel"><span class="n">圖卡 11 / 11</span><span class="t">結論：分層、函式、事件</span><button type="button" class="zoom" data-card="11">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">分層、函式、事件：固定視窗也撐得起長期記憶</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 1、5 節：作者的結論是，記憶階層加上作業系統式的函式與事件，讓有限視窗的 LLM 在文件分析與多段對話都勝過既有做法；另外點名三個後續方向</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:340px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">01　分層</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">把視窗當成有限的<br>主記憶體</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">先決定什麼住在視窗裡、什麼放在外面：系統指令與工作脈絡常駐，對話紀錄與文件放在搜得到的外部儲存，要用時再搬進來。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 把所有歷史都塞進 prompt<br>✓ 分層，外面的要搬進來才算數</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:340px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">02　函式與事件</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">搬記憶的，<br>是模型自己</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">給它函式 schema、記憶壓力警告、分頁的檢索與錯誤回饋，讓它自己決定存什麼、找什麼；多步的事靠 heartbeat 連鎖，做完就 yield。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 固定流程檢索一次就交差<br>✓ 讓模型自己查、自己翻頁</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:340px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">03　上限</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">效果取決於模型<br>會不會呼叫函式</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">配 GPT-3.5 在文件問答明顯變差，MemGPT 常常沒翻完就停，配 GPT-4 Turbo 在巢狀鍵值不如配 GPT-4：記憶管理做得多好，看底層模型。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">論文沒有報延遲與 token 成本；<br>評分靠 LLM 評審，文件問答只抽 50 題。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:580px; font-size:20px; font-weight:700; color:#1C2431;">作者點名的三個後續方向（不排順序）</div>
+  <div style="position:absolute; left:60px; top:620px; width:460px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">A</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">用到其他有大量或無界脈絡的領域</div>
+  </div>
+  <div style="position:absolute; left:570px; top:620px; width:460px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">B</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">整合不同的記憶層技術，例如資料庫或快取</div>
+  </div>
+  <div style="position:absolute; left:1080px; top:620px; width:460px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">C</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">繼續改進控制流程與記憶管理的策略</div>
+  </div>
+  <div style="position:absolute; left:60px; top:712px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">出處：三個方向都在第 5 節結論。代價散在第 3 節：底層模型的函式呼叫能力、太早停止翻頁、嵌入式檢索的上限、評估的範圍；正文第 13 章把它們列在一起。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三條原則是整理者從論文歸納的，✗／✓ 的對照也是整理者寫的；三個方向是原文第 5 節點名的。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>作者的收尾是：MemGPT 是受作業系統啟發、用來管理 LLM 有限視窗的新系統。它設計了類似傳統作業系統的記憶體階層與控制流程，讓 LLM 好像擁有更大的脈絡資源。在文件分析裡，它把相關的脈絡換進換出，處理遠超過當時 LLM 視窗長度的長文；在對話代理裡，它讓代理在長時間的對話中保有長期記憶與一致性，並能隨互動演變。作者的總結是：分層記憶管理與中斷這類作業系統技巧，能在固定視窗的限制下，釋放 LLM 的潛力。</p>
+    <p>論文沒有獨立的限制一節。散在第 3 節的代價放在一起看：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>效果取決於底層模型</strong>文件問答裡，MemGPT 配 GPT-3.5 明顯變差，作者歸因於函式呼叫能力有限；巢狀鍵值裡，配 GPT-3.5 與 GPT-4 Turbo 都因為查得不夠多而下滑（第 10、11 章）。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>常常太早停</strong>文件問答裡，MemGPT 理論上翻得夠多頁就能找到金牌文件，實際上常在翻完之前停下來（第 10 章）。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>檢索器本身的上限</strong>嵌入式相似度搜尋常把金牌文件排在前十幾筆之後，所有方法都受影響（第 10 章）。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>評估的範圍有限</strong>對話任務的問題由 LLM 出、答案由寬鬆的 LLM 評審判；文件問答只抽 50 題；開場白用相似度當投入感的指標（第 8 到 10 章）。</div></div>
+      <div class="cascade-step"><div class="n">5</div><div class="t"><strong>沒有量的東西</strong>論文沒有報每個任務呼叫了幾次函式，也沒有報延遲或 token 成本；這一條是整理者的觀察。</div></div>
+    </div>
+
+    <p>作者點名的後續方向有三個：把 MemGPT 用到其他有大量或無界脈絡的領域；整合不同的記憶層技術，例如資料庫或快取；以及進一步改進控制流程與記憶管理的策略。</p>
+    <p>下面是整理者把這一講的五個講題對回論文的讀法，論文沒有這樣講：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>第 4 週的講題</th><th>在 MemGPT 裡對應的東西（整理者的讀法）</th></tr></thead>
+        <tbody>
+          <tr><td>短期與長期記憶</td><td>主脈絡在視窗內，每次推論都看得到；外部脈絡（archival、recall storage）在視窗外，要搜尋才看得到</td></tr>
+          <tr><td>記憶當成工具動作</td><td>記憶的存、改、找全是函式呼叫：<code>working_context.append</code>、<code>working_context.replace</code>、<code>recall_storage.search</code>、<code>archival_storage.search</code></td></tr>
+          <tr><td>檔案系統當外部記憶</td><td>論文用的是資料庫（PostgreSQL 加 pgvector），不是檔案系統；共同點是放在視窗外、要用工具讀進來</td></tr>
+          <tr><td>結構化記憶</td><td>工作脈絡是一塊固定大小的非結構化文字；記憶要不要結構化，論文沒有討論</td></tr>
+          <tr><td>跨 agent 的記憶</td><td>論文只有單一代理，沒有討論</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <dl class="faq">
+      <div><dt>MemGPT 需要重新訓練模型嗎？</dt><dd>不用。它是包在固定視窗 LLM 外面的系統：記憶階層、系統指令裡的函式 schema、佇列管理器與事件處理，都在模型之外（第 2 節）；實驗直接用 GPT-3.5 Turbo、GPT-4、GPT-4 Turbo 的 API 端點。</dd></div>
+      <div><dt>它和一般的 RAG 差在哪？</dt><dd>多文件問答裡兩邊用同一個檢索器，差別在誰決定查、查幾次、翻到第幾頁：基線一次拿前 K 篇，MemGPT 讓模型自己搜尋 archival storage、一頁頁翻（第 3.2.1 節）。作者也說外部記憶的設計建立在檢索增強的研究上（第 4 節）。</dd></div>
+      <div><dt>視窗越來越長，還需要這套嗎？</dt><dd>作者的看法是兩者相輔：更長的視窗讓 MemGPT 的主記憶體變大（第 4 節）；但長文件、多份文件與跨數週的對話仍會超過視窗（第 3.1、3.2 節），長脈絡模型也不一定用得好多出來的脈絡（第 1 節）。</dd></div>
+    </dl>
+
+    <div class="thought">
+      <span class="label">思考題 · 03</span>
+      <h4>把記憶管理交給模型之後，你怎麼知道它「搜夠了」？</h4>
+      <p>MemGPT 的兩個失敗都和查得不夠有關：文件問答太早停、巢狀鍵值少查一層。</p>
+      <p class="hint">把每次任務的函式呼叫都記下來，數它搜了幾次、翻了幾頁，和答案的對錯放在一起看。第 11 章的鍵值任務有一個乾淨的停止條件（查到只剩一筆、而且是值就停）；想想你的任務有沒有類似、能寫進提示詞的停止條件。</p>
+    </div>
+
+    <div class="pullquote bronze">
+      視窗有多大是模型的事；什麼時候把什麼搬進視窗，才是記憶架構要設計的事。
+      <cite>整理自第 1、2、5 節</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="glossary" class="nocard glossary" data-toc="名詞速查">
+  <div class="wide">
+    <p class="eyebrow">Reference · 名詞速查</p>
+    <h2>關鍵名詞與它們在論文裡的位置</h2>
+    <p class="lede">先列系統的記憶階層與元件，再列控制流程，最後是實驗的資料集、任務與指標。</p>
+    <dl class="glossary-grid">
+      <div class="term"><dt>MemGPT</dt><span class="zh-name">MemoryGPT</span><dd>讓固定視窗的 LLM 自己管理多層記憶的系統；作者也稱它為 LLM OS（第 1、2 節）。</dd></div>
+      <div class="term"><dt>virtual context management</dt><span class="zh-name">虛擬脈絡管理</span><dd>借虛擬記憶體的想法，在視窗與外部儲存之間搬資料，營造脈絡沒有上限的效果（第 1 節）。</dd></div>
+      <div class="term"><dt>main context</dt><span class="zh-name">主脈絡</span><dd>LLM 的 prompt tokens，推論時看得到的全部內容；對應主記憶體（第 2 節）。</dd></div>
+      <div class="term"><dt>external context</dt><span class="zh-name">外部脈絡</span><dd>視窗外的資訊，一定要搬進主脈絡才用得上；對應磁碟（第 2 節）。</dd></div>
+      <div class="term"><dt>system instructions</dt><span class="zh-name">系統指令</span><dd>主脈絡的第一段，唯讀；寫控制流程、各層記憶的用途與函式用法（第 2.1 節）。</dd></div>
+      <div class="term"><dt>working context</dt><span class="zh-name">工作脈絡</span><dd>主脈絡的第二段，固定大小的非結構化文字，只能用函式寫；附錄的提示詞稱它 core memory（第 2.1 節）。</dd></div>
+      <div class="term"><dt>FIFO queue</dt><span class="zh-name">先進先出佇列</span><dd>主脈絡的第三段，滾動的訊息與函式呼叫紀錄；第一格是遞迴摘要（第 2.1 節）。</dd></div>
+      <div class="term"><dt>recursive summary</dt><span class="zh-name">遞迴摘要</span><dd>用舊摘要加上這次被逐出的訊息寫成的新摘要，放在佇列第一格（第 2.2 節）。</dd></div>
+      <div class="term"><dt>queue manager</dt><span class="zh-name">佇列管理器</span><dd>把訊息放進佇列並寫進 recall storage，依警告門檻與清空門檻處理溢出（第 2.2 節）。</dd></div>
+      <div class="term"><dt>memory pressure warning</dt><span class="zh-name">記憶壓力警告</span><dd>prompt 超過警告門檻（例如視窗的 70%）時插入的系統訊息，讓模型趁逐出前先存重點（第 2.2 節）。</dd></div>
+      <div class="term"><dt>recall storage</dt><span class="zh-name">回憶儲存</span><dd>存所有訊息原文的資料庫；佇列管理器寫入，模型用函式分頁搜尋（圖 3）。</dd></div>
+      <div class="term"><dt>archival storage</dt><span class="zh-name">封存儲存</span><dd>讀寫都靠函式的資料庫，存任意長度的文字；文件實驗把整批文件放在這裡（圖 3）。</dd></div>
+      <div class="term"><dt>function executor</dt><span class="zh-name">函式執行器</span><dd>把模型的輸出解析成函式呼叫、驗證參數、執行，再把結果與錯誤回饋給模型（第 2.3 節）。</dd></div>
+      <div class="term"><dt>pagination</dt><span class="zh-name">分頁</span><dd>檢索結果一次只回一頁，避免撐爆視窗；模型可以帶頁碼再查下一頁（第 2.3 節、圖 6）。</dd></div>
+      <div class="term"><dt>event</dt><span class="zh-name">事件</span><dd>觸發推論的輸入：使用者訊息、系統訊息、使用者的動作、定時事件（第 2.4 節）。</dd></div>
+      <div class="term"><dt>function chaining</dt><span class="zh-name">函式連鎖</span><dd>帶 request_heartbeat=true 的呼叫做完後立刻再推論；沒帶就是 yield，等下一個事件（第 2.4 節）。</dd></div>
+      <div class="term"><dt>MSC</dt><span class="zh-name">Multi-Session Chat</span><dd>人類標註者扮演固定人設的多段對話資料集；每組五段，每段約十幾則訊息（第 3.1 節）。</dd></div>
+      <div class="term"><dt>DMR</dt><span class="zh-name">深度記憶檢索</span><dd>在第 6 段問一個只有前五段對話才答得出的問題，測一致性（第 3.1.1 節）。</dd></div>
+      <div class="term"><dt>ROUGE-L recall</dt><span class="zh-name">ROUGE-L 召回率</span><dd>依最長共同子序列算的召回率；DMR 用它抵銷回答比標準答案囉嗦的影響（第 3.1.1 節）。</dd></div>
+      <div class="term"><dt>LLM judge</dt><span class="zh-name">LLM 評審</span><dd>用 LLM 判斷回答對不對；DMR 的評審只要主題相同就算對，文件問答還要附上出處（附錄 6.1.2、6.1.5）。</dd></div>
+      <div class="term"><dt>SIM-1、SIM-3、SIM-H</dt><span class="zh-name">開場白相似度</span><dd>開場白和人設標籤（SIM-1、SIM-3）或人寫開場白（SIM-H）的相似度；原文稱 CSIM（表 3）。</dd></div>
+      <div class="term"><dt>nested KV retrieval</dt><span class="zh-name">巢狀鍵值檢索</span><dd>值可能也是鍵的鍵值查詢，要一層層查；140 組 UUID，約 8k tokens，層數 0 到 4（第 3.2.2 節）。</dd></div>
+    </dl>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>資料來源：arXiv，〈MemGPT: Towards LLMs as Operating Systems〉，Charles Packer、Sarah Wooders、Kevin Lin、Vivian Fang、Shishir G. Patil、Ion Stoica、Joseph E. Gonzalez（UC Berkeley），2023-10-12（v2 2024-02-12）。頁面上的數字與內容依 arXiv v2。<br><a href="https://arxiv.org/abs/2310.08560">arxiv.org/abs/2310.08560</a></p>
+    <p class="credit">整理於 2026-09-24</p>
+    <p class="disclaimer">本頁為學習用的重述與整理，不是原文逐句翻譯。觀點與著作權屬於原作者。程式片段為教學用精簡版，實際用法請以原文與官方文件為準。</p>
+  </div>
+</footer>
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="圖卡大圖"><button type="button" class="close">關閉（Esc）</button><div class="frame"></div></div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fitFrames() {
+    var frames = document.querySelectorAll('.cardband .frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  var KEY = 'rearranged-article-mode';
+  function setMode(m, save) {
+    document.body.classList.toggle('mode-cards', m === 'cards');
+    var btns = document.querySelectorAll('.modebar button[data-mode]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-mode') === m ? 'true' : 'false');
+    }
+    if (save) { try { localStorage.setItem(KEY, m); } catch (e) {} }
+    fitFrames();
+  }
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  setMode(saved === 'cards' ? 'cards' : 'full', false);
+
+  var box = document.getElementById('lightbox');
+  var boxFrame = box.querySelector('.frame');
+  function fitLightbox() {
+    if (!box.classList.contains('open')) return;
+    var root = boxFrame.firstElementChild;
+    if (!root) return;
+    var s = Math.min(1, (window.innerWidth - 48) / W, (window.innerHeight - 48) / H);
+    root.style.transform = 'scale(' + s + ')';
+    boxFrame.style.width = Math.round(W * s) + 'px';
+    boxFrame.style.height = Math.round(H * s) + 'px';
+  }
+  function openLightbox(num) {
+    var bandEl = document.getElementById('card-' + num);
+    if (!bandEl) return;
+    var root = bandEl.querySelector('.frame > div');
+    boxFrame.innerHTML = '';
+    var clone = root.cloneNode(true);
+    clone.style.transform = '';
+    boxFrame.appendChild(clone);
+    box.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    fitLightbox();
+  }
+  function closeLightbox() {
+    box.classList.remove('open');
+    boxFrame.innerHTML = '';
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var b = t.closest('.modebar button[data-mode]');
+    if (b) { setMode(b.getAttribute('data-mode'), true); return; }
+    var z = t.closest('.cardlabel .zoom');
+    if (z) { openLightbox(z.getAttribute('data-card')); return; }
+    if (t.closest('.lightbox') && !t.closest('.lightbox .frame')) { closeLightbox(); }
+  });
+  document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') closeLightbox(); });
+  window.addEventListener('resize', function () { fitFrames(); fitLightbox(); });
+  window.addEventListener('load', fitFrames);
+  fitFrames();
+})();
+</script>
+</body>
+</html>

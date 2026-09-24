@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MemGPT（Packer et al. 2023） · 圖解卡</title>
+<meta name="description" content="UC Berkeley 團隊在 2023 年提出 MemGPT：借作業系統的虛擬記憶體，把 LLM 的脈絡視窗當成有限的主記憶體，完整的對話紀錄與文件放在視窗外的資料庫，由模型用函式呼叫自己決定存什麼、找什麼，事件觸發推論、heartbeat 讓它連續呼叫。深度記憶檢索與巢狀鍵值查詢裡，三個模型包進 MemGPT 之後都勝過各自的基線；多文件問答裡，MemGPT 的表現不受視窗長度影響，但配 GPT-3.5 時明顯變差。每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="memgpt, agent-memory, context-management, llm-agents, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2310.08560">
+<meta name="date" content="2026-09-24">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+:root { color-scheme: light; --bg: #F4F5F7; --line: #E5E9EE; --ink: #1C2431; --mute: #8A93A0; --orange: #C8501F; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: #C8501F; } a:hover { color: #9E3E16; }
+a:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.wrap { max-width: 1600px; margin: 0 auto; padding-block: 24px 48px; padding-inline: 16px; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; padding: 6px 4px 18px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; letter-spacing: 0.12em; color: var(--mute); }
+.head nav { display: flex; flex-wrap: wrap; gap: 6px 14px; letter-spacing: 0.04em; }
+.head nav a { color: var(--mute); text-decoration: none; font-weight: 600; }
+.head nav a:hover { color: var(--orange); }
+.page { margin-bottom: 36px; scroll-margin-top: 16px; }
+.label { display: flex; align-items: baseline; gap: 14px; padding: 0 4px 8px; font-size: 13px; color: var(--mute); }
+.label .n { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-weight: 600; font-size: 12px; letter-spacing: 0.1em; color: var(--orange); }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--line); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; }
+.foot { padding: 12px 4px 0; font-size: 12px; color: var(--mute); line-height: 1.7; }
+@media print {
+  @page { size: 1600px 900px; margin: 0; }
+  body { background: #FFFFFF; }
+  .wrap { max-width: none; padding: 0; }
+  .head, .label, .foot { display: none; }
+  .page { margin: 0; page-break-after: always; }
+  .frame { border: none; border-radius: 0; height: auto !important; }
+  .frame > div { transform: none !important; }
+}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><span>MemGPT（Packer et al. 2023） · 圖解卡 · 11 張 · 連續閱讀版</span><nav class="site" aria-label="導覽"><a href="../../">首頁</a><a href="index.html">圖卡＋教材版</a></nav><nav aria-label="跳頁"><a href="#p01" title="封面">01</a><a href="#p02" title="固定視窗：只裝得下幾十則">02</a><a href="#p03" title="作業系統的類比：虛擬脈絡">03</a><a href="#p04" title="記憶階層：主脈絡與外部脈絡">04</a><a href="#p05" title="佇列管理器：先警告再逐出">05</a><a href="#p06" title="函式執行器：模型自己搬記憶">06</a><a href="#p07" title="事件與 heartbeat：連鎖或 yield">07</a><a href="#p08" title="深度記憶檢索：摘要對上搜尋">08</a><a href="#p09" title="多文件問答：一頁頁往下翻">09</a><a href="#p10" title="巢狀鍵值：一次查一層">10</a><a href="#p11" title="結論：分層、函式、事件">11</a></nav></div>
+<section class="page" id="p01">
+  <div class="label"><span class="n">01 / 11</span><span>封面</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.14em; color:#8A93A0;">MEMGPT VIRTUAL CONTEXT &#183; 圖解卡 &#183; 16:9 &#183; 11 張</div>
+  <div style="position:absolute; left:60px; top:110px; width:840px; font-size:60px; font-weight:700; color:#1C2431; line-height:1.3; letter-spacing:0.01em;">把脈絡視窗當記憶體，<br>讓 LLM 自己換頁。</div>
+  <div style="position:absolute; left:60px; top:296px; width:840px; font-size:20px; color:#6B7380; line-height:1.7;">整理自 arXiv 論文〈MemGPT: Towards LLMs as Operating Systems〉（2023-10-12，<span style="white-space:nowrap;">v2 2024-02-12</span>；Charles Packer 等 7 人，UC Berkeley）。借作業系統的虛擬記憶體：主脈絡就是 prompt，完整的對話紀錄與文件放在視窗外，模型用函式呼叫自己搬進搬出。</div>
+  <div style="position:absolute; left:60px; top:452px; display:flex; align-items:center; gap:36px;">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#C8501F;"></div>
+      <div style="font-size:15px; color:#2B3340;">固定視窗的限制／基線</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#2E7B4F;"></div>
+      <div style="font-size:15px; color:#2B3340;">MemGPT 的做法／結果</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#1F2A3A;"></div>
+      <div style="font-size:15px; color:#2B3340;">LLM 處理器／終點</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div>
+      <div style="font-size:15px; color:#2B3340;">中性節點</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; top:502px; width:840px; font-size:13px; color:#8A93A0; line-height:1.6;">整組共用同一套語意色：橘是固定視窗的限制與基線，綠是 MemGPT 的做法與結果，深藍是 LLM 處理器與終點。</div>
+  <div style="position:absolute; left:60px; top:572px; width:840px; box-sizing:border-box; border-left:3px solid #2E7B4F; padding:4px 0px 4px 18px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.08em; color:#8A93A0;">三個零件</div>
+    <div style="font-size:17px; color:#1C2431; line-height:1.7;">記憶階層 &#183; 函式呼叫 &#183; 事件驅動的控制流程</div>
+    <div style="font-size:14px; color:#6B7380; line-height:1.6;">兩個領域：多段對話（深度記憶檢索、開場白）、文件分析（多文件問答、巢狀鍵值）。<br>底層模型：GPT-3.5 Turbo、GPT-4、GPT-4 Turbo，各自當基線，也各包進 MemGPT 跑一次。</div>
+  </div>
+  <div style="position:absolute; left:960px; top:110px; width:580px; box-sizing:border-box; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 34px; display:flex; flex-direction:column;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">本組 &#183; 11 頁</div>
+    <div style="margin-top:10px; display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">01</div><div style="font-size:17px; color:#1C2431;">封面</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">02</div><div style="font-size:17px; color:#1C2431;">固定視窗：只裝得下幾十則</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">03</div><div style="font-size:17px; color:#1C2431;">作業系統的類比：虛擬脈絡</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">04</div><div style="font-size:17px; color:#1C2431;">記憶階層：主脈絡與外部脈絡</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">05</div><div style="font-size:17px; color:#1C2431;">佇列管理器：先警告再逐出</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">06</div><div style="font-size:17px; color:#1C2431;">函式執行器：模型自己搬記憶</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">07</div><div style="font-size:17px; color:#1C2431;">事件與 heartbeat：連鎖或 yield</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">08</div><div style="font-size:17px; color:#1C2431;">深度記憶檢索：摘要對上搜尋</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">09</div><div style="font-size:17px; color:#1C2431;">多文件問答：一頁頁往下翻</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">10</div><div style="font-size:17px; color:#1C2431;">巢狀鍵值：一次查一層</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#2E7B4F;">11</div><div style="font-size:17px; color:#1C2431;">結論：分層、函式、事件</div></div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">來源：arxiv.org/abs/2310.08560 —— 本組為學習用重述，數字依 arXiv v2，函式呼叫與提示詞為教學用精簡版。</div>
+</div></div>
+</section>
+<section class="page" id="p02">
+  <div class="label"><span class="n">02 / 11</span><span>固定視窗：只裝得下幾十則</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">最常用的開源模型，只裝得下幾十則訊息</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 1（2024 年 1 月收集）：十個模型的脈絡視窗，以及大約放得下幾則訊息（假設前置 prompt 1k tokens、每則約 50 tokens）。橫軸是對數量尺</div>
+
+  <div style="position:absolute; left:60px; top:150px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>開源或開放權重</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>只能透過 API</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:0px; height:14px; border-left:1.5px dashed #C8501F;"></div>超過視窗的文件</div>
+    <div style="color:#8A93A0;">位置照表 1 的 token 數；點旁是表 1 估的訊息數</div>
+  </div>
+  <div style="position:absolute; left:1040px; top:178px; width:450px; text-align:right; font-size:13px; font-weight:500; color:#C8501F;">右端 100 萬 tokens：一份 10-K 年報就可能超過（第 3.2 節）</div>
+
+  <div style="position:absolute; left:60px; top:248px; font-size:18px; font-weight:700; color:#1C2431;">開源</div>
+  <div style="position:absolute; left:180px; top:262px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:222px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+
+  <div style="position:absolute; left:303px; top:253px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:328px; top:252px; font-size:13px; color:#2B3340;">Llama（1）<span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">2k</span> · 20 則</div>
+  <div style="position:absolute; left:436px; top:213px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:461px; top:212px; font-size:13px; color:#2B3340;">Llama 2 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">4k</span> · 60 則</div>
+  <div style="position:absolute; left:568px; top:253px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:593px; top:252px; font-size:13px; color:#2B3340;">Mistral 7B <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">8k</span> · 140 則</div>
+  <div style="position:absolute; left:1183px; top:253px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1208px; top:252px; font-size:13px; color:#2B3340;">Yi-34B-200k <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">200k</span> · 約 4,000 則</div>
+
+  <div style="position:absolute; left:60px; top:310px; font-size:14px; font-weight:700; color:#1C2431;">視窗長度</div>
+  <div style="position:absolute; left:180px; top:300px; width:1320px; height:40px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:311px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">1k</div>
+  <div style="position:absolute; left:604px; top:311px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">10k</div>
+  <div style="position:absolute; left:1040px; top:311px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">100k</div>
+  <div style="position:absolute; left:1464px; top:311px; width:28px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">1M</div>
+  <div style="position:absolute; left:1336px; top:344px; font-size:12px; color:#8A93A0;">tokens，對數量尺</div>
+
+  <div style="position:absolute; left:60px; top:386px; font-size:18px; font-weight:700; color:#1C2431;">只有 API</div>
+  <div style="position:absolute; left:180px; top:400px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:440px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:480px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+
+  <div style="position:absolute; left:436px; top:391px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:461px; top:390px; font-size:13px; color:#2B3340;">GPT-3.5 Turbo（初版）<span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">4k</span> · 60 則</div>
+  <div style="position:absolute; left:833px; top:391px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:858px; top:390px; font-size:13px; color:#2B3340;">GPT-4 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">32k</span> · 約 600 則</div>
+  <div style="position:absolute; left:1098px; top:391px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:1123px; top:390px; font-size:13px; color:#2B3340;">GPT-4 Turbo <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">128k</span> · 約 2,600 則</div>
+  <div style="position:absolute; left:568px; top:431px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:593px; top:430px; font-size:13px; color:#2B3340;">GPT-4（初版）<span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">8k</span> · 140 則</div>
+  <div style="position:absolute; left:1051px; top:431px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:1076px; top:430px; font-size:13px; color:#2B3340;">Claude 2 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">100k</span> · 約 2,000 則</div>
+  <div style="position:absolute; left:701px; top:471px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:726px; top:470px; font-size:13px; color:#2B3340;">GPT-3.5 Turbo <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">16k</span> · 300 則</div>
+
+  <div style="position:absolute; left:1498px; top:198px; width:0px; height:300px; border-left:1.5px dashed #C8501F;"></div>
+
+  <div style="position:absolute; left:60px; top:526px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">訊息數是表 1 的估算，不是實測。GPT-3.5 Turbo 與 GPT-4 各有初版與較新的一列；實驗用的 GPT-4 是 8k 視窗的端點（第 3 節），不是表上 32k 的那一個。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:190px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">開源模型：幾十則就滿</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">最常用的開源 LLM，超過上限前只撐得住幾十來回；表 1 的 Llama 2 是 4k tokens、約 60 則。要陪使用者好幾個月的對話代理，遠遠不夠。</div>
+    <div style="font-size:13px; color:#8A93A0;">出自第 1 節；訊息數是作者依平均長度估的。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:190px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">加長視窗：成本平方成長</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">自注意力讓運算時間與記憶體隨長度平方增加；就算撐得起，長脈絡模型也不一定用得好多出來的脈絡（Liu 等人 2023a）。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者的結論：需要別的技術來支援長脈絡。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">文件更長，還常常不只一份</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">10-K 年報這類法律或財務文件，輕易超過 100 萬 tokens；真實的文件分析還要在好幾份長文件之間找關聯（第 3.2 節）。</div>
+    <div style="font-size:13px; color:#8A93A0;">OpenAI 的模型當時最多 128k tokens。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：點的位置照表 1 的 token 數畫在對數量尺上；右端「100 萬 tokens」那條線取自第 3.2 節的文字，不在表 1 裡。</div>
+</div></div>
+</section>
+<section class="page" id="p03">
+  <div class="label"><span class="n">03 / 11</span><span>作業系統的類比：虛擬脈絡</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">借作業系統的虛擬記憶體，讓視窗看起來無限大</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 1、2 節：作業系統在主記憶體與磁碟之間搬資料，讓程式以為記憶體比實體多；MemGPT 用同一招，讓固定視窗的 LLM 以為脈絡沒有上限</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">類比</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">作業系統</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">MemGPT</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">由誰來做</div>
+  </div>
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">記憶體階層</div><div style="font-size:13px; color:#8A93A0;">快的一層放正在用的東西</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">快的主記憶體（RAM）＋慢的磁碟</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>主脈絡（prompt tokens）<br>＋外部脈絡（兩個資料庫）</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">架構先切好；主脈絡固定大小，例如 8k tokens</div>
+  </div>
+  <div style="position:absolute; left:60px; top:306px; width:1480px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#2E7B4F;">虛擬記憶體</div><div style="font-size:13px; color:#8A93A0;">這篇論文的核心想法</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">程式以為可用的記憶體比實體的多</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">模型以為脈絡比視窗長：虛擬脈絡管理</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">整個 MemGPT，作者稱它為 LLM OS</div>
+  </div>
+  <div style="position:absolute; left:60px; top:402px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">分頁與逐出</div><div style="font-size:13px; color:#8A93A0;">資料在兩層之間搬</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">溢出的資料寫到磁碟，用到時透過 page fault 讀回</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">不相關的逐出到外部儲存，要用的再用函式找回來</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>多半是模型自己呼叫函式；<br>佇列滿了由佇列管理器逐出</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:498px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">中斷</div><div style="font-size:13px; color:#8A93A0;">誰來叫醒處理器</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">中斷打斷目前的執行，改變控制流程</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">事件觸發推論；函式可以要求立刻再跑一輪</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">使用者訊息、系統警告、使用者動作、定時事件</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:630px; width:470px; height:176px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">視窗是有限的主記憶體</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">作者把脈絡視窗當成受限的記憶體資源，照傳統作業系統的記憶體分層，替 LLM 設計一個記憶階層（第 1 節）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">直接加長視窗是另一條路，見第 02 卡。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:630px; width:470px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">搬資料的，是模型自己</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">作業系統替程式透明地換頁；MemGPT 把換頁做成函式交給模型，何時搬、搬什麼，由它看情況決定（第 2.3 節）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">和核心自動換頁的對照是整理者加的。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:630px; width:470px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">三個零件合起來</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">記憶階層、作業系統式的函式、事件驅動的控制流程，合起來讓有限視窗的 LLM 處理沒有上限的脈絡（第 1 節）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">第 04 到 07 卡依序拆開。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：「作業系統」與「MemGPT」兩欄是原文第 1、2 節的類比；列的分法與「由誰來做」一欄是整理者整理的。</div>
+</div></div>
+</section>
+<section class="page" id="p04">
+  <div class="label"><span class="n">04 / 11</span><span>記憶階層：主脈絡與外部脈絡</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">模型只看得到主脈絡，其他記憶都在視窗外</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 3：固定視窗的 LLM 處理器；prompt tokens 切成三段，完整的對話紀錄與任意長度的文字放在視窗外的兩個資料庫，要用函式搬進主脈絡才看得到</div>
+
+  <div style="position:absolute; left:60px; top:200px; width:220px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#1C2431;">事件</div><div style="font-size:12px; color:#6B7380;">使用者訊息、系統警告……</div></div></div>
+  <div style="position:absolute; left:60px; top:320px; width:220px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#FFFFFF;">LLM 處理器</div><div style="font-size:12px; color:rgba(255,255,255,0.75);">固定視窗，例如 8k tokens</div></div></div>
+  <div style="position:absolute; left:60px; top:440px; width:220px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#1C2431;">輸出緩衝</div><div style="font-size:12px; color:#6B7380;">completion tokens</div></div></div>
+  <div style="position:absolute; left:60px; top:516px; width:220px; font-size:13px; color:#8A93A0; line-height:1.55; text-align:center;">輸出不直接給使用者，<br>由函式執行器解讀成函式呼叫</div>
+
+  <div style="position:absolute; left:470px; top:196px; font-size:13px; font-weight:700; color:#2B3340;">讀：主脈絡串成一個字串，當每輪推論的輸入</div>
+  <div style="position:absolute; left:470px; top:486px; font-size:13px; font-weight:700; color:#2B3340;">寫：函式呼叫在兩層之間搬、改、找</div>
+
+  <div style="position:absolute; left:840px; top:150px; width:700px; height:400px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #D5DAE1; border-radius:14px;"></div>
+  <div style="position:absolute; left:870px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">記憶階層（圖 3）</div>
+  <div style="position:absolute; left:870px; top:214px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">主脈絡 · MAIN CONTEXT · 在視窗內，每輪都讀得到</div>
+  <div style="position:absolute; left:870px; top:236px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">系統指令 · 唯讀</div>
+    <div style="padding:9px 16px; border:1.5px solid #B4D5C0; border-radius:999px; font-size:15px; color:#2E7B4F; background-color:#EEF6F0;">工作脈絡 · 函式可寫</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">FIFO 佇列 · 佇列管理器寫</div>
+  </div>
+  <div style="position:absolute; left:870px; top:296px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">外部脈絡 · EXTERNAL CONTEXT · 在視窗外，要搬進來才看得到</div>
+  <div style="position:absolute; left:870px; top:318px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1.5px solid #B4D5C0; border-radius:999px; font-size:15px; color:#2E7B4F; background-color:#EEF6F0;">archival storage · 函式讀寫</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">recall storage · 函式讀、佇列管理器寫</div>
+  </div>
+  <div style="position:absolute; left:870px; top:378px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">主脈絡各段放什麼</div>
+  <div style="position:absolute; left:870px; top:400px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">工作脈絡：使用者與人設的關鍵事實</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">FIFO：最近的訊息，第一格是摘要</div>
+  </div>
+  <div style="position:absolute; left:870px; top:460px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">兩個資料庫的分工</div>
+  <div style="position:absolute; left:870px; top:482px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">archival：任意長度的文字，文件放這裡</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">recall：每則訊息的原文</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; width:1480px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">函式執行器 ＋ 佇列管理器：解析輸出、執行函式、把訊息寫進 recall storage、快滿時逐出舊訊息 —— 兩層之間的每一次搬移都經過這一層</div>
+
+  <div style="position:absolute; left:60px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#C8501F;">視窗外的資料，模型看不到</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">外部脈絡裡的東西，一定要明確搬進主脈絡，推論時才傳得到 LLM 處理器（第 2 節）。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">所以什麼時候搬，是整個設計的核心。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#2E7B4F;">讀寫權限寫在架構裡</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">系統指令唯讀；工作脈絡只能用函式改；FIFO 佇列由佇列管理器寫，第一格是遞迴摘要。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">權限照圖 3 的標示。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">兩個資料庫分工不同</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">recall 自動存下每一則訊息，模型只能搜；archival 讀寫都靠函式，放任意長度的文字。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">兩個都用分頁搜尋，一次回一頁。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：各段的讀寫權限照圖 3；左欄與面板的排法、「各段放什麼」的歸納是整理者的，函式名取自圖 1、2、4、6 的例子。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+    </defs>
+    <path d="M170 258L170 316" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c04)"></path>
+    <path d="M170 378L170 436" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c04)"></path>
+    <path d="M838 226C620 226 520 334 284 334" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c04)"></path>
+    <path d="M280 366C520 366 620 470 834 470" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c04)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p05">
+  <div class="label"><span class="n">05 / 11</span><span>佇列管理器：先警告再逐出</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">佇列快滿先發警告，滿了才把舊訊息換出</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2.2 節：prompt tokens 超過警告門檻（例如視窗的 70%）就插入記憶壓力警告；超過清空門檻（例如 100%）就逐出一批訊息（例如視窗的 50%）並重寫遞迴摘要</div>
+
+  <div style="position:absolute; left:60px; top:140px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1;"></div>系統指令＋工作脈絡（常駐）</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF6F0; border:1px solid #B4D5C0;"></div>遞迴摘要（佇列第一格）</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FFFFFF; border:1px solid #9AA3AE;"></div>FIFO 佇列裡的訊息</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FCF1EA; border:1px solid #E6B49A;"></div>記憶壓力警告</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FFFFFF; border:1px dashed #D5DAE1;"></div>還空著的視窗</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:222px; font-size:16px; font-weight:700; color:#1C2431;">到警告門檻</div>
+  <div style="position:absolute; left:180px; top:188px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">視窗的開頭</div>
+  <div style="position:absolute; left:1096px; top:184px; font-size:14px; color:#C8501F;">▼</div>
+  <div style="position:absolute; left:1116px; top:188px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#C8501F;">警告門檻（例：70%）</div>
+  <div style="position:absolute; left:180px; top:206px; width:198px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">系統指令＋工作脈絡</div>
+  <div style="position:absolute; left:378px; top:206px; width:66px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">摘要</div>
+  <div style="position:absolute; left:444px; top:206px; width:634px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2B3340;">訊息、函式的輸入與輸出，一則則往後接</div>
+  <div style="position:absolute; left:1078px; top:206px; width:56px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">警告</div>
+  <div style="position:absolute; left:1134px; top:206px; width:366px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1px dashed #D5DAE1; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#8A93A0;">還空著</div>
+  <div style="position:absolute; left:180px; top:286px; font-size:13px; color:#8A93A0;">佇列管理器在佇列尾端插入一則系統訊息：記憶壓力警告。模型可以趁還沒逐出，用函式把重點存進工作脈絡或 archival storage（圖 1）</div>
+
+  <div style="position:absolute; left:60px; top:362px; font-size:16px; font-weight:700; color:#1C2431;">清空之後</div>
+  <div style="position:absolute; left:180px; top:328px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2E7B4F;">超過清空門檻（例：100%）→ 逐出約半個視窗的舊訊息；舊摘要＋被逐出的訊息，寫成新摘要</div>
+  <div style="position:absolute; left:180px; top:346px; width:198px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">系統指令＋工作脈絡</div>
+  <div style="position:absolute; left:378px; top:346px; width:92px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">新摘要</div>
+  <div style="position:absolute; left:470px; top:346px; width:370px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2B3340;">較新的訊息</div>
+  <div style="position:absolute; left:840px; top:346px; width:660px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1px dashed #D5DAE1; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#8A93A0;">空出來的位置：被逐出的訊息已經不在視窗裡</div>
+  <div style="position:absolute; left:180px; top:426px; font-size:13px; color:#8A93A0;">被逐出的訊息模型不能直接看到；但每一則進來時就寫進了 recall storage，要用時用函式搜尋，找到的會被接回佇列尾端</div>
+
+  <div style="position:absolute; left:60px; top:470px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">兩個門檻</div>
+    <div style="font-size:15px; color:#2B3340;">警告門檻給模型機會自己存重點，清空門檻才真的逐出；原文的 70%、100%、50% 都寫成「例如」，不是固定值</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:560px; width:470px; height:220px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">警告是給模型的機會</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">記憶壓力警告讓模型在逐出之前自己決定：哪些事實寫進工作脈絡、哪些長內容存進 archival storage。等到清空門檻，就由佇列管理器直接逐出。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">圖 1：收到警告後，模型把生日與男友的名字寫進工作脈絡。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:560px; width:470px; height:220px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">逐出不等於忘記</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">佇列管理器把每一則進來的訊息，和模型的每一次輸出，都寫進 recall storage；被逐出之後，模型照樣可以用函式把它們找回來。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">找回來的訊息，會被接回佇列的尾端，重新進到視窗。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:560px; width:470px; height:220px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">摘要一層層疊上去</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">每次清空，都用「舊的遞迴摘要＋這次被逐出的訊息」寫出新摘要，放在佇列第一格；視窗裡因此一直留著一份整段歷史的濃縮版。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">第 08 卡的基線，拿到的就是模擬這種摘要的有損版本。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：70%、100%、50% 都是原文舉的例子；各段的長度是整理者的示意，不是實測的比例。</div>
+</div></div>
+</section>
+<section class="page" id="p06">
+  <div class="label"><span class="n">06 / 11</span><span>函式執行器：模型自己搬記憶</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">要搬哪些記憶，由模型自己用函式決定</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2.3 節：每一輪推論，主脈絡串成一個字串交給 LLM；輸出先被解析、驗證參數，通過才執行函式，結果連同執行時的錯誤都寫回主脈絡</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　串成一個字串</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">系統指令＋工作脈絡＋<br>FIFO 佇列，當成輸入</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　LLM 推論</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">產生一個輸出字串<br>（completion tokens）</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　解析、驗證</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">確認格式、驗證函式參數</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">不合法就不執行</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　執行函式</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">在兩層之間搬、改、找記憶</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">例：search、replace</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　寫回主脈絡</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">結果與執行時的錯誤，<br>都送回給模型</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:300px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">寫在系統指令</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">讓模型自己管記憶的兩樣東西：① 記憶階層與各層用途的詳細說明　② 函式 schema，每個函式附自然語言描述。模型照著它們決定何時搬、搬什麼。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:420px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:444px; font-size:20px; font-weight:700; color:#1C2431;">三個讓模型自己管記憶行得通的設計</div>
+
+  <div style="position:absolute; left:60px; top:486px; width:470px; height:250px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">① 何時搬，模型自己判斷</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">記憶的編輯與檢索完全由模型主導：對話太長時把事實存起來（圖 1），理解改變時改寫工作脈絡，例如把「男友」改成「前男友」（圖 4）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">沒有外部規則替它決定該存什麼、該找什麼；<br>佇列滿了的逐出，才由佇列管理器自動處理。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:486px; width:470px; height:250px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">② 錯誤也是回饋</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">執行時的錯誤，例如主脈絡已滿還要往裡面加，會和結果一起送回模型；作者說這個回饋迴圈讓系統能從自己的行動學習、調整行為。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">錯誤訊息進的是主脈絡，下一輪就看得到；<br>參數沒通過驗證的呼叫，不會被執行。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:486px; width:470px; height:250px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">③ 知道自己的上限</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">模型要意識到脈絡有上限，自我編輯才有效：系統用 token 上限的警告提示它，檢索函式也做了分頁，一次呼叫不會撐爆視窗。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">分頁也是第 07 卡連鎖呼叫的起點：<br>一頁不夠，就帶著頁碼再查一次。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：五格是整理者依第 2.3 節的文字排的；下一輪什麼時候開始，由事件與 heartbeat 決定（第 07 卡）。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M769 262L769 298" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="4 4"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p07">
+  <div class="label"><span class="n">07 / 11</span><span>事件與 heartbeat：連鎖或 yield</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">事件叫醒模型，heartbeat 讓它連續呼叫函式</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2.4 節：使用者訊息、系統訊息、使用者動作、定時事件都會觸發推論；函式帶 request_heartbeat=true 就立刻再跑一輪，沒帶就交回控制，等下一個事件</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　事件進來</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">使用者訊息、容量警告、<br>登入或上傳完成、定時器</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　轉成純文字</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">解析器把事件變成訊息，<br>接進主脈絡</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 3　LLM 推論</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">讀整個主脈絡，<br>輸出一次函式呼叫</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　執行函式</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">解析、驗證、執行<br>（第 06 卡的流程）</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #4B5866; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 5　帶 heartbeat 嗎？</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">看輸出裡有沒有<br><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">request_heartbeat=true</span></div>
+  </div>
+
+  <div style="position:absolute; left:924px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 6　有：馬上再跑</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">輸出放進主脈絡，回到 Step 3</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">函式連鎖</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 7　沒有：yield</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">處理器暫停，等下一個事件</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">交回控制</div>
+  </div>
+
+  <div style="position:absolute; left:1116px; top:270px; font-size:13px; font-weight:700; color:#2E7B4F;">有</div>
+  <div style="position:absolute; left:1354px; top:268px; font-size:13px; font-weight:700; color:#6B7380;">沒有</div>
+  <div style="position:absolute; left:778px; top:296px; font-size:12px; font-weight:700; color:#2E7B4F;">回到 Step 3</div>
+  <div style="position:absolute; left:60px; top:318px; width:680px; font-size:14px; color:#6B7380; line-height:1.6;">一個使用者問題，背後可能是好幾輪推論：例如圖 6，模型搜尋 archival storage 拿到第 1 頁，帶著 heartbeat 再查第 2 頁，最後才回答。沒帶旗標的那次呼叫就是 yield。</div>
+  <div style="position:absolute; left:1040px; top:440px; width:290px; text-align:right; font-size:13px; color:#8A93A0;">下一個事件來了，從 Step 1 重新開始</div>
+
+  <div style="position:absolute; left:60px; top:480px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:504px; font-size:20px; font-weight:700; color:#1C2431;">三個讓它不必等使用者開口的設計</div>
+
+  <div style="position:absolute; left:60px; top:546px; width:470px; height:236px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">① 定時事件：不用等人開口</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">事件不只有使用者訊息，還有系統訊息（例如容量警告）、使用者動作（剛登入、剛上傳完文件）與定時事件；定時事件讓 MemGPT 在沒人提示時也會自己跑。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">所有事件都先由解析器轉成純文字，<br>再接進主脈絡，成為處理器的輸入。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:546px; width:470px; height:236px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">② 連鎖呼叫：多步才做得完</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">翻同一個查詢的多頁結果、從不同文件彙整資料，都要連續呼叫好幾個函式；帶 heartbeat 的呼叫做完，控制權立刻回到處理器，由它決定下一步。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">圖 3 的圖說：多步檢索靠的就是函式連鎖；<br>圖 6 就是連查兩頁才回答。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:546px; width:470px; height:236px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">③ yield：把控制權交回去</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">沒帶旗標的函式呼叫就是 yield：MemGPT 不再跑 LLM 處理器，直到下一個外部事件，例如使用者的新訊息，或排定的中斷。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">yield 是作業系統的用詞：主動讓出執行權；<br>下一次推論，要等外部事件叫醒。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：request_heartbeat=true 出自圖 3 的圖說；「帶 heartbeat 嗎」那一格，是整理者把第 2.4 節的兩種情況畫成的分岔。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M1250 262L1154 298" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c07)"></path>
+    <path d="M1345 262L1345 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M922 350H769V264" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c07)"></path>
+    <path d="M1345 402V452H1560V128H193V158" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="6 5" marker-end="url(#ag-c07)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p08">
+  <div class="label"><span class="n">08 / 11</span><span>深度記憶檢索：摘要對上搜尋</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">基線只讀到摘要，MemGPT 翻得到整段舊對話</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">深度記憶檢索（DMR）：MSC 的前 5 段對話之後，第 6 段只問一個問題，答案只在舊對話裡；準確率由 LLM 評審判定，另報 ROUGE-L 召回（表 2）</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 固定脈絡的基線</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 包進 MemGPT</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:230px; top:200px; width:300px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:500; color:#FFFFFF;">前 5 段對話，每段約十幾則</div>
+  <div style="position:absolute; left:230px; top:284px; width:300px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; color:#2B3340;">壓成一份有損的摘要</div>
+  <div style="position:absolute; left:230px; top:362px; width:300px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; color:#2B3340;">摘要＋問題放進 prompt</div>
+  <div style="position:absolute; left:230px; top:440px; width:300px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:500; color:#C8501F;">細節被摘掉，就回 NO ANSWER</div>
+  <div style="position:absolute; left:548px; top:297px; width:230px; font-size:13px; color:#6B7380; line-height:1.5;">模擬長時間累積的遞迴摘要</div>
+  <div style="position:absolute; left:548px; top:375px; width:230px; font-size:13px; color:#6B7380; line-height:1.5;">答題時，手上只有這份摘要</div>
+  <div style="position:absolute; left:548px; top:453px; width:230px; font-size:13px; color:#C8501F; line-height:1.5;">附錄 6.1.1：資訊不夠就這樣答</div>
+  <div style="position:absolute; left:60px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">DMR 的問題刻意考某一次對話裡的具體細節，例如那天午餐吃了哪一家；這種細節正是摘要最容易丟掉的東西。</div>
+
+  <div style="position:absolute; left:1010px; top:200px; width:300px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:500; color:#FFFFFF;">前 5 段的完整紀錄都在 recall</div>
+  <div style="position:absolute; left:1010px; top:284px; width:300px; height:46px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:500; color:#FFFFFF;">用函式分頁搜尋舊對話</div>
+  <div style="position:absolute; left:1010px; top:362px; width:300px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; color:#2B3340;">找到的訊息放回主脈絡</div>
+  <div style="position:absolute; left:1010px; top:440px; width:300px; height:46px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:500; color:#2E7B4F;">照著原話回答</div>
+  <div style="position:absolute; left:1328px; top:290px; width:212px; font-size:13px; color:#6B7380; line-height:1.5;">附錄稱為對話搜尋<br>（conversation_search）</div>
+  <div style="position:absolute; left:1328px; top:375px; width:212px; font-size:13px; color:#6B7380; line-height:1.5;">一次回一頁，不夠就再查</div>
+  <div style="position:absolute; left:1328px; top:446px; width:212px; font-size:13px; color:#2E7B4F; line-height:1.5;">人設指示：依核心記憶<br>與對話搜尋的結果作答</div>
+  <div style="position:absolute; left:840px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">MemGPT 看不到舊對話的原文，但原文全部在 recall storage；搜得到那一則訊息，就答得出那個細節。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#C8501F;">準確率 32.1% 到 38.7%</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">三個基線：GPT-3.5 Turbo 38.7%、GPT-4 32.1%、GPT-4 Turbo 35.3%；ROUGE-L 召回 0.296 到 0.394。</div>
+    <div style="font-size:13px; color:#8A93A0;">基線裡 GPT-4 反而最低，原文沒有解釋原因。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#2E7B4F;">準確率 66.9% 到 93.4%</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">包進 MemGPT：GPT-3.5 Turbo 66.9%、GPT-4 92.5%、GPT-4 Turbo 93.4%；ROUGE-L 召回 0.629 到 0.827。</div>
+    <div style="font-size:13px; color:#8A93A0;">同一個模型，差別只在有沒有包進 MemGPT。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：數字全部取自表 2；問題由另一個 LLM 依舊對話出題，LLM 評審只要回答碰到同一個主題就判對（附錄 6.1.2、6.1.3）。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c08" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c08" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c08" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M380 250L380 282" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M380 330L380 360" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M380 408L380 438" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c08)"></path>
+    <path d="M1160 250L1160 282" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M1160 330L1160 360" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c08)"></path>
+    <path d="M1160 408L1160 438" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c08)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p09">
+  <div class="label"><span class="n">09 / 11</span><span>多文件問答：一頁頁往下翻</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">基線的上限是檢索器，MemGPT 可以一頁頁往下翻</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">多文件問答：NaturalQuestions-Open 抽 50 題，兩邊用同一個檢索器（ada-002 向量、餘弦相似度）；基線一次拿前 K 篇塞進視窗，MemGPT 把整批文件放進 archival storage 自己查</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 固定脈絡：一次拿前 K 篇</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ MemGPT：自己查、自己翻頁</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:80px; top:200px; width:260px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:500; color:#FFFFFF;">檢索器：取前 K 篇</div>
+  <div style="position:absolute; left:80px; top:280px; width:260px; height:206px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #4B5866; border-radius:10px;"></div>
+  <div style="position:absolute; left:96px; top:290px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.1em; color:#8A93A0;">脈絡視窗 · 固定大小</div>
+  <div style="position:absolute; left:96px; top:314px; width:228px; height:32px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">第 1 篇</div>
+  <div style="position:absolute; left:96px; top:354px; width:228px; height:32px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">第 2 篇</div>
+  <div style="position:absolute; left:96px; top:392px; width:228px; text-align:center; font-size:16px; color:#8A93A0;">⋯</div>
+  <div style="position:absolute; left:96px; top:436px; width:228px; height:32px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#C8501F;">第 K 篇（被截短）</div>
+
+  <div style="position:absolute; left:400px; top:296px; width:360px; height:70px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#C8501F;">金牌文章排在第 K 名之後</div><div style="font-size:13px; color:#6B7380;">它沒被放進視窗，基線保證看不到</div></div>
+  <div style="position:absolute; left:400px; top:417px; width:360px; height:70px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#C8501F;">K 大到塞不下，每篇就被截短</div><div style="font-size:13px; color:#6B7380;">相關片段可能正好被切掉</div></div>
+  <div style="position:absolute; left:60px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">基線只用得到放進視窗的文件，準確率的上限大約就是檢索器。要比到超過視窗長度時，作者把每篇截短，讓同樣篇數塞得進去。</div>
+
+  <div style="position:absolute; left:860px; top:200px; width:640px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">archival storage：整批 Wikipedia 段落</div><div style="font-size:12px; color:rgba(255,255,255,0.75);">PostgreSQL＋pgvector，HNSW 索引，查詢在一秒內</div></div></div>
+  <div style="position:absolute; left:1000px; top:268px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">archival_storage.search(問題, page=n)</div>
+  <div style="position:absolute; left:860px; top:300px; width:130px; height:64px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">第 1 頁</div><div style="font-size:12px; color:#6B7380;">10 筆</div></div></div>
+  <div style="position:absolute; left:1030px; top:300px; width:130px; height:64px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">第 2 頁</div><div style="font-size:12px; color:#6B7380;">10 筆</div></div></div>
+  <div style="position:absolute; left:1200px; top:318px; width:130px; text-align:center; font-size:18px; color:#8A93A0;">⋯</div>
+  <div style="position:absolute; left:1370px; top:300px; width:130px; height:64px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#6B7380;">第 13 頁</div><div style="font-size:12px; color:#8A93A0;">最後一頁</div></div></div>
+  <div style="position:absolute; left:1330px; top:372px; width:210px; text-align:right; font-size:13px; font-weight:500; color:#C8501F;">常在翻到這裡之前就停了</div>
+  <div style="position:absolute; left:860px; top:410px; width:300px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; color:#2B3340;">每次只把一頁放進主脈絡</div>
+  <div style="position:absolute; left:1200px; top:410px; width:300px; height:46px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:500; color:#2E7B4F;">回答，並附上出處文件</div>
+  <div style="position:absolute; left:840px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">MemGPT 對檢索器發出多次查詢、一頁頁翻，能用的文件數不再受視窗限制；但作者觀察到，它常在翻完檢索結果之前就停下來。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#C8501F;">上限約等於檢索器</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">檢索器沒撈到金牌文章，基線就一定答不對；視窗塞不下時只好截短每一篇，截得越短，相關片段越容易被切掉，準確率跟著降。</div>
+    <div style="font-size:13px; color:#8A93A0;">圖 5；作者觀察：金牌文件常排在前十幾筆之後。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#2E7B4F;">不受視窗限制，但常太早停</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">配 GPT-4 表現最好，和配 GPT-4 Turbo 的結果相同；配 GPT-3.5 因為函式呼叫能力有限，明顯變差。</div>
+    <div style="font-size:13px; color:#8A93A0;">圖 5 上，MemGPT 是不隨 K 改變的水平線。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：圖 5 的點沒有標數字，這張卡不寫準確率；「每頁 10 筆、共 13 頁」取自圖 6 的例子（124 筆結果），不是實驗設定。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c09" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c09" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c09" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M210 250L210 278" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M398 331H344" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c09)"></path>
+    <path d="M398 452H344" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c09)"></path>
+    <path d="M925 258L925 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M992 332H1028" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c09)"></path>
+    <path d="M1162 332H1246" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c09)"></path>
+    <path d="M1284 332H1368" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c09)"></path>
+    <path d="M925 366L925 408" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M1095 366L1095 408" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M1162 433H1198" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c09)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p10">
+  <div class="label"><span class="n">10 / 11</span><span>巢狀鍵值：一次查一層</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">一次查一層，查到值不再是鍵才停</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">巢狀鍵值檢索：140 組 UUID 鍵值對（約 8k tokens，剛好是 GPT-4 基線的視窗），值本身可能也是鍵；層數 0 到 4，抽 30 種排列（第 3.2.2 節）</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　拿到一個鍵</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">例：831…ea5；鍵值對<br>都在 archival storage</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　搜尋這個鍵</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">archival_storage.search</span><br>讀出它的值</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　拿值再搜一次</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">看它有沒有以「鍵」的<br>身分出現在結果裡</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　數結果筆數</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">1 筆：它只是值，停<br>2 筆：它也是鍵，繼續</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　回答這個值</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">例：f37…617，<br>它不是任何一組的鍵</div>
+  </div>
+
+  <div style="position:absolute; left:924px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 6　也是鍵：再查一層</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">拿到它的值，回到 Step 3</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">多跳查詢</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">給 MemGPT 的人設指示</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">確認值不是鍵之前，不要停</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">附錄 6.1.6</div>
+  </div>
+
+  <div style="position:absolute; left:1066px; top:268px; font-size:12px; font-weight:700; color:#6B7380;">2 筆</div>
+  <div style="position:absolute; left:778px; top:296px; font-size:12px; font-weight:700; color:#2E7B4F;">回到 Step 3</div>
+  <div style="position:absolute; left:60px; top:318px; width:680px; font-size:14px; color:#6B7380; line-height:1.6;">圖 8 的例子有兩層：831…ea5 → 5b8…4c3 → f37…617。搜 5b8…4c3 回 2 筆（它也是鍵），搜 f37…617 只回 1 筆（它只是值），於是回答 f37…617。</div>
+
+  <div style="position:absolute; left:60px; top:480px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:504px; font-size:20px; font-weight:700; color:#1C2431;">結果：圖 7 的點沒有數字，這裡只寫正文給的</div>
+
+  <div style="position:absolute; left:60px; top:546px; width:470px; height:236px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">基線：資料都在視窗裡，還是失敗</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">140 組鍵值對整份放得進 GPT-4 基線的視窗，基線照樣失敗：GPT-3.5 在第 1 層就降到 0%，GPT-4 與 GPT-4 Turbo 到第 3 層也降到 0%。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">GPT-3.5 最常見的錯：直接回傳原本那一個值，<br>等於停在第一層。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:546px; width:470px; height:236px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">MemGPT 配 GPT-4：層數不影響</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">它用重複的函式查詢一層層追下去；圖 7 的圖說說，MemGPT 是唯一能穩定做完 2 層以上的方法。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">同一個 GPT-4，差在一次看完，還是一次查一層；<br>附錄的人設也要它確認值不是鍵才停。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:546px; width:470px; height:236px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">查得不夠多，一樣會掉</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">MemGPT 配 GPT-4 Turbo 與配 GPT-3.5 仍勝過各自的基線，但從第 2 層開始下滑，原因是沒有做足夠的查詢。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">GPT-4 Turbo 當基線比 GPT-4 好，<br>包進 MemGPT 反而較差（圖 7 的圖說）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：迴圈依圖 8 與附錄 6.1.6 畫；「一次看完、一次查一層」是整理者的說法。正文說測到第 4 層，圖 7 的橫軸只畫到第 3 層。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#C8501F"></path>
+    <path d="M1057 262L1057 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M922 350H769V264" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c10)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p11">
+  <div class="label"><span class="n">11 / 11</span><span>結論：分層、函式、事件</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">分層、函式、事件：固定視窗也撐得起長期記憶</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 1、5 節：作者的結論是，記憶階層加上作業系統式的函式與事件，讓有限視窗的 LLM 在文件分析與多段對話都勝過既有做法；另外點名三個後續方向</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:340px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">01　分層</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">把視窗當成有限的<br>主記憶體</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">先決定什麼住在視窗裡、什麼放在外面：系統指令與工作脈絡常駐，對話紀錄與文件放在搜得到的外部儲存，要用時再搬進來。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 把所有歷史都塞進 prompt<br>✓ 分層，外面的要搬進來才算數</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:340px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">02　函式與事件</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">搬記憶的，<br>是模型自己</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">給它函式 schema、記憶壓力警告、分頁的檢索與錯誤回饋，讓它自己決定存什麼、找什麼；多步的事靠 heartbeat 連鎖，做完就 yield。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 固定流程檢索一次就交差<br>✓ 讓模型自己查、自己翻頁</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:340px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">03　上限</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">效果取決於模型<br>會不會呼叫函式</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">配 GPT-3.5 在文件問答明顯變差，MemGPT 常常沒翻完就停，配 GPT-4 Turbo 在巢狀鍵值不如配 GPT-4：記憶管理做得多好，看底層模型。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">論文沒有報延遲與 token 成本；<br>評分靠 LLM 評審，文件問答只抽 50 題。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:580px; font-size:20px; font-weight:700; color:#1C2431;">作者點名的三個後續方向（不排順序）</div>
+  <div style="position:absolute; left:60px; top:620px; width:460px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">A</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">用到其他有大量或無界脈絡的領域</div>
+  </div>
+  <div style="position:absolute; left:570px; top:620px; width:460px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">B</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">整合不同的記憶層技術，例如資料庫或快取</div>
+  </div>
+  <div style="position:absolute; left:1080px; top:620px; width:460px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">C</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">繼續改進控制流程與記憶管理的策略</div>
+  </div>
+  <div style="position:absolute; left:60px; top:712px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">出處：三個方向都在第 5 節結論。代價散在第 3 節：底層模型的函式呼叫能力、太早停止翻頁、嵌入式檢索的上限、評估的範圍；正文第 13 章把它們列在一起。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三條原則是整理者從論文歸納的，✗／✓ 的對照也是整理者寫的；三個方向是原文第 5 節點名的。</div>
+</div></div>
+</section>
+  <div class="foot">整理自 arXiv · Charles Packer、Sarah Wooders、Kevin Lin、Vivian Fang、Shishir G. Patil、Ion Stoica、Joseph E. Gonzalez（UC Berkeley），2023-10-12：<a href="https://arxiv.org/abs/2310.08560">https://arxiv.org/abs/2310.08560</a>。這些圖卡是學習用的重新整理，不是原文的逐句翻譯；觀點與著作權屬於原作者。<a href="index.html">回到圖卡＋教材版</a> · <a href="../../">回首頁</a></div>
+</div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fit() {
+    var frames = document.querySelectorAll('.frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('load', fit);
+  fit();
+})();
+</script>
+</body>
+</html>
