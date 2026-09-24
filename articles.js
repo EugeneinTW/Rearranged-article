@@ -253,6 +253,42 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "autogen-multi-agent",
+      "path": "articles/autogen-multi-agent/index.html",
+      "title": "AutoGen：讓可對話的代理彼此對話，把 LLM 應用的流程寫成多代理對話",
+      "summary": "Microsoft Research 與幾所大學在 2023 年提出開源框架 AutoGen：每個代理可以接上 LLM、人或工具，收到訊息就自動回覆，開發者用自然語言與程式一起定義代理之間怎麼對話，從兩代理對話、巢狀對話到由管理者挑發言者的群組聊天都用同一套介面。作者用數學解題、檢索增強問答、ALFWorld、OptiGuide、群組聊天、下棋等應用示範，這份整理逐一交代每個比較是怎麼跑的、數字要怎麼讀。每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "arXiv · Qingyun Wu、Gagan Bansal、Jieyu Zhang、Yiran Wu、Beibin Li、Erkang Zhu、Li Jiang、Xiaoyun Zhang、Shaokun Zhang、Jiale Liu、Ahmed Awadallah、Ryen W. White、Doug Burger、Chi Wang（Microsoft Research、Pennsylvania State University、University of Washington、Xidian University）",
+        "url": "https://arxiv.org/abs/2308.08155",
+        "date": "2023-08-16"
+      },
+      "date": "2026-09-24",
+      "tags": [
+        "autogen",
+        "multi-agent",
+        "llm-agents",
+        "agent-frameworks",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 5,
+        "kind": "必讀",
+        "section": "Memory & Multi-Agent Systems",
+        "lecture": "Multi-Agent Systems",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/autogen-multi-agent/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "agent-memory",
       "path": "articles/agent-memory/index.html",
       "title": "Agent Memory：記憶就是決定此刻哪些 token 在 context window 裡",
