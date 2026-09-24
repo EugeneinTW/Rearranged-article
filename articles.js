@@ -1,6 +1,42 @@
 window.ARTICLES = {
   "articles": [
     {
+      "slug": "mcp-specification",
+      "path": "articles/mcp-specification/index.html",
+      "title": "MCP 規格讀法：先看誰守哪條邊界，再看訊息怎麼走（2025-06-18 版）",
+      "summary": "Model Context Protocol 規格 2025-06-18 修訂版的讀法頁：它是什麼樣的文件、22 頁怎麼分區、要建一個會用工具的 agent 該照什麼順序讀。每章一張圖解卡講機制：三種角色、三種訊息、握手、三種伺服器原語、工具的迴圈與兩層錯誤、客戶端原語、兩種傳輸、授權流程、token 為什麼不能透傳。",
+      "source": {
+        "name": "modelcontextprotocol.io · Model Context Protocol Specification（2025-06-18 修訂版）",
+        "url": "https://modelcontextprotocol.io/specification/2025-06-18",
+        "date": "2025-06-18"
+      },
+      "date": "2026-09-24",
+      "tags": [
+        "mcp",
+        "tool-use",
+        "protocol",
+        "agents",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 3,
+        "kind": "必讀",
+        "section": "Building Blocks",
+        "lecture": "Tool Use & Function Calling",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/mcp-specification/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "retrieval-augmented-generation",
       "path": "articles/retrieval-augmented-generation/index.html",
       "title": "Retrieval-Augmented Generation：知識放在模型外面，生成才有出處、也能更新",
