@@ -901,6 +901,42 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "agentic-benchmark-checklist",
+      "path": "articles/agentic-benchmark-checklist/index.html",
+      "title": "代理基準的分數，先驗過再相信：用 ABC 檢查清單把關任務、評分與回報",
+      "summary": "UIUC、Stanford、UC Berkeley 等 11 個機構的 25 位作者指出，代理基準的分數可能被高估或低估到相對 100%：τ-bench 把空回覆算成功、SWE-bench Verified 的測試擋不住錯的 patch。他們把自己做基準的經驗、既有基準的做法與已知的漏洞整理成 Agentic Benchmark Checklist（ABC），分任務有效性、結果有效性、回報三部分，拿去檢查十個熱門代理基準，再用它修正自家的 CVE-Bench。每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "arXiv · Yuxuan Zhu、Tengjun Jin、Yada Pruksachatkun、Andy Zhang、Shu Liu、Sasha Cui、Sayash Kapoor、Shayne Longpre、Kevin Meng、Rebecca Weiss、Fazl Barez、Rahul Gupta、Jwala Dhamala、Jacob Merizian、Mario Giulianelli、Harry Coppock、Cozmin Ududec、Jasjeet Sekhon、Jacob Steinhardt、Antony Kellermann、Sarah Schwettmann、Matei Zaharia、Ion Stoica、Percy Liang、Daniel Kang（UIUC、Stanford University、University of California, Berkeley、Yale University、Princeton University、MIT、Transluce、ML Commons、Amazon、UK AI Safety Institute、University of Oxford）",
+        "url": "https://arxiv.org/abs/2507.02825",
+        "date": "2025-07-03"
+      },
+      "date": "2026-09-24",
+      "tags": [
+        "agentic-benchmarks",
+        "evaluation",
+        "benchmark-design",
+        "checklist",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 7,
+        "kind": "必讀",
+        "section": "Evaluation for Agentic Systems",
+        "lecture": "Evaluation Fundamentals & Benchmark Design",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/agentic-benchmark-checklist/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "agent-memory",
       "path": "articles/agent-memory/index.html",
       "title": "Agent Memory：記憶就是決定此刻哪些 token 在 context window 裡",
