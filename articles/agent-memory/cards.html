@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Memory · 圖解卡</title>
+<meta name="description" content="Letta 部落格 2025 年的概念文章：agent 記得什麼，取決於此刻 context window 裡有什麼，所以設計記憶就是 context 工程。從四種記憶、驅逐與遞迴摘要、記憶區塊、外部儲存與檢索，到 MemGPT 的記憶階層與睡眠時間 agent，每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="agent-memory, agents, context-engineering, memgpt, cs329z">
+<meta name="source" content="https://www.letta.com/blog/agent-memory">
+<meta name="date" content="2026-09-24">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+:root { color-scheme: light; --bg: #F4F5F7; --line: #E5E9EE; --ink: #1C2431; --mute: #8A93A0; --orange: #C8501F; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: #C8501F; } a:hover { color: #9E3E16; }
+a:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.wrap { max-width: 1600px; margin: 0 auto; padding-block: 24px 48px; padding-inline: 16px; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; padding: 6px 4px 18px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; letter-spacing: 0.12em; color: var(--mute); }
+.head nav { display: flex; flex-wrap: wrap; gap: 6px 14px; letter-spacing: 0.04em; }
+.head nav a { color: var(--mute); text-decoration: none; font-weight: 600; }
+.head nav a:hover { color: var(--orange); }
+.page { margin-bottom: 36px; scroll-margin-top: 16px; }
+.label { display: flex; align-items: baseline; gap: 14px; padding: 0 4px 8px; font-size: 13px; color: var(--mute); }
+.label .n { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-weight: 600; font-size: 12px; letter-spacing: 0.1em; color: var(--orange); }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--line); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; }
+.foot { padding: 12px 4px 0; font-size: 12px; color: var(--mute); line-height: 1.7; }
+@media print {
+  @page { size: 1600px 900px; margin: 0; }
+  body { background: #FFFFFF; }
+  .wrap { max-width: none; padding: 0; }
+  .head, .label, .foot { display: none; }
+  .page { margin: 0; page-break-after: always; }
+  .frame { border: none; border-radius: 0; height: auto !important; }
+  .frame > div { transform: none !important; }
+}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><span>Agent Memory · 圖解卡 · 8 張 · 連續閱讀版</span><nav class="site" aria-label="導覽"><a href="../../">首頁</a><a href="index.html">圖卡＋教材版</a></nav><nav aria-label="跳頁"><a href="#p01" title="封面">01</a><a href="#p02" title="記得什麼，看此刻的視窗裡有什麼">02</a><a href="#p03" title="四種記憶：視窗裡與視窗外">03</a><a href="#p04" title="驅逐與遞迴摘要">04</a><a href="#p05" title="記憶區塊：四個欄位、三種寫入者">05</a><a href="#p06" title="MemGPT：作業系統式的記憶階層">06</a><a href="#p07" title="睡眠時間 agent：閒置時整理記憶">07</a><a href="#p08" title="不照抄人腦，把記憶當成 context 設計">08</a></nav></div>
+<section class="page" id="p01">
+  <div class="label"><span class="n">01 / 08</span><span>封面</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.14em; color:#8A93A0;">AGENT MEMORY &#183; 圖解卡 &#183; 16:9 &#183; 8 張</div>
+  <div style="position:absolute; left:60px; top:110px; width:840px; font-size:60px; font-weight:700; color:#1C2431; line-height:1.3; letter-spacing:0.01em;">記憶就是決定此刻<br>哪些 token 在視窗裡。</div>
+  <div style="position:absolute; left:60px; top:296px; width:820px; font-size:20px; color:#6B7380; line-height:1.7;">整理自 Letta 部落格〈Agent Memory: How to Build Agents That Learn and Remember〉（2025-07-07）。<br>七張圖講一件事：agent 的記憶就是 context 工程，每一刻都在挑放進視窗的 token。</div>
+  <div style="position:absolute; left:60px; top:432px; display:flex; align-items:center; gap:36px;">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#C8501F;"></div>
+      <div style="font-size:15px; color:#2B3340;">問題／成本</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#2E7B4F;"></div>
+      <div style="font-size:15px; color:#2B3340;">記憶技巧／解法</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#1F2A3A;"></div>
+      <div style="font-size:15px; color:#2B3340;">agent 與模型</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div>
+      <div style="font-size:15px; color:#2B3340;">中性節點</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; top:482px; width:820px; font-size:13px; color:#8A93A0; line-height:1.6;">整組共用同一套語意色：橘是記憶的限制與代價（無狀態、視窗滿了、回應被卡住），綠是管理記憶的技巧，深藍是 agent 與模型本身。</div>
+  <div style="position:absolute; left:960px; top:110px; width:580px; box-sizing:border-box; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 34px; display:flex; flex-direction:column;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">本組 &#183; 8 張</div>
+    <div style="margin-top:14px; display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">01</div><div style="font-size:17px; color:#1C2431;">封面</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">02</div><div style="font-size:17px; color:#1C2431;">記得什麼，看此刻的視窗裡有什麼</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">03</div><div style="font-size:17px; color:#1C2431;">四種記憶：視窗裡與視窗外</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">04</div><div style="font-size:17px; color:#1C2431;">驅逐與遞迴摘要</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">05</div><div style="font-size:17px; color:#1C2431;">記憶區塊：四個欄位、三種寫入者</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">06</div><div style="font-size:17px; color:#1C2431;">MemGPT：作業系統式的記憶階層</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">07</div><div style="font-size:17px; color:#1C2431;">睡眠時間 agent：閒置時整理記憶</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#2E7B4F;">08</div><div style="font-size:17px; color:#1C2431;">不照抄人腦，把記憶當成 context 設計</div></div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">來源：letta.com/blog/agent-memory —— 本組為學習用重述，產品功能與用法以官方文件為準。</div>
+</div></div>
+</section>
+<section class="page" id="p02">
+  <div class="label"><span class="n">02 / 08</span><span>記得什麼，看此刻的視窗裡有什麼</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">Agent 記得什麼，看的是此刻視窗裡有什麼</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">context window 是 agent 的工作記憶：回答、推理、行動時，手上有的就是它。原文把記憶系統拆成三種元件，各由一種技巧管理</div>
+
+  <div style="position:absolute; left:380px; top:150px; width:380px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">訊息（messages）</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">最近的對話在訊息緩衝區；視窗快滿時，<br>舊訊息被摘要之後移出（第 04 卡）</div></div>
+  <div style="position:absolute; left:840px; top:150px; width:380px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">記憶區塊（memory blocks）</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">固定釘在視窗裡的主題區塊，例如使用者、<br>組織、目前任務；用工具改寫（第 05 卡）</div></div>
+
+  <div style="position:absolute; left:566px; top:262px; width:110px; text-align:right; font-size:12.5px; color:#8A93A0;">摘要後移出</div>
+  <div style="position:absolute; left:724px; top:262px; font-size:12.5px; color:#8A93A0;">最近的進來</div>
+  <div style="position:absolute; left:766px; top:262px; width:110px; text-align:right; font-size:12.5px; color:#8A93A0;">改寫</div>
+  <div style="position:absolute; left:924px; top:262px; font-size:12.5px; color:#8A93A0;">每一輪都在</div>
+
+  <div style="position:absolute; left:60px; top:316px; width:200px; height:58px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">輸入</div><div style="font-size:12px; color:#6B7380;">使用者的新訊息、事件</div></div></div>
+  <div style="position:absolute; left:640px; top:300px; width:320px; height:90px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:20px; font-weight:700; color:#FFFFFF;">Context window</div><div style="margin-top:4px; font-size:12.5px; color:rgba(255,255,255,0.75);">此刻的工作記憶；模型這一輪<br>只看得到這裡面的 token</div></div></div>
+  <div style="position:absolute; left:1340px; top:316px; width:200px; height:58px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">輸出</div><div style="font-size:12px; color:#6B7380;">回答、推理、採取行動</div></div></div>
+
+  <div style="position:absolute; left:666px; top:406px; width:110px; text-align:right; font-size:12.5px; color:#8A93A0;">存進去</div>
+  <div style="position:absolute; left:824px; top:406px; font-size:12.5px; color:#8A93A0;">檢索回來</div>
+
+  <div style="position:absolute; left:610px; top:444px; width:380px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">外部資料庫（external databases）</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">存在視窗外的資料庫；需要時用工具檢索，<br>把 token 拉回視窗（第 06 卡）</div></div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:180px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">無狀態：每次互動都孤立</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">傳統的模型呼叫不帶上一次的任何東西。原文說這對基本任務與短命的 agent 還行，但從根本上限制了系統能做到的事。</div>
+    <div style="font-size:13px; color:#8A93A0;">走向有狀態，agent 才能隨時間學習與調整。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">設計記憶＝設計 context</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">決定哪些 token 進到視窗、在視窗裡怎麼組織；原文說設計 agent 的記憶，本質上就是 context 工程。</div>
+    <div style="font-size:13px; color:#8A93A0;">基本的記憶記得對話；進階的記憶依累積的經驗改變行為。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">三種技巧，組合起來用</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">摘要管訊息、改寫管記憶區塊、檢索管外部資料庫；原文說記憶系統是把這幾種技巧組合起來，去管理這幾種元件。</div>
+    <div style="font-size:13px; color:#8A93A0;">三種元件的差別，下一張卡用四種記憶再拆一次。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：原文在定義處只並列三種技巧與三種元件；把它們一對一配成三對箭頭，是整理者依原文「技巧」一節的三個小節做的整理。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M262 345L638 345" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M962 345L1338 345" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c02)"></path>
+    <path d="M686 298L686 248" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M714 248L714 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M886 298L886 248" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M914 248L914 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M786 392L786 442" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M814 442L814 392" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p03">
+  <div class="label"><span class="n">03 / 08</span><span>四種記憶：視窗裡與視窗外</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">四種記憶：兩種在視窗裡，兩種在視窗外</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">原文把 agent 的記憶拆成四個元件；差別在它是不是每一輪都在 context window 裡，以及不在的時候怎麼回來</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:280px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">類型</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">在哪裡</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">放什麼</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">怎麼用、誰管</div>
+  </div>
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:280px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">訊息緩衝區</div><div style="font-size:13px; color:#8A93A0;">Message buffer · 短期</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><div style="flex-shrink:0; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">視窗裡</div><div style="font-size:15px; color:#2B3340; line-height:1.5;">一直在 context 裡</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>最近的訊息。作者說 Letta 的<br>每個 agent 只有一條持續的訊息串</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">提供即時的對話脈絡；視窗快滿時被驅逐（第 04 卡）</div>
+  </div>
+  <div style="position:absolute; left:60px; top:306px; width:1480px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:grid; grid-template-columns:280px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#2E7B4F;">核心記憶</div><div style="font-size:13px; color:#8A93A0;">Core memory · 長期</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><div style="flex-shrink:0; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">視窗裡</div><div style="font-size:15px; color:#2B3340; line-height:1.5;">固定釘住，每輪都在</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>主題區塊：使用者偏好、<br>agent 的 persona、目前的目標</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>由 agent 自己或其他 agent 管理；<br>可以透過 API 編輯（第 05 卡）</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:402px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:280px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">回想記憶</div><div style="font-size:13px; color:#8A93A0;">Recall memory · 長期</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><div style="flex-shrink:0; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">視窗外</div><div style="font-size:15px; color:#2B3340; line-height:1.5;">存到磁碟</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">完整的互動歷史，也就是原始的對話紀錄</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>需要時搜尋、取回。<br>作者說 Letta 自動存檔，其他框架要自己處理</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:498px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:280px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">歸檔記憶</div><div style="font-size:13px; color:#8A93A0;">Archival memory · 長期</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><div style="flex-shrink:0; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">視窗外</div><div style="font-size:15px; color:#2B3340; line-height:1.5;">外部資料庫</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">明確寫下、處理過並建了索引的知識</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>用專門的工具查詢，取回視窗；<br>可以是向量或圖資料庫</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:630px; width:470px; height:176px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">只有兩種，每一輪都看得到</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">訊息緩衝區和核心記憶在視窗裡，模型直接看得到；<br>回想與歸檔記憶不在，要靠工具查了才會回來。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">「記得」因此有兩種：看得到的，和查得到的。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:630px; width:470px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">短期的只有訊息緩衝區</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">原文的分法：緩衝區的內容終究會被驅逐，所以算短期；其他三種都算長期。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">原文也說，這個分法不如直接用 context 工程來想（第 08 卡）。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:630px; width:470px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">回想存原始，歸檔存整理過的</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">兩者都在視窗外：回想記憶保留完整的原始對話，歸檔記憶放明確寫下、處理過、建了索引的知識。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">取回的方式也不同：搜尋歷史，或用工具查資料庫。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：「每個 agent 只有一條訊息串」「回想記憶自動存到磁碟」是作者對 Letta 的說法；三個欄位是整理者依原文四個小節整理的。</div>
+</div></div>
+</section>
+<section class="page" id="p04">
+  <div class="label"><span class="n">04 / 08</span><span>驅逐與遞迴摘要</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">舊訊息離開視窗前，先摺進遞迴的摘要</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">視窗快滿時，驅逐策略決定移走什麼；原文建議只驅逐一部分訊息（例如 70%），被移走的訊息連同舊摘要再摘要一次</div>
+
+  <div style="position:absolute; left:60px; top:140px; display:flex; gap:24px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1;"></div>固定段：system prompt、記憶區塊</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF6F0; border:1px solid #B4D5C0;"></div>摘要</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FCF1EA; border:1px solid #E6B49A;"></div>這次要驅逐的較舊訊息</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FFFFFF; border:1px solid #9AA3AE; box-sizing:border-box;"></div>留下的最近訊息</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; box-sizing:border-box;"></div>空出來的空間</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="font-size:14px; color:#1F2A3A;">▼</div>視窗上限</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:222px; font-size:16px; font-weight:700; color:#1C2431;">驅逐前</div>
+  <div style="position:absolute; left:180px; top:188px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#C8501F;">視窗到達容量：較舊的一部分要被移走</div>
+  <div style="position:absolute; left:1420px; top:188px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#1F2A3A;">視窗上限</div>
+  <div style="position:absolute; left:1492px; top:184px; font-size:16px; color:#1F2A3A;">▼</div>
+  <div style="position:absolute; left:180px; top:206px; width:200px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#4B5866;">system＋記憶區塊</div>
+  <div style="position:absolute; left:380px; top:206px; width:120px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#2E7B4F;">舊摘要</div>
+  <div style="position:absolute; left:500px; top:206px; width:700px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#C8501F;">較舊的訊息：這一次驅逐其中的 70%</div>
+  <div style="position:absolute; left:1200px; top:206px; width:300px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#1C2431;">最近的訊息：留下</div>
+  <div style="position:absolute; left:180px; top:286px; font-size:13px; color:#8A93A0;">移走之前，可以先把重要的細節摘要、存起來；只挑較舊的一部分，最近的訊息原封不動留在視窗裡</div>
+
+  <div style="position:absolute; left:60px; top:362px; font-size:16px; font-weight:700; color:#1C2431;">驅逐後</div>
+  <div style="position:absolute; left:180px; top:328px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2E7B4F;">新摘要 = 摘要（舊摘要 ＋ 這次被驅逐的訊息）</div>
+  <div style="position:absolute; left:180px; top:346px; width:200px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#4B5866;">system＋記憶區塊</div>
+  <div style="position:absolute; left:380px; top:346px; width:260px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#2E7B4F;">新摘要：舊摘要＋被驅逐的訊息</div>
+  <div style="position:absolute; left:640px; top:346px; width:300px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#1C2431;">最近的訊息：原封不動</div>
+  <div style="position:absolute; left:940px; top:346px; width:560px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:700; color:#8A93A0;">空出來的空間：對話接著進行</div>
+  <div style="position:absolute; left:180px; top:426px; font-size:13px; color:#8A93A0;">被移走的原始訊息仍在回想記憶裡，需要時可以搜尋（第 03 卡）；視窗裡只留下它們的摘要</div>
+
+  <div style="position:absolute; left:60px; top:470px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">遞迴摘要</div>
+    <div style="font-size:15px; color:#2B3340;">每驅逐一次，就把舊摘要和這次移走的訊息一起再摘要；對話越長，越舊的訊息在摘要裡的影響越小</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:560px; width:470px; height:184px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">只驅逐一部分</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">原文的建議：一般只驅逐部分訊息，舉的例子是 70%，讓最近的對話留在視窗裡，確保對話接得上。</div>
+    <div style="font-size:13px; color:#8A93A0;">70% 是原文的例子，不是固定的規定。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:560px; width:470px; height:184px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">先摘要，再移走</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">移除之前，先把重要的細節摘要、存起來；被移走的訊息要和既有的摘要一起再摘要一次。</div>
+    <div style="font-size:13px; color:#8A93A0;">摘要一層一層疊上去，不是每次從頭寫。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:560px; width:470px; height:184px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">越舊的訊息，影響越小</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">遞迴摘要讓較舊的訊息在摘要裡的份量一次比一次少，最近的訊息影響最大。</div>
+    <div style="font-size:13px; color:#8A93A0;">要找回原句，就去回想記憶裡搜尋。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：分段長度是示意，只有 70% 是原文寫出的數字，而且原文把它寫成例子；驅逐前後兩列的排法是整理者的畫法。</div>
+</div></div>
+</section>
+<section class="page" id="p05">
+  <div class="label"><span class="n">05 / 08</span><span>記憶區塊：四個欄位、三種寫入者</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">記憶區塊把視窗切成可以改寫的格子</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">核心記憶由一個個區塊組成：每塊有標籤、說明、值、字元上限，固定釘在 context window 裡；agent 自己或其他 agent 都能用工具改寫</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:440px; height:370px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:10px;"></div>
+  <div style="position:absolute; left:80px; top:164px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">CONTEXT WINDOW &#183; 每一輪</div>
+  <div style="position:absolute; left:80px; top:192px; width:400px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">system prompt</div>
+  <div style="position:absolute; left:80px; top:242px; width:400px; height:58px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; padding:0px 14px; display:flex; align-items:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">區塊：使用者偏好</div><div style="font-size:12.5px; color:#6B7380;">標籤、說明、值，控制在字元上限內</div></div></div>
+  <div style="position:absolute; left:80px; top:310px; width:400px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">區塊：agent 的角色設定（persona）</div>
+  <div style="position:absolute; left:80px; top:360px; width:400px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">區塊：目前的目標</div>
+  <div style="position:absolute; left:80px; top:410px; width:400px; height:58px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; border-radius:6px; padding:0px 14px; display:flex; align-items:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">訊息緩衝區：最近的訊息</div><div style="font-size:12.5px; color:#6B7380;">快滿時被驅逐（第 04 卡）</div></div></div>
+  <div style="position:absolute; left:80px; top:482px; width:400px; font-size:13px; color:#6B7380; line-height:1.5;">區塊固定釘在視窗裡：模型每一輪都看得到，不用檢索</div>
+
+  <div style="position:absolute; left:505px; top:248px; width:66px; text-align:center; font-size:12.5px; color:#8A93A0;">展開</div>
+
+  <div style="position:absolute; left:580px; top:150px; width:500px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:17px; font-weight:700; color:#FFFFFF;">展開一個區塊：四個欄位</div>
+  <div style="position:absolute; left:580px; top:198px; width:500px; height:322px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:14px 22px; display:flex; flex-direction:column; justify-content:center; gap:16px;">
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">1</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">標籤</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">LABEL</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">這一塊叫什麼，對應一個主題：使用者、組織、目前任務</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">2</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">說明</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">DESCRIPTION</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">解釋這一塊存的是什麼</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">3</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">值</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">VALUE</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">真正放進 context 的那些 token，也是改寫時會被換掉的內容</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">4</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">字元上限</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">CHARACTER LIMIT</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">這一塊在視窗裡分配到多少空間</div></div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:1140px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">WRITERS &#183; 誰能改寫這一塊</div>
+  <div style="position:absolute; left:1140px; top:178px; width:400px; height:76px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#FFFFFF;">agent 自己</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">依新得到的資訊，用工具改寫特定的區塊</div></div>
+  <div style="position:absolute; left:1140px; top:280px; width:400px; height:76px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">專門管記憶的其他 agent</div><div style="font-size:12.5px; color:#6B7380;">例如睡眠時間 agent，在閒置時整理（第 07 卡）</div></div>
+  <div style="position:absolute; left:1140px; top:382px; width:400px; height:76px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">API</div><div style="font-size:12.5px; color:#6B7380;">程式透過 API 直接編輯區塊的內容</div></div>
+  <div style="position:absolute; left:1140px; top:474px; width:400px; font-size:13px; color:#6B7380; line-height:1.5;">三條路改的都是同一組區塊；<br>作者說區塊把 context window 抽象化，方便自動化管理</div>
+
+  <div style="position:absolute; left:60px; top:570px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">釘在視窗裡，每輪都看得到</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">區塊不用檢索，它一直在 context window 裡。原文說它是一種受管理的 context 單位，可以透過 API 編輯。</div>
+    <div style="font-size:13px; color:#8A93A0;">核心記憶就是由這些區塊組成（第 03 卡）。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:570px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">改寫區塊，context 越變越好</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">agent 依新資訊用工具改寫區塊，專門的 agent 也能改；原文叫它 context 改寫：整併重要資訊，讓視窗隨時間變好。</div>
+    <div style="font-size:13px; color:#8A93A0;">整理者的對照：摘要管一路長出來的對話，區塊管要一直帶著的事。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:570px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">字元上限＝事先分配的空間</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">每一塊都寫明它在視窗裡分配到多少空間，記憶會佔掉多少 context，事先就排好了。</div>
+    <div style="font-size:13px; color:#8A93A0;">區塊的主題例子：使用者、組織、目前任務。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：這張的畫法（視窗裡的區塊、展開的四個欄位、三種寫入者）是整理者的整理；區塊主題取自原文的例子，實際的 API 與欄位格式以官方文件為準。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+    </defs>
+    <path d="M482 271H576" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M1138 216H1084" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c05)"></path>
+    <path d="M1138 318H1084" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c05)"></path>
+    <path d="M1138 420H1084" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p06">
+  <div class="label"><span class="n">06 / 08</span><span>MemGPT：作業系統式的記憶階層</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">MemGPT 把 context window 當成自己管的記憶體</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">原文的描述：MemGPT 把 context window 看成受限的記憶體資源，仿照作業系統做出記憶階層；視窗裡像 RAM，視窗外的儲存像硬碟</div>
+
+  <div style="position:absolute; left:60px; top:200px; width:220px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:700; color:#1C2431;">新訊息或事件</div>
+  <div style="position:absolute; left:60px; top:320px; width:220px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:17px; font-weight:700; color:#FFFFFF;">LLM</div><div style="font-size:12px; color:rgba(255,255,255,0.75);">視窗裡：核心記憶（像 RAM）</div></div></div>
+  <div style="position:absolute; left:60px; top:440px; width:220px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:700; color:#1C2431;">回覆使用者</div>
+  <div style="position:absolute; left:60px; top:516px; width:220px; font-size:13px; color:#8A93A0; line-height:1.55; text-align:center;">搬什麼、什麼時候搬，<br>由模型自己用函式呼叫管理</div>
+
+  <div style="position:absolute; left:470px; top:196px; font-size:13px; font-weight:700; color:#2B3340;">行動：呼叫函式，把資料搬出視窗、存起來、搜尋</div>
+  <div style="position:absolute; left:470px; top:486px; font-size:13px; font-weight:700; color:#2B3340;">回饋：找到的資料搬回 context window</div>
+
+  <div style="position:absolute; left:840px; top:150px; width:700px; height:400px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #D5DAE1; border-radius:14px;"></div>
+  <div style="position:absolute; left:870px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">視窗外的儲存（像硬碟）</div>
+  <div style="position:absolute; left:870px; top:214px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">RECALL MEMORY · 回想記憶</div>
+  <div style="position:absolute; left:870px; top:236px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">完整的互動歷史</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">原始的對話</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">不在視窗裡也能搜尋</div>
+  </div>
+  <div style="position:absolute; left:870px; top:296px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">ARCHIVAL MEMORY · 歸檔記憶</div>
+  <div style="position:absolute; left:870px; top:318px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">明確寫下的知識</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">處理過、建了索引</div>
+  </div>
+  <div style="position:absolute; left:870px; top:378px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">STORAGE · 存在哪裡</div>
+  <div style="position:absolute; left:870px; top:400px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">向量資料庫</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">圖資料庫</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">用專門的工具查詢</div>
+  </div>
+  <div style="position:absolute; left:870px; top:460px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">EFFECT · 原文說的效果</div>
+  <div style="position:absolute; left:870px; top:482px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1.5px solid #B4D5C0; border-radius:999px; font-size:15px; color:#2E7B4F; background-color:#EEF6F0;">在固定的 context 上限內，做出記憶沒有上限的錯覺</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; width:1480px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">記憶階層：視窗像容量有限的 RAM，外部儲存像硬碟；模型用函式呼叫，自己在兩層之間搬資料</div>
+
+  <div style="position:absolute; left:60px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#C8501F;">視窗是受限的記憶體資源</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">放不進視窗的不丟掉：搬到外部的儲存層，<br>要用的時候再由模型自己搬回來。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">目的：在有限的視窗內提供延伸的 context。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#2E7B4F;">模型自己管理自己的記憶</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">系統提供函式呼叫，讓模型自主地在核心記憶與回想、歸檔記憶之間搬資料。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">有哪些函式，見本週必讀的 MemGPT 論文。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">代價：一個 agent 包辦所有事</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">記憶管理、對話與其他任務由同一個 agent 做；原文說記憶操作進行時，回應可能變慢。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">睡眠時間 agent 改的就是這一點（第 07 卡）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：原文附的是 MemGPT 論文的系統圖；這張依原文的文字重畫，RAM 與硬碟是原文的比喻，面板的分組是整理者依原文各節整理的。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+    </defs>
+    <path d="M170 258L170 316" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c06)"></path>
+    <path d="M170 378L170 436" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c06)"></path>
+    <path d="M280 334C520 334 620 226 836 226" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c06)"></path>
+    <path d="M838 470C620 470 520 366 284 366" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c06)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p07">
+  <div class="label"><span class="n">07 / 08</span><span>睡眠時間 agent：閒置時整理記憶</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">記憶整理交給另一個 agent，在閒置時做</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">作者拿睡眠時間 agent 和原始 MemGPT 的設計比：記憶管理從負責對話的 agent 身上拆出去、改成非同步；兩項改進都是作者的說法</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 一個 agent 包辦（原始 MemGPT）</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 睡眠時間 agent 非同步整理</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:290px; top:200px; width:240px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">同一個 agent</div>
+  <div style="position:absolute; left:110px; top:300px; width:150px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">對話</div>
+  <div style="position:absolute; left:335px; top:300px; width:150px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">記憶管理</div>
+  <div style="position:absolute; left:560px; top:300px; width:150px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">其他任務</div>
+  <div style="position:absolute; left:110px; top:420px; width:300px; height:50px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">記憶操作時，回應可能變慢</div>
+  <div style="position:absolute; left:430px; top:420px; width:300px; height:50px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">記憶只在對話中一點一點更新</div>
+  <div style="position:absolute; left:60px; top:500px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">記憶管理、對話與其他任務綁在同一個 agent 身上：<br>做記憶操作的時候，回應可能因此變慢；記憶的更新也只能在對話中被動地順手做。</div>
+
+  <div style="position:absolute; left:880px; top:200px; width:280px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">負責對話的 agent</div>
+  <div style="position:absolute; left:1250px; top:200px; width:260px; height:50px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#1C2431;">睡眠時間 agent</div>
+  <div style="position:absolute; left:900px; top:276px; width:148px; text-align:right; font-size:12.5px; color:#8A93A0;">每輪都在視窗裡</div>
+  <div style="position:absolute; left:1352px; top:276px; font-size:12.5px; font-weight:500; color:#2E7B4F;">閒置時改寫</div>
+  <div style="position:absolute; left:1010px; top:320px; width:380px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">記憶區塊</div><div style="font-size:12.5px; color:#6B7380;">兩個 agent 碰的是同一組</div></div></div>
+  <div style="position:absolute; left:880px; top:420px; width:300px; height:50px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#2E7B4F;">回應不被記憶操作卡住</div>
+  <div style="position:absolute; left:1220px; top:420px; width:300px; height:50px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#2E7B4F;">記憶區塊的品質更高</div>
+  <div style="position:absolute; left:840px; top:500px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">記憶管理改由另一個 agent 非同步處理，不擋住對話；<br>並在閒置的時段主動重新組織記憶，而不是在對話中被動地一點一點改。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#C8501F;">記憶操作和回應，搶同一個 agent</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">原文說，記憶管理、對話與其他任務綁在一起時，記憶操作進行期間回應可能變慢，更新也只能在對話中被動地一點一點做。</div>
+    <div style="font-size:13px; color:#8A93A0;">這是作者對自家原始設計的描述。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F;">閒置時主動整理，品質更好</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">睡眠時間 agent 非同步管理記憶；作者說回應時間與記憶品質都改善，區塊的品質更高，學習與記憶的形成也更好。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文沒有附數字，細節在它連結的另一篇文章。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左右兩邊的評價都是 Letta 作者的說法，這篇沒有量測數字；右邊兩個 agent 共用記憶區塊，是整理者依原文「區塊可由其他 agent 修改」一句畫的。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M410 250L185 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M410 250L410 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M410 250L635 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M410 346L260 418" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c07)"></path>
+    <path d="M410 346L580 418" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c07)"></path>
+    <path d="M1020 250L1100 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M1380 250L1300 318" stroke="#2E7B4F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#an-c07)"></path>
+    <path d="M1200 376L1030 418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M1200 376L1370 418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p08">
+  <div class="label"><span class="n">08 / 08</span><span>不照抄人腦，把記憶當成 context 設計</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">不照抄人腦，把記憶當成 context 來設計</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">模型是文字進、文字出的系統，它的「記憶」只有視窗裡的東西；原文要設計的不是仿人腦的記憶結構，而是下面三件事</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:290px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 32px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">01　組織 CONTEXT WINDOW</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">視窗怎麼排</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">訊息緩衝區留多大、記憶區塊怎麼設計：這決定了模型每一輪直接看得到什麼。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">對應第 04、05 卡：驅逐規則與記憶區塊。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 把仿人腦的記憶結構硬寫進系統<br>✓ 先決定視窗裡放什麼、各放多少</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:290px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 32px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">02　檢索工具</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">把歸檔記憶拉回來的工具</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">存在外部的 context 要靠工具才回得到視窗；工具決定 agent 能把什麼找回來。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">對應第 03 卡的歸檔記憶、第 06 卡的函式呼叫。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 把檢索（RAG）當成記憶本身<br>✓ 把檢索當成拉回 context 的一個工具</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:290px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 32px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">03　PROMPT</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">讓 agent 懂自己記憶的 prompt</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">讓 agent 了解自己的記憶有哪些限制，並同時用好視窗裡的記憶與外部記憶來克服它。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">目標不是複製人腦，是做出有用、一致、能學習的 agent。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ agent 不知道自己的記憶有哪些限制<br>✓ prompt 寫明限制，教它用上外部記憶</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:490px; font-size:20px; font-weight:700; color:#1C2431;">短期與長期，換成 context 的說法</div>
+  <div style="position:absolute; left:60px; top:530px; width:340px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#C8501F;">短期</div>
+    <div style="font-size:17px; font-weight:700; color:#C8501F;">訊息緩衝區</div>
+    <div style="font-size:13px; color:#6B7380;">內容終究會被驅逐（第 04 卡）</div>
+  </div>
+  <div style="position:absolute; left:440px; top:530px; width:340px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">長期 &#183; 在視窗裡</div>
+    <div style="font-size:17px; font-weight:700; color:#1C2431;">核心記憶</div>
+    <div style="font-size:13px; color:#6B7380;">固定釘在視窗裡的區塊（第 05 卡）</div>
+  </div>
+  <div style="position:absolute; left:820px; top:530px; width:340px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">長期 &#183; 視窗外</div>
+    <div style="font-size:17px; font-weight:700; color:#1C2431;">回想記憶</div>
+    <div style="font-size:13px; color:#6B7380;">完整的歷史，需要時搜尋取回</div>
+  </div>
+  <div style="position:absolute; left:1200px; top:530px; width:340px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">長期 &#183; 視窗外</div>
+    <div style="font-size:17px; font-weight:700; color:#1C2431;">歸檔記憶</div>
+    <div style="font-size:13px; color:#6B7380;">整理過的知識，用工具查詢</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:656px; width:1480px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">原文的結論：記憶，說到底就是選擇此刻要把哪些 token 放進 context window</div>
+  <div style="position:absolute; left:60px; top:732px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">原文的分法：只有訊息緩衝區算短期，因為內容終究會被驅逐；其他都算長期。但作者認為更有用的想法是 context 工程：什麼在視窗裡、什麼不在，以及 token 怎麼被拉回來。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三件事與短期／長期的分法都出自原文，✗／✓ 兩行是整理者依原文的句子改寫；把它們排在同一張、並對上前面幾張卡，是整理者的畫法。</div>
+</div></div>
+</section>
+  <div class="foot">整理自 Letta Blog · Letta，2025-07-07：<a href="https://www.letta.com/blog/agent-memory">https://www.letta.com/blog/agent-memory</a>。這些圖卡是學習用的重新整理，不是原文的逐句翻譯；觀點與著作權屬於原作者。<a href="index.html">回到圖卡＋教材版</a> · <a href="../../">回首頁</a></div>
+</div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fit() {
+    var frames = document.querySelectorAll('.frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('load', fit);
+  fit();
+})();
+</script>
+</body>
+</html>

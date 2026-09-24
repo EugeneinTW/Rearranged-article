@@ -73,6 +73,42 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "agent-memory",
+      "path": "articles/agent-memory/index.html",
+      "title": "Agent Memory：記憶就是決定此刻哪些 token 在 context window 裡",
+      "summary": "Letta 部落格 2025 年的概念文章：agent 記得什麼，取決於此刻 context window 裡有什麼，所以設計記憶就是 context 工程。從四種記憶、驅逐與遞迴摘要、記憶區塊、外部儲存與檢索，到 MemGPT 的記憶階層與睡眠時間 agent，每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "Letta Blog · Letta",
+        "url": "https://www.letta.com/blog/agent-memory",
+        "date": "2025-07-07"
+      },
+      "date": "2026-09-24",
+      "tags": [
+        "agent-memory",
+        "agents",
+        "context-engineering",
+        "memgpt",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 4,
+        "kind": "選讀",
+        "section": "Memory & Multi-Agent Systems",
+        "lecture": "Agent Memory Architectures",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/agent-memory/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "retrieval-augmented-generation",
       "path": "articles/retrieval-augmented-generation/index.html",
       "title": "Retrieval-Augmented Generation：知識放在模型外面，生成才有出處、也能更新",
