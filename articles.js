@@ -217,6 +217,42 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "finetuning-prompt-optimization",
+      "path": "articles/finetuning-prompt-optimization/index.html",
+      "title": "BetterTogether：微調權重與最佳化 prompt，交替做比只做一種好",
+      "summary": "Stanford 的 Soylu、Potts、Khattab 發表於 EMNLP 2024 的論文：多模組的 LM 程式沒有中間步驟的標籤，作者讓程式自己跑、只留最終答案正確的軌跡，先拿它們挑 few-shot 示範，再用來微調同一個模型的權重，最後重挑一次示範。在 HotPotQA、GSM8K、Iris 與三個 7B 到 8B 的開放模型上，九組裡有七組的最高分同時用了兩種最佳化；只調權重在八組落後只調 prompt，另一組連微調資料都湊不出來。每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "arXiv · Dilara Soylu、Christopher Potts、Omar Khattab（Stanford University）",
+        "url": "https://arxiv.org/abs/2407.10930",
+        "date": "2024-07-15"
+      },
+      "date": "2026-09-24",
+      "tags": [
+        "prompt-optimization",
+        "fine-tuning",
+        "dspy",
+        "llm-pipelines",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 5,
+        "kind": "選讀",
+        "section": "Optimization",
+        "lecture": "Optimization",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/finetuning-prompt-optimization/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "dspy-compiling-pipelines",
       "path": "articles/dspy-compiling-pipelines/index.html",
       "title": "DSPy：prompt 不再手寫，把語言模型管線寫成可以編譯的程式",

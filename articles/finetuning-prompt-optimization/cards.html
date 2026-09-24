@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BetterTogether（Soylu et al. 2024） · 圖解卡</title>
+<meta name="description" content="Stanford 的 Soylu、Potts、Khattab 發表於 EMNLP 2024 的論文：多模組的 LM 程式沒有中間步驟的標籤，作者讓程式自己跑、只留最終答案正確的軌跡，先拿它們挑 few-shot 示範，再用來微調同一個模型的權重，最後重挑一次示範。在 HotPotQA、GSM8K、Iris 與三個 7B 到 8B 的開放模型上，九組裡有七組的最高分同時用了兩種最佳化；只調權重在八組落後只調 prompt，另一組連微調資料都湊不出來。每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="prompt-optimization, fine-tuning, dspy, llm-pipelines, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2407.10930">
+<meta name="date" content="2026-09-24">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+:root { color-scheme: light; --bg: #F4F5F7; --line: #E5E9EE; --ink: #1C2431; --mute: #8A93A0; --orange: #C8501F; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: #C8501F; } a:hover { color: #9E3E16; }
+a:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.wrap { max-width: 1600px; margin: 0 auto; padding-block: 24px 48px; padding-inline: 16px; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; padding: 6px 4px 18px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; letter-spacing: 0.12em; color: var(--mute); }
+.head nav { display: flex; flex-wrap: wrap; gap: 6px 14px; letter-spacing: 0.04em; }
+.head nav a { color: var(--mute); text-decoration: none; font-weight: 600; }
+.head nav a:hover { color: var(--orange); }
+.page { margin-bottom: 36px; scroll-margin-top: 16px; }
+.label { display: flex; align-items: baseline; gap: 14px; padding: 0 4px 8px; font-size: 13px; color: var(--mute); }
+.label .n { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-weight: 600; font-size: 12px; letter-spacing: 0.1em; color: var(--orange); }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--line); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; }
+.foot { padding: 12px 4px 0; font-size: 12px; color: var(--mute); line-height: 1.7; }
+@media print {
+  @page { size: 1600px 900px; margin: 0; }
+  body { background: #FFFFFF; }
+  .wrap { max-width: none; padding: 0; }
+  .head, .label, .foot { display: none; }
+  .page { margin: 0; page-break-after: always; }
+  .frame { border: none; border-radius: 0; height: auto !important; }
+  .frame > div { transform: none !important; }
+}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><span>BetterTogether（Soylu et al. 2024） · 圖解卡 · 8 張 · 連續閱讀版</span><nav class="site" aria-label="導覽"><a href="../../">首頁</a><a href="index.html">圖卡＋教材版</a></nav><nav aria-label="跳頁"><a href="#p01" title="封面">01</a><a href="#p02" title="兩個旋鈕，分數只看最後的答案">02</a><a href="#p03" title="答對的軌跡：當示範，或拿去微調">03</a><a href="#p04" title="BetterTogether 的三步">04</a><a href="#p05" title="三種程式，分數怎麼算">05</a><a href="#p06" title="表 1：九組裡七組用了兩種">06</a><a href="#p07" title="Iris：考微調的分類題">07</a><a href="#p08" title="已知的與還不懂的">08</a></nav></div>
+<section class="page" id="p01">
+  <div class="label"><span class="n">01 / 08</span><span>封面</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.14em; color:#8A93A0;">BETTERTOGETHER &#183; 圖解卡 &#183; 16:9 &#183; 8 張</div>
+  <div style="position:absolute; left:60px; top:110px; width:840px; font-size:60px; font-weight:700; color:#1C2431; line-height:1.3; letter-spacing:0.01em;">prompt 與權重，<br>輪流調比只調一邊好。</div>
+  <div style="position:absolute; left:60px; top:296px; width:840px; font-size:20px; color:#6B7380; line-height:1.7;">整理自 arXiv〈Fine-Tuning and Prompt Optimization: Two Great Steps that Work Better Together〉（Soylu、Potts、Khattab，Stanford，2024；EMNLP 2024）。八張講一件事：沒有中間標籤的 LM 程式，拿自己跑出來、答對的軌跡，輪流調 prompt 與權重。</div>
+  <div style="position:absolute; left:60px; top:432px; display:flex; align-items:center; gap:36px;">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#C8501F;"></div>
+      <div style="font-size:15px; color:#2B3340;">問題／只調一種的侷限</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#2E7B4F;"></div>
+      <div style="font-size:15px; color:#2B3340;">解法／一起調</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#1F2A3A;"></div>
+      <div style="font-size:15px; color:#2B3340;">主體／終點</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div>
+      <div style="font-size:15px; color:#2B3340;">中性節點</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; top:482px; width:840px; font-size:13px; color:#8A93A0; line-height:1.6;">整組共用同一套語意色：橘是只調權重與湊不出資料的地方，綠是答對的軌跡與兩種一起調的策略，深藍是程式本身、metric 與最終結果。</div>
+  <div style="position:absolute; left:960px; top:110px; width:580px; box-sizing:border-box; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 34px; display:flex; flex-direction:column;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">本組 &#183; 8 頁</div>
+    <div style="margin-top:14px; display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:baseline; gap:18px; padding:13px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">01</div><div style="font-size:17px; color:#1C2431;">封面</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:13px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">02</div><div style="font-size:17px; color:#1C2431;">兩個旋鈕，分數只看最後的答案</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:13px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">03</div><div style="font-size:17px; color:#1C2431;">答對的軌跡：當示範，或拿去微調</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:13px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">04</div><div style="font-size:17px; color:#1C2431;">BetterTogether 的三步</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:13px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">05</div><div style="font-size:17px; color:#1C2431;">三種程式，分數怎麼算</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:13px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">06</div><div style="font-size:17px; color:#1C2431;">表 1：九組裡七組用了兩種</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:13px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">07</div><div style="font-size:17px; color:#1C2431;">Iris：考微調的分類題</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:13px 0px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#2E7B4F;">08</div><div style="font-size:17px; color:#1C2431;">已知的與還不懂的</div></div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">來源：arxiv.org/abs/2407.10930 —— 本組為學習用重述，數字依 arXiv v2 的表 1 與附錄；程式片段以原文與 DSPy 官方文件為準。</div>
+</div></div>
+</section>
+<section class="page" id="p02">
+  <div class="label"><span class="n">02 / 08</span><span>兩個旋鈕，分數只看最後的答案</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">一個模組兩個旋鈕，分數只看最後的答案</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 1、2 節：LM 程式由幾個語言模組組成，每個模組由一段 prompt π 與一組權重 θ 實作；目標是讓最終輸出的 metric 平均最高，但中間沒有標籤，也沒有梯度</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:440px; height:370px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:10px;"></div>
+  <div style="position:absolute; left:80px; top:164px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">LM 程式 &#934; &#183; 附錄 A 的 HOTPOTQA</div>
+  <div style="position:absolute; left:80px; top:192px; width:400px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; justify-content:space-between;"><div style="font-size:14px; font-weight:700; color:#1C2431;">generate_query[0]：寫第一個查詢</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">&#960;<sub>1</sub> &#183; &#952;<sub>1</sub></div></div>
+  <div style="position:absolute; left:80px; top:240px; width:400px; height:40px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; color:#6B7380;">Retrieve：ColBERTv2 取 3 段（凍結，不調）</div>
+  <div style="position:absolute; left:80px; top:288px; width:400px; height:52px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; padding:0px 14px; display:flex; align-items:center; justify-content:space-between;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">generate_query[1]</div><div style="font-size:12.5px; color:#6B7380;">依累積的段落寫第二個查詢</div></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2E7B4F;">&#960;<sub>2</sub> &#183; &#952;<sub>2</sub></div></div>
+  <div style="position:absolute; left:80px; top:348px; width:400px; height:40px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; color:#6B7380;">Retrieve：再取 3 段，去重後累積</div>
+  <div style="position:absolute; left:80px; top:396px; width:400px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; justify-content:space-between;"><div style="font-size:14px; font-weight:700; color:#1C2431;">generate_answer：寫出答案</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">&#960;<sub>3</sub> &#183; &#952;<sub>3</sub></div></div>
+  <div style="position:absolute; left:80px; top:444px; width:400px; height:40px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#FFFFFF;">metric &#956;：只對最後的答案算 EM</div>
+  <div style="position:absolute; left:80px; top:492px; width:400px; font-size:13px; color:#6B7380;">只有最後一列有分數，前面五列都沒有標籤</div>
+
+  <div style="position:absolute; left:505px; top:290px; width:66px; text-align:center; font-size:12.5px; color:#8A93A0;">展開</div>
+
+  <div style="position:absolute; left:580px; top:150px; width:500px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:17px; font-weight:700; color:#FFFFFF;">展開 generate_query[1]：一個模組由什麼組成</div>
+  <div style="position:absolute; left:580px; top:198px; width:500px; height:322px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px;"></div>
+  <div style="position:absolute; left:602px; top:212px; width:456px; height:66px; display:flex; align-items:flex-start; gap:14px;">
+    <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">1</div>
+    <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">輸入與輸出</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">SIGNATURE</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">context, question → search_query：宣告這一步做什麼</div></div>
+  </div>
+  <div style="position:absolute; left:602px; top:288px; width:456px; height:66px; display:flex; align-items:flex-start; gap:14px;">
+    <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">2</div>
+    <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">prompt &#960;<sub>2</sub></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">PROMPT</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">把輸入塞進去的字串：欄位格式、推理前綴、few-shot 示範</div></div>
+  </div>
+  <div style="position:absolute; left:602px; top:364px; width:456px; height:66px; display:flex; align-items:flex-start; gap:14px;">
+    <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">3</div>
+    <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">權重 &#952;<sub>2</sub></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">WEIGHTS</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">這一步呼叫 LM 時用的浮點參數；實驗裡三個模組共用同一個模型</div></div>
+  </div>
+  <div style="position:absolute; left:602px; top:440px; width:456px; height:66px; display:flex; align-items:flex-start; gap:14px;">
+    <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#C8501F; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">4</div>
+    <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#C8501F;">標籤：沒有</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">LABEL</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">查詢寫得好不好沒人標過，只知道最後的答案對不對</div></div>
+  </div>
+
+  <div style="position:absolute; left:1140px; top:186px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">WRITERS &#183; 誰能改這個模組</div>
+  <div style="position:absolute; left:1140px; top:213px; width:400px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">使用者</div><div style="font-size:12.5px; color:#6B7380;">寫程式、宣告輸入輸出；vanilla 只有簡單的指令</div></div>
+  <div style="position:absolute; left:1140px; top:289px; width:400px; height:64px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">BootstrapFewShotRS 改 &#960;</div><div style="font-size:12.5px; color:#6B7380;">從答對的軌跡挑 few-shot 示範，權重不動</div></div>
+  <div style="position:absolute; left:1140px; top:365px; width:400px; height:64px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">BootstrapFinetune 改 &#952;</div><div style="font-size:12.5px; color:#6B7380;">拿答對的軌跡做 LoRA 微調，所有模組一起換</div></div>
+  <div style="position:absolute; left:1140px; top:441px; width:400px; height:64px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#C8501F;">沒有人能直接標第 4 欄</div><div style="font-size:12.5px; color:#6B7380;">兩個最佳化器都只看最終答案（第 03 卡）</div></div>
+
+  <div style="position:absolute; left:60px; top:570px; width:470px; height:176px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">沒有梯度，也沒有中間標籤</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">&#934; 一般不可微分，分數傳不回每個模組；<br>第二個查詢寫得好不好沒人標過，只知道答案對不對。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者：這個問題不可解，只能找近似的策略。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:570px; width:470px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">目標：讓 &#956; 的平均最高</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">在訓練集上一起選所有模組的 prompt 組 &#928; 與權重組 &#920;，<br>讓最終輸出的 metric 平均最高，調管線的人都在追它。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說這也是 DSPy 最佳化問題的一大塊。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:570px; width:470px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">訓練集小，呼叫次數也少</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">實際情況的訓練集通常很小，LM 呼叫次數也有限；<br>模組之間還有複雜的依賴。</div>
+    <div style="font-size:13px; color:#8A93A0;">所以改用 bootstrap 產生標籤，而不是去標中間步驟。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左側依附錄 A 的 HotPotQA 程式畫；「誰能改」一欄是整理者的畫法。概念上每個模組各有一組權重 &#952;<sub>i</sub>，實驗裡三個模組共用同一個模型。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M482 314H576" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1138 245H1084" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1138 321H1084" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c02)"></path>
+    <path d="M1138 397H1084" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c02)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p03">
+  <div class="label"><span class="n">03 / 08</span><span>答對的軌跡：當示範，或拿去微調</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">答對的軌跡有兩種用法：當示範，或拿去微調</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3 節與 Algorithm 2：兩個最佳化器都先在訓練輸入上跑程式、只留最終答案正確的軌跡；差別在留下來的軌跡拿去組 prompt，還是拿去訓練權重</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">BOOTSTRAPFEWSHOTRS &#183; 調 PROMPT</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">當 few-shot 示範：搜尋最好的一組</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">BOOTSTRAPFINETUNE &#183; 調權重</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">當訓練資料：微調同一個模型</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:170px; top:222px; width:420px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">在訓練子集 T 上跑程式（HotPotQA 100 筆）</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">只留 metric 達到門檻 &#955; 的軌跡</div></div></div>
+  <div style="position:absolute; left:80px; top:320px; width:200px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">候選 1</div><div style="font-size:12.5px; color:#6B7380;">每個模組最多 3 個示範</div></div>
+  <div style="position:absolute; left:300px; top:320px; width:200px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">候選 2</div><div style="font-size:12.5px; color:#6B7380;">換一組軌跡子集</div></div>
+  <div style="position:absolute; left:520px; top:320px; width:200px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">候選 … 6</div><div style="font-size:12.5px; color:#6B7380;">隨機搜尋 6 個候選程式</div></div>
+  <div style="position:absolute; left:170px; top:440px; width:420px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">在驗證子集 V（250 筆）上評分</div><div style="font-size:12.5px; color:#6B7380;">留平均分最高的那一組 prompt &#928;&#8242;</div></div></div>
+  <div style="position:absolute; left:60px; top:530px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">Algorithm 2 第 1–12 行：切出 T 與 V、跑程式收軌跡、篩選、抽子集組 prompt、在 V 上評分。</div>
+
+  <div style="position:absolute; left:950px; top:222px; width:420px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">在全部訓練例上跑程式（HotPotQA 1,000 筆）</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">只留最終輸出正確的軌跡</div></div></div>
+  <div style="position:absolute; left:860px; top:320px; width:200px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">generate_query[0]</div><div style="font-size:12.5px; color:#6B7380;">prompt 換回 vanilla</div></div>
+  <div style="position:absolute; left:1080px; top:320px; width:200px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">generate_query[1]</div><div style="font-size:12.5px; color:#6B7380;">prompt 換回 vanilla</div></div>
+  <div style="position:absolute; left:1300px; top:320px; width:200px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">generate_answer</div><div style="font-size:12.5px; color:#6B7380;">prompt 換回 vanilla</div></div>
+  <div style="position:absolute; left:950px; top:440px; width:420px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">合成一份資料，用 LoRA 微調</div><div style="font-size:12.5px; color:#6B7380;">所有模組改用新的權重 &#920;&#8242;</div></div></div>
+  <div style="position:absolute; left:840px; top:530px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">Algorithm 2 第 14–19 行與第 4 節的七步：不挑選，答對的配對全部拿去訓練；三個模組的例子訓練同一個模型。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">只動 prompt，權重不動</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">從訓練集抽出互不重疊的 100 筆訓練、250 筆驗證（Iris 是 15 與 35 筆）。作者說這種簡單的搜尋常勝過手動或自動調指令、或手寫例子。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">這篇的 prompt 最佳化只挑示範，不改寫指令文字。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">只動權重，所有模組共用</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">答對的軌跡拆成各模組的 prompt 與 completion，prompt 換成沒有示範的 vanilla 版；<br>全部合成一份資料，LoRA 用 rank 32、alpha 64，訓練 5 個 epoch。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">作者：這是隱含的多任務目標，子任務就是各模組的角色。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩個函式的前兩步相同（BootstrapTraces、FilterTraces），但輸入不同：左邊是訓練子集，右邊是全部訓練例。原文沒說哪一種比較好，所以這張不用 ✗／✓。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M380 278L180 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M380 278L400 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M380 278L620 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M180 390L380 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M400 390L380 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M620 390L380 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1160 278L960 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1160 278L1180 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1160 278L1400 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M960 390L1160 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1180 390L1160 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1400 390L1160 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p04">
+  <div class="label"><span class="n">04 / 08</span><span>BetterTogether 的三步</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">先調 prompt、再微調、最後再調一次 prompt</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">Algorithm 1：三步都用同一個訓練集 X 與 metric &#956;，軌跡都由同一個模型產生，模型自己教自己；每一步都可以省略，於是有八種組合可比</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">起點　&#934;&#10216;&#920;, &#928;&#10217;</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">使用者寫的簡單指令<br>＋原始的模型權重</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　調 prompt</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">BFRS 挑示範：&#928; → &#928;&#8242;</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">權重不動</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　微調權重</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">帶 &#928;&#8242; 跑出軌跡：&#920; → &#920;&#8242;</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">BFT &#183; LoRA</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　再調 prompt</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">起點：&#920;&#8242; 配原本的 &#928;</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">重新挑示範 → &#928;&#8243;</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">回傳　&#934;&#10216;&#920;&#8242;, &#928;&#8243;&#10217;</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">微調過的權重<br>＋在新權重上挑的示範</div>
+  </div>
+  <div style="position:absolute; left:560px; top:268px; width:130px; text-align:center; font-size:12.5px; font-weight:700; color:#C8501F;">預期一</div>
+  <div style="position:absolute; left:848px; top:268px; width:130px; text-align:center; font-size:12.5px; font-weight:700; color:#2E7B4F;">預期二</div>
+
+  <div style="position:absolute; left:60px; top:300px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">共同前提</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">三步都在同一個訓練集 X 上、用同一個 metric &#956;；最佳化 prompt、產生軌跡、微調都用同一個模型。讓大模型替小模型 bootstrap 也可以試，但不在這篇的範圍。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:420px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:444px; font-size:20px; font-weight:700; color:#1C2431;">作者的兩個預期，與一個實驗設計</div>
+
+  <div style="position:absolute; left:60px; top:486px; width:470px; height:228px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">① 預期一：微調需要答對的軌跡</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">先最佳化 prompt，能替微調產生更多成功的資料點；BFT 只收答對的軌跡，答對的越多，能學的就越多。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">權重先動的策略，第一份資料由 vanilla 產生；<br>vanilla 答對太少，就湊不出微調資料（表 1 的表說）。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:486px; width:470px; height:228px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">② 預期二：微調後再調 prompt</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">微調之後再最佳化一次 prompt，能調整整個 LM 程式的行為，得到品質更高的輸出；第 3 步就是在新權重上重新挑示範。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者說這可能出乎意料：微調常被認為是比較強的工具，而且兩種方法用的是同一組訓練輸入。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:486px; width:470px; height:228px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">③ 每一步都能省略：八種組合</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">vanilla、&#928;、&#920;、&#928;→&#928;、&#920;→&#920; 五種是基準；<br>&#928;→&#920;、&#920;→&#928;、&#928;→&#920;→&#928; 同時用了兩種最佳化，<br>作者預期這三種會一致勝過前五種。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">結果在第 06 卡：最高分多半落在這三種，但不是每一格都贏。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：五格依 Algorithm 1 畫。第 3 步的起點是微調後的權重 &#920;&#8242; 配原本的 prompt &#928;，不是 &#928;&#8242;；原文沒有解釋這個選擇。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p05">
+  <div class="label"><span class="n">05 / 08</span><span>三種程式，分數怎麼算</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">三種程式，只有最後的答案拿去對分數</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">附錄 A 的 vanilla 執行（mistral-7b-instruct-v0.2，沒有示範也沒有微調）：左邊是三個 LM 模組的多跳問答，右邊是只有一個 CoT 模組的數學題與分類題</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">HOTPOTQA &#183; 3 個 LM 模組＋凍結的檢索器</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">多跳問答：寫兩次查詢，再回答</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">GSM8K &#183; IRIS &#183; 1 個 COT 模組</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">數學題與分類題：推理一次就作答</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:218px; width:700px; height:38px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; padding:0px 16px; font-size:14px; font-weight:700; color:#1C2431;">問題：受 Foster's rule 影響、北美最小的鹿是哪一種？（表 A.1）</div>
+  <div style="position:absolute; left:60px; top:266px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">query[0]</div><div style="font-size:14px; color:#1C2431;">推理後寫查詢：North American deer ear surface area …</div></div>
+  <div style="position:absolute; left:60px; top:304px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">檢索</div><div style="font-size:14px; color:#2B3340;">ColBERTv2 取回 3 段，其中一段寫著 Key deer 是北美最小的鹿</div></div>
+  <div style="position:absolute; left:60px; top:342px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">query[1]</div><div style="font-size:14px; color:#1C2431;">依段落寫查詢：Key deer smallest North American deer</div></div>
+  <div style="position:absolute; left:60px; top:380px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">檢索</div><div style="font-size:14px; color:#2B3340;">再取 3 段，和前面的去重後合併成脈絡</div></div>
+  <div style="position:absolute; left:60px; top:418px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">answer</div><div style="font-size:14px; color:#1C2431;">推理後作答：Answer: Key deer</div></div>
+  <div style="position:absolute; left:60px; top:456px; width:700px; height:32px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:rgba(255,255,255,0.6);">EM</div><div style="font-size:14px; color:#FFFFFF;">正規化大小寫、前後空白、標點後，和標準答案完全相符　✓</div></div>
+  <div style="position:absolute; left:60px; top:504px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">1,000 筆訓練、500 筆開發取自原訓練集，1,500 筆測試取自原驗證集。<br>prompt 最佳化用其中 100 與 250 筆；中間兩個查詢都沒有標籤。</div>
+
+  <div style="position:absolute; left:840px; top:218px; width:700px; height:38px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; padding:0px 16px; font-size:14px; font-weight:700; color:#1C2431;">GSM8K：Micah 每分鐘打 20 字、Isaiah 40 字，一小時差幾字？</div>
+  <div style="position:absolute; left:840px; top:266px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">answer</div><div style="font-size:14px; color:#1C2431;">推理：60 × 40 = 2400、60 × 20 = 1200，相減得 1200</div></div>
+  <div style="position:absolute; left:840px; top:304px; width:700px; height:32px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:rgba(255,255,255,0.6);">評分</div><div style="font-size:14px; color:#FFFFFF;">取回應第一行的最後一個數字：1200　✓</div></div>
+  <div style="position:absolute; left:840px; top:350px; width:700px; height:38px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; padding:0px 16px; font-size:14px; font-weight:700; color:#1C2431;">Iris：花瓣 1.4 × 0.2、花萼 5.0 × 3.6（cm），是哪個品種？</div>
+  <div style="position:absolute; left:840px; top:398px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">answer</div><div style="font-size:14px; color:#1C2431;">推理：和三個品種的平均尺寸比較 → Answer: setosa</div></div>
+  <div style="position:absolute; left:840px; top:436px; width:700px; height:32px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:rgba(255,255,255,0.6);">EM</div><div style="font-size:14px; color:#FFFFFF;">正規化後和標準答案比：setosa　✓</div></div>
+  <div style="position:absolute; left:840px; top:504px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">GSM8K：1,000／500 筆取自原訓練集，測試用全部 1,319 題。<br>Iris：150 筆切成等大的三份，prompt 最佳化用 15 與 35 筆。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">同一個模型做全部的事</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">mistral-7b-instruct-v0.2、llama-2-7b-chat、llama-3-8b-instruct 各做一組實驗；同一個實驗裡，最佳化 prompt、產生軌跡、微調都用同一個模型。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">所有模組一開始共用同一組權重，prompt 各自不同。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">Iris 是刻意放進來的</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">作者想看以特徵為主的分類題，會不會讓完全靠梯度下降的微調大佔優勢；<br>也藉此測試他們的假設能不能外推到不同的設定（第 07 卡）。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">每次最佳化前都用隨機種子洗牌，表 1 是三個種子的平均。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三條軌跡依表 A.1–A.3 精簡改寫，推理與段落都有刪減；綠色列是 LM 模組（分類色，不是評價），深藍列是評分。附錄的三個例子都答對了。</div>
+</div></div>
+</section>
+<section class="page" id="p06">
+  <div class="label"><span class="n">06 / 08</span><span>表 1：九組裡七組用了兩種</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">九組裡七組，最高分同時調了 prompt 與權重</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 1：保留測試集上三個種子的平均準確率（%）。每格大字是這一欄的最高分與它的策略，小字是另外兩類的最好分數；綠底是「兩種一起調」拿到最高分</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:240px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">任務</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#4B5866;">mistral-7b-instruct-v0.2</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#4B5866;">llama-2-7b-chat</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#4B5866;">llama-3-8b-instruct</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">HotPotQA</div><div style="font-size:13px; color:#8A93A0;">多跳問答 &#183; 3 個模組</div></div>
+    <div style="padding:8px 10px; display:flex;"><div style="flex:1; box-sizing:border-box; border-radius:8px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; padding:0px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:17px; font-weight:700; color:#2E7B4F;">&#928; → &#920; → &#928;　<span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">37.6</span></div><div style="font-size:13px; color:#6B7380;">只調 prompt 33.8 &#183; 只調權重 24.0</div></div></div>
+    <div style="padding:8px 10px; display:flex;"><div style="flex:1; box-sizing:border-box; border-radius:8px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; padding:0px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:17px; font-weight:700; color:#2E7B4F;">&#928; → &#920; → &#928;　<span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">34.8</span></div><div style="font-size:13px; color:#6B7380;">只調 prompt 33.3 &#183; 只調權重 13.0</div></div></div>
+    <div style="padding:8px 10px; display:flex;"><div style="flex:1; box-sizing:border-box; border-radius:8px; background-color:#F7F8FA; border:1px solid #D5DAE1; padding:0px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">&#928;（只調 prompt）　<span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">46.9</span></div><div style="font-size:13px; color:#6B7380;">兩種一起 46.7 &#183; 只調權重 34.8</div></div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:306px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">GSM8K</div><div style="font-size:13px; color:#8A93A0;">數學應用題 &#183; 1 個模組</div></div>
+    <div style="padding:8px 10px; display:flex;"><div style="flex:1; box-sizing:border-box; border-radius:8px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; padding:0px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:17px; font-weight:700; color:#2E7B4F;">&#920; → &#928;　<span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">48.3</span></div><div style="font-size:13px; color:#6B7380;">只調 prompt 47.7 &#183; 只調權重 42.8</div></div></div>
+    <div style="padding:8px 10px; display:flex;"><div style="flex:1; box-sizing:border-box; border-radius:8px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; padding:0px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:17px; font-weight:700; color:#2E7B4F;">&#928; → &#920;　<span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">27.3</span></div><div style="font-size:13px; color:#6B7380;">只調 prompt 26.0 &#183; 只調權重 24.1</div></div></div>
+    <div style="padding:8px 10px; display:flex;"><div style="flex:1; box-sizing:border-box; border-radius:8px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; padding:0px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:17px; font-weight:700; color:#2E7B4F;">&#920; → &#928;　<span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">78.9</span></div><div style="font-size:13px; color:#6B7380;">只調 prompt 77.9 &#183; 只調權重 75.1</div></div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:402px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">Iris</div><div style="font-size:13px; color:#8A93A0;">特徵分類 &#183; 1 個模組</div></div>
+    <div style="padding:8px 10px; display:flex;"><div style="flex:1; box-sizing:border-box; border-radius:8px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; padding:0px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:17px; font-weight:700; color:#2E7B4F;">&#920; → &#928;　<span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">66.7</span></div><div style="font-size:13px; color:#6B7380;">只調 prompt 59.3 &#183; 只調權重 38.0</div></div></div>
+    <div style="padding:8px 10px; display:flex;"><div style="flex:1; box-sizing:border-box; border-radius:8px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; padding:0px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:17px; font-weight:700; color:#2E7B4F;">&#928; → &#920; → &#928;　<span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">65.3</span></div><div style="font-size:13px; color:#6B7380;">只調 prompt 64.0 &#183; 只調權重「–」</div></div></div>
+    <div style="padding:8px 10px; display:flex;"><div style="flex:1; box-sizing:border-box; border-radius:8px; background-color:#F7F8FA; border:1px solid #D5DAE1; padding:0px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">&#928; → &#928;（prompt 兩次）　<span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">82.0</span></div><div style="font-size:13px; color:#6B7380;">兩種一起 79.3 &#183; 只調權重 39.3</div></div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:548px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">7／9：最高分同時調了兩種</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">九組資料集與模型裡，有七組表現最好的策略同時用了 prompt 與權重最佳化；另外兩組都是 llama-3-8b-instruct，贏的是只調 prompt 的兩列。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">HotPotQA 那組只差 0.2：只調 prompt 46.9，兩種一起 46.7。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:548px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">三種順序，沒有固定的贏家</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">&#928;→&#920;→&#928; 拿下三欄、&#920;→&#928; 三欄、&#928;→&#920; 一欄；作者說三種 BetterTogether 策略之間沒有明確的贏家。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">同一個任務裡，三個模型的贏家也不全相同；<br>第 3 節原本預期後三種會一致勝過前五種。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:548px; width:470px; height:200px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">只調權重，每欄都落後 prompt</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">每一欄裡，只調權重的最好分數，<br>都低於只調 prompt 的最好分數；<br>作者的結論是：最佳化 prompt 在每個任務上都不可少。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">llama-2 的 Iris 只調權重是「–」：湊不出微調資料。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：「兩種一起」取 &#928;→&#920;、&#920;→&#928;、&#928;→&#920;→&#928; 的最高，「只調 prompt」取 &#928; 與 &#928;→&#928;，「只調權重」取 &#920; 與 &#920;→&#920;；這種分組與贏幾欄是整理者從表 1 數的。</div>
+</div></div>
+</section>
+<section class="page" id="p07">
+  <div class="label"><span class="n">07 / 08</span><span>Iris：考微調的分類題</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">考微調的分類題，只調權重仍輸給 prompt</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 1 的 Iris 欄（測試集 50 題、三個種子平均，%）：作者想看以特徵為主的分類題，會不會讓完全靠梯度下降的微調大佔優勢</div>
+
+  <div style="position:absolute; left:60px; top:146px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>mistral-7b-instruct-v0.2</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>llama-2-7b-chat</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>llama-3-8b-instruct</div>
+    <div style="color:#8A93A0;">粗體數字＝該模型在 Iris 的最高分</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:218px; width:1020px; height:72px; background-color:#FCF1EA;"></div>
+  <div style="position:absolute; left:60px; top:290px; width:1020px; height:72px; background-color:#F7F8FA;"></div>
+  <div style="position:absolute; left:60px; top:362px; width:1020px; height:108px; background-color:#EEF6F0;"></div>
+  <div style="position:absolute; left:960px; top:245px; width:110px; text-align:right; font-size:12.5px; font-weight:700; color:#C8501F;">只調權重</div>
+  <div style="position:absolute; left:960px; top:317px; width:110px; text-align:right; font-size:12.5px; font-weight:700; color:#4B5866;">只調 prompt</div>
+  <div style="position:absolute; left:960px; top:407px; width:110px; text-align:right; font-size:12.5px; font-weight:700; color:#2E7B4F;">兩種一起</div>
+
+  <div style="position:absolute; left:66px; top:191px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">vanilla</div>
+  <div style="position:absolute; left:66px; top:227px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">&#920;</div>
+  <div style="position:absolute; left:66px; top:263px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">&#920; → &#920;</div>
+  <div style="position:absolute; left:66px; top:299px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">&#928;</div>
+  <div style="position:absolute; left:66px; top:335px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">&#928; → &#928;</div>
+  <div style="position:absolute; left:66px; top:371px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">&#928; → &#920;</div>
+  <div style="position:absolute; left:66px; top:407px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">&#920; → &#928;</div>
+  <div style="position:absolute; left:66px; top:443px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">&#928; → &#920; → &#928;</div>
+
+  <div style="position:absolute; left:173px; top:193px; width:14px; height:14px; box-sizing:border-box; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A;"></div>
+  <div style="position:absolute; left:192px; top:192px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340;">0.0</div>
+  <div style="position:absolute; left:407px; top:193px; width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:426px; top:192px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340;">26.0</div>
+  <div style="position:absolute; left:605px; top:193px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:624px; top:192px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340;">48.0</div>
+
+  <div style="position:absolute; left:190px; top:228px; white-space:nowrap; font-size:12.5px; color:#C8501F;">llama-2：–（湊不出微調資料）</div>
+  <div style="position:absolute; left:437px; top:229px; width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:456px; top:228px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340;">29.3</div>
+  <div style="position:absolute; left:509px; top:229px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:528px; top:228px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340;">37.3</div>
+
+  <div style="position:absolute; left:190px; top:264px; white-space:nowrap; font-size:12.5px; color:#C8501F;">llama-2：–</div>
+  <div style="position:absolute; left:515px; top:258px; width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:468px; top:257px; width:40px; text-align:right; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340;">38.0</div>
+  <div style="position:absolute; left:527px; top:272px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:546px; top:271px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340;">39.3</div>
+
+  <div style="position:absolute; left:683px; top:294px; width:14px; height:14px; box-sizing:border-box; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A;"></div>
+  <div style="position:absolute; left:637px; top:293px; width:40px; text-align:right; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340;">56.7</div>
+  <div style="position:absolute; left:689px; top:308px; width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:708px; top:307px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340;">57.3</div>
+  <div style="position:absolute; left:887px; top:301px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:906px; top:300px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340;">79.3</div>
+
+  <div style="position:absolute; left:707px; top:337px; width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:661px; top:336px; width:40px; text-align:right; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340;">59.3</div>
+  <div style="position:absolute; left:749px; top:337px; width:14px; height:14px; box-sizing:border-box; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A;"></div>
+  <div style="position:absolute; left:768px; top:336px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340;">64.0</div>
+  <div style="position:absolute; left:911px; top:337px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:930px; top:336px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#1C2431;">82.0</div>
+
+  <div style="position:absolute; left:413px; top:373px; width:14px; height:14px; box-sizing:border-box; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A;"></div>
+  <div style="position:absolute; left:368px; top:372px; width:40px; text-align:right; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340;">26.7</div>
+  <div style="position:absolute; left:449px; top:373px; width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:468px; top:372px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340;">30.7</div>
+  <div style="position:absolute; left:569px; top:373px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:588px; top:372px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340;">44.0</div>
+
+  <div style="position:absolute; left:190px; top:408px; white-space:nowrap; font-size:12.5px; color:#C8501F;">llama-2：–</div>
+  <div style="position:absolute; left:773px; top:409px; width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:792px; top:408px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#1C2431;">66.7</div>
+  <div style="position:absolute; left:881px; top:409px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:900px; top:408px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340;">78.7</div>
+
+  <div style="position:absolute; left:647px; top:445px; width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:666px; top:444px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340;">52.7</div>
+  <div style="position:absolute; left:761px; top:445px; width:14px; height:14px; box-sizing:border-box; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A;"></div>
+  <div style="position:absolute; left:780px; top:444px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#1C2431;">65.3</div>
+  <div style="position:absolute; left:887px; top:445px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:906px; top:444px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340;">79.3</div>
+
+  <div style="position:absolute; left:180px; top:480px; width:900px; height:30px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:486px; width:14px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0</div>
+  <div style="position:absolute; left:350px; top:486px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">20</div>
+  <div style="position:absolute; left:530px; top:486px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">40</div>
+  <div style="position:absolute; left:710px; top:486px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">60</div>
+  <div style="position:absolute; left:890px; top:486px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">80</div>
+  <div style="position:absolute; left:1042px; top:486px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">100</div>
+  <div style="position:absolute; left:980px; top:516px; width:100px; text-align:right; font-size:12px; color:#8A93A0;">準確率 %</div>
+  <div style="position:absolute; left:60px; top:540px; width:900px; font-size:13px; color:#8A93A0; line-height:1.6;">vanilla 列是完全不調的程式；llama-2 的三格「–」是權重先動、湊不出微調資料的設定。每個點都是三個種子的平均。</div>
+
+  <div style="position:absolute; left:1120px; top:170px; width:420px; height:300px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 24px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-size:17px; font-weight:700; color:#1C2431;">怎麼讀這張圖</div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#C8501F; margin-top:2px;">01</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">橘底兩列只調權重：都在 40 分以下；<br>llama-2 連微調資料都湊不出來。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#4B5866; margin-top:2px;">02</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">灰底兩列只調 prompt：六個點都在 56 分以上。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">03</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">綠底三列兩種一起：&#928;→&#920; 都低於只調 prompt，<br>再調一次 prompt 的 &#928;→&#920;→&#928; 又拉高。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#1F2A3A; margin-top:2px;">04</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">測試集只有 50 題，一題就是 2 分；<br>平均只差兩三分，不算明確的高下。</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; width:470px; height:200px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">只調權重：29.3、–、37.3</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">三個模型只調權重的分數都遠低於只調 prompt（57.3、56.7、79.3）；llama-3-8b-instruct 的 37.3 還低於不調的 48.0。</div>
+    <div style="font-size:13px; color:#8A93A0;">權重調兩次也只有 38.0、–、39.3。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:590px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">「–」：vanilla 零分，湊不出資料</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">llama-2-7b-chat 的 vanilla 在 Iris 是 0.0。<br>表說：vanilla 在訓練集上答對太少，<br>就沒有足夠的微調資料，權重先動的三種策略都做不了。</div>
+    <div style="font-size:13px; color:#8A93A0;">同一個模型先調 prompt，&#928; → &#920; → &#928; 到 65.3，是這一欄最高。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:590px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">最高分：66.7、65.3、82.0</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">mistral 是 &#920; → &#928;，llama-2 是 &#928; → &#920; → &#928;，llama-3 是 prompt 調兩次；三個最高分都含有 prompt 最佳化，只有 mistral 那一欄是先微調。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">三個種子差很多：llama-3 的 &#928; 是 62.0、96.0、80.0（表 D.3）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：點的位置依表 1 的 Iris 三欄；三組底色與右側讀法是整理者的整理，「一題 2 分」是整理者從 50 題算的。</div>
+</div></div>
+</section>
+<section class="page" id="p08">
+  <div class="label"><span class="n">08 / 08</span><span>已知的與還不懂的</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">兩者都重要有了證據，為什麼還沒有答案</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 5、6 節：九組實驗裡，prompt 與權重一起調最常拿到最高分；但作者承認還不理解兩者為什麼都重要。下排是作者列的限制與範圍外的方向</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">01　先調 PROMPT</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">先讓 prompt 多答對幾題，<br>再拿去微調</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">微調只學答對的軌跡；vanilla 答不對的任務，<br>權重先動就沒有資料可學（表 1 的「–」）。<br>先用 BFRS 讓答對的軌跡變多，BFT 才有東西學，<br>這正是作者的第一個預期。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 直接拿 vanilla 的輸出去微調<br>✓ 先挑示範，再用答對的軌跡微調</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">02　微調之後再調一次</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">權重換了，<br>示範要在新權重上重挑</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">Algorithm 1 的第 3 步在微調後的權重上重新找示範；<br>作者說這一步能調整程式的行為。Iris 上的 &#928; → &#920; 是 30.7、26.7、44.0，加上最後一步的 &#928; → &#920; → &#928; 回到 52.7、65.3、79.3。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 微調完就收工<br>✓ 在新權重上再跑一次 BFRS</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">03　同一種材料</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">兩步都靠 metric<br>篩過的軌跡</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">不需要中間步驟的標籤：程式自己跑，<br>metric 只看最終答案，答對的那幾次就是示範，<br>也是訓練資料。所以 metric 是唯一的篩子，<br>推理錯、答案對的軌跡也會留下，<br>附錄 A 那條 Foster's rule 的軌跡就是一例。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">代價：比只做一種貴；產生表 1 約用了 75 個 A100 GPU 小時。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; font-size:20px; font-weight:700; color:#1C2431;">作者列的限制與範圍外的方向（不排順序）</div>
+  <div style="position:absolute; left:60px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">01</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">只有九個案例</div>
+  </div>
+  <div style="position:absolute; left:360px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">02</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">只試過 LoRA</div>
+  </div>
+  <div style="position:absolute; left:660px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">03</div>
+    <div style="font-size:16px; font-weight:700; color:#C8501F;">不懂為什麼兩者都重要</div>
+  </div>
+  <div style="position:absolute; left:960px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">04</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">交互風險還不清楚</div>
+  </div>
+  <div style="position:absolute; left:1260px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">05</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">大模型教小模型：範圍外</div>
+  </div>
+  <div style="position:absolute; left:60px; top:722px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">① 三個任務乘三個 LM 之外，別的任務、程式或 LM 可能以預料不到的方式改變結果。② 權重只試過對預訓練模型做 LoRA；原則上可能有別的微調方法強到不再需要 prompt 最佳化。③④ 兩者在多階段程式裡的角色都很新，元件之間可能有預料不到的交互；梯度下降已經研究了幾十年。⑤ 第 3 節說讓大模型替小模型 bootstrap 可能更好，但不在這篇的範圍。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三條原則與 ✗／✓ 是整理者從第 3、5 節與表 1 歸納的；下排五項依第 3、6 節，原文沒有排順序，所以不畫箭頭。</div>
+</div></div>
+</section>
+  <div class="foot">整理自 arXiv · Dilara Soylu、Christopher Potts、Omar Khattab（Stanford University），2024-07-15：<a href="https://arxiv.org/abs/2407.10930">https://arxiv.org/abs/2407.10930</a>。這些圖卡是學習用的重新整理，不是原文的逐句翻譯；觀點與著作權屬於原作者。<a href="index.html">回到圖卡＋教材版</a> · <a href="../../">回首頁</a></div>
+</div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fit() {
+    var frames = document.querySelectorAll('.frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('load', fit);
+  fit();
+})();
+</script>
+</body>
+</html>
