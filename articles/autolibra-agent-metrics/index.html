@@ -1,0 +1,1933 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutoLibra（Zhu et al. 2025）</title>
+<meta name="description" content="Stanford 等團隊的 AutoLibra 不先替 agent 設計評估指標，而是收人對執行軌跡的開放式回饋：先把每句回饋對到軌跡裡的行為，再把相近的行為分群成有定義、有好壞例子的指標，交給 LLM 評審打分，並用覆蓋率與冗餘率檢查這組指標漏了什麼、多了什麼。作者拿它和專家設計的分類比，也拿歸納出的指標當目標自動改 agent 的 prompt。這份整理逐章重述方法、後設指標、實驗與限制，每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="agent-evaluation, llm-as-a-judge, human-feedback, metric-induction, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2505.02820">
+<meta name="date" content="2026-09-24">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Theme: tech-modern 變體「測試報告語意色」
+   藍 = 主色 / 綠 = pass / 琥珀 = 注意 / 紅 = fail
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --paper: #ffffff;
+  --paper-soft: #f3f5f8;
+  --paper-shadow: #dde2e8;
+  --ink: #121821;
+  --ink-soft: #3b4450;
+  --ink-mute: #6b7481;
+  --primary: #1e56a8;
+  --primary-deep: #143a72;
+  --primary-bg: #e6eef9;
+  --accent: #157a52;
+  --accent-deep: #0d5236;
+  --accent-bg: #e1f3e9;
+  --warm: #b8620e;
+  --warm-deep: #7d4108;
+  --warm-bg: #fbeddc;
+  --danger: #b83228;
+  --danger-bg: #f9e3e0;
+  --stone: #5a6370;
+  --stone-bg: #eceff3;
+  --code-bg: #0f1720;
+  --code-ink: #e6edf3;
+  --code-mute: #8b98a8;
+  --code-blue: #7cc4ff;
+  --code-green: #7ee2b8;
+  --code-amber: #ffc46b;
+
+  --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-cjk: 'Noto Sans TC', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --content-width: 780px;
+  --wide-width: 1100px;
+  --gutter: 24px;
+}
+
+/* ---------- reset & 排版 ---------- */
+* { box-sizing: border-box; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+body {
+  margin: 0; padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-cjk);
+  font-size: 18px;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: var(--content-width); margin: 0 auto; padding: 0 var(--gutter); }
+.wide { max-width: var(--wide-width); margin: 0 auto; padding: 0 var(--gutter); }
+section { padding-block: 64px; }
+section + section { border-top: 1px solid var(--paper-shadow); }
+
+h1, h2, h3, h4 { font-family: var(--font-cjk); font-weight: 700; text-wrap: balance; }
+h1 { font-size: 56px; line-height: 1.14; margin: 0 0 24px; font-weight: 800; }
+h2 { font-size: 36px; line-height: 1.25; margin: 0 0 18px; letter-spacing: -0.01em; }
+h2 .seg { display: inline-block; }
+h3 { font-size: 25px; line-height: 1.35; margin: 44px 0 14px; }
+h4 { font-size: 20px; line-height: 1.4; margin: 26px 0 10px; }
+p { margin: 0 0 18px; }
+ul, ol { padding-left: 26px; margin: 0 0 18px; }
+li { margin-bottom: 8px; }
+em { font-style: normal; color: var(--primary-deep); font-weight: 600; }
+strong { font-weight: 700; }
+a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+code {
+  font-family: var(--font-mono); font-size: 0.86em;
+  background: var(--stone-bg); color: var(--primary-deep);
+  padding: 2px 6px; border-radius: 4px;
+}
+.mono { font-family: var(--font-mono); }
+
+/* ---------- Hero ---------- */
+.hero {
+  padding-block: 84px 60px;
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-soft) 100%);
+  border-bottom: 2px solid var(--primary-deep);
+  position: relative;
+}
+.hero::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: linear-gradient(90deg,
+    var(--primary) 0%, var(--primary) 25%,
+    var(--accent) 25%, var(--accent) 50%,
+    var(--warm) 50%, var(--warm) 75%,
+    var(--danger) 75%, var(--danger) 100%);
+}
+.hero-meta {
+  display: flex; flex-wrap: wrap; gap: 10px 22px;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  margin-bottom: 32px;
+}
+.hero-meta span::before { content: "—"; margin-right: 10px; color: var(--paper-shadow); }
+.hero-meta span:first-child::before { content: ""; margin: 0; }
+.hero h1 { font-size: 60px; font-weight: 800; word-break: keep-all; }
+.hero h1 .accent {
+  display: block; margin-top: 12px;
+  font-size: 0.55em; font-weight: 600; line-height: 1.3;
+  color: var(--primary-deep);
+}
+.hero .lede { font-size: 22px; max-width: 720px; }
+.hero-keystat {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 28px; margin: 44px 0 0; padding-top: 34px;
+  border-top: 1px dashed var(--paper-shadow);
+}
+.hero-keystat dt {
+  font-family: var(--font-sans);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--ink-mute); margin-bottom: 6px;
+}
+.hero-keystat dd {
+  margin: 0; font-family: var(--font-mono);
+  font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1;
+}
+.hero-keystat dd small { font-family: var(--font-cjk); font-size: 14px; color: var(--ink-mute); font-weight: 400; margin-left: 6px; }
+
+/* ---------- Chapter / lede / eyebrow ---------- */
+.chapter {
+  font-family: var(--font-mono);
+  font-size: 12.5px; color: var(--primary);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 0 0 10px;
+}
+.chapter::before { content: "§ "; color: var(--paper-shadow); margin-right: 4px; }
+.lede {
+  font-size: 22px; line-height: 1.6; color: var(--ink-soft);
+  margin: 0 0 28px; font-weight: 400;
+}
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--primary); margin: 0 0 14px;
+}
+
+/* ---------- Pull quote ---------- */
+.pullquote {
+  margin: 48px -16px; padding: 32px 40px;
+  font-family: var(--font-cjk);
+  font-size: 27px; line-height: 1.5; font-weight: 600;
+  color: var(--primary-deep);
+  border-left: 5px solid var(--primary);
+  background: linear-gradient(90deg, var(--primary-bg) 0%, transparent 100%);
+}
+.pullquote.bronze {
+  color: var(--accent-deep); border-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-bg) 0%, transparent 100%);
+}
+.pullquote.terra {
+  color: var(--warm-deep); border-color: var(--warm);
+  background: linear-gradient(90deg, var(--warm-bg) 0%, transparent 100%);
+}
+.pullquote cite {
+  display: block; margin-top: 16px; font-style: normal; font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  letter-spacing: 0.06em;
+}
+.pullquote cite::before { content: "— "; }
+
+/* ---------- English quote ---------- */
+.quote-en {
+  margin: 28px 0;
+  font-family: var(--font-sans); font-style: italic;
+  font-size: 21px; line-height: 1.5; color: var(--ink);
+  padding-left: 20px; border-left: 3px solid var(--accent);
+}
+.quote-en .zh {
+  display: block; margin-top: 10px;
+  font-family: var(--font-cjk); font-style: normal;
+  font-size: 15px; color: var(--ink-soft); line-height: 1.6;
+}
+
+/* ---------- Story ---------- */
+.story {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 14px;
+  padding: 38px 44px; margin: 48px 0;
+  position: relative;
+}
+.story::before {
+  content: "❝"; position: absolute; top: -6px; left: 24px;
+  font-size: 72px; color: var(--warm); line-height: 1;
+  font-family: var(--font-sans);
+}
+.story .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.18em;
+  color: var(--warm); margin-bottom: 10px; padding-left: 42px;
+}
+.story h4 { margin: 0 0 16px; font-size: 22px; color: var(--warm-deep); }
+.story p { margin-bottom: 14px; font-size: 17px; line-height: 1.7; }
+.story p:last-child { margin-bottom: 0; }
+
+/* ---------- Explain ---------- */
+.explain {
+  background: var(--primary-bg);
+  border-left: 4px solid var(--primary);
+  border-radius: 4px;
+  padding: 26px 30px; margin: 36px 0;
+  font-family: var(--font-cjk); position: relative;
+}
+.explain.bronze { background: var(--accent-bg); border-color: var(--accent); }
+.explain.terra { background: var(--warm-bg); border-color: var(--warm); }
+.explain.stone { background: var(--stone-bg); border-color: var(--stone); }
+.explain .label {
+  position: absolute; top: -12px; left: 16px;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.15em; padding: 4px 12px;
+  border-radius: 3px; text-transform: uppercase;
+}
+.explain.bronze .label { background: var(--accent); }
+.explain.terra .label { background: var(--warm); }
+.explain.stone .label { background: var(--stone); }
+.explain h4 { margin: 4px 0 12px; font-size: 19px; color: var(--primary-deep); }
+.explain.bronze h4 { color: var(--accent-deep); }
+.explain.terra h4 { color: var(--warm-deep); }
+.explain.stone h4 { color: var(--ink); }
+.explain p { font-size: 16.5px; }
+.explain p:last-child { margin-bottom: 0; }
+.explain ul, .explain ol { margin: 8px 0 0; padding-left: 22px; }
+.explain li { margin-bottom: 6px; font-size: 16px; }
+.explain code { background: rgba(255,255,255,0.75); }
+
+/* ---------- Stat grid ---------- */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.stat-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 28px 24px; text-align: center;
+  border-top: 4px solid var(--primary);
+}
+.stat-card.bronze { border-color: var(--accent); }
+.stat-card.terra { border-color: var(--warm); }
+.stat-card.danger { border-color: var(--danger); }
+.stat-card .big {
+  font-family: var(--font-mono);
+  font-size: 46px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1; margin-bottom: 10px;
+}
+.stat-card.bronze .big { color: var(--accent-deep); }
+.stat-card.terra .big { color: var(--warm-deep); }
+.stat-card.danger .big { color: var(--danger); }
+.stat-card .big small { font-family: var(--font-cjk); font-size: 16px; opacity: 0.75; margin-left: 4px; font-weight: 500; }
+.stat-card .label {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.stat-card .note { margin-top: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.55; }
+
+/* ---------- Compare table ---------- */
+.table-scroll { overflow-x: auto; margin: 36px 0; }
+.compare {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-cjk); font-size: 15.5px;
+  background: var(--paper-soft);
+  border-radius: 10px; overflow: hidden;
+  min-width: 560px;
+}
+.compare th, .compare td {
+  padding: 15px 18px; text-align: left;
+  border-bottom: 1px solid var(--paper-shadow);
+  vertical-align: top; line-height: 1.6;
+}
+.compare th {
+  background: var(--primary-deep); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+}
+.compare tr:last-child td { border-bottom: none; }
+.compare td:first-child { font-weight: 700; color: var(--primary-deep); width: 24%; }
+.compare .id { font-family: var(--font-mono); font-size: 13px; display: block; color: var(--ink-mute); font-weight: 500; margin-bottom: 2px; }
+.compare .yes { color: var(--accent-deep); font-weight: 700; }
+.compare .no { color: var(--danger); font-weight: 700; }
+
+/* ---------- Value cards ---------- */
+.values {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.value-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 26px 24px;
+  border-top: 5px solid var(--primary);
+}
+.value-card:nth-child(2) { border-top-color: var(--accent); }
+.value-card:nth-child(3) { border-top-color: var(--warm); }
+.value-card:nth-child(4) { border-top-color: var(--primary-deep); }
+.value-card:nth-child(5) { border-top-color: var(--stone); }
+.value-card .num {
+  font-family: var(--font-mono);
+  font-size: 38px; font-weight: 700;
+  color: var(--primary); line-height: 1; margin-bottom: 12px;
+}
+.value-card:nth-child(2) .num { color: var(--accent); }
+.value-card:nth-child(3) .num { color: var(--warm); }
+.value-card:nth-child(4) .num { color: var(--primary-deep); }
+.value-card:nth-child(5) .num { color: var(--stone); }
+.value-card .tag {
+  display: inline-block; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--primary); margin-bottom: 10px;
+}
+.value-card:nth-child(2) .tag { color: var(--accent); }
+.value-card:nth-child(3) .tag { color: var(--warm); }
+.value-card:nth-child(4) .tag { color: var(--primary-deep); }
+.value-card h4 { margin: 0 0 10px; font-size: 19px; line-height: 1.4; }
+.value-card p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin: 0; }
+
+/* ---------- 擴充檢查卡（附成本標籤） ---------- */
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px; margin: 40px 0;
+}
+.card {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 12px;
+  padding: 24px 24px 22px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.card .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card h4 { margin: 0; font-size: 18.5px; line-height: 1.4; }
+.card p { margin: 0; font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); }
+.card .signal { font-family: var(--font-mono); font-size: 12.5px; color: var(--primary-deep); background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 6px; padding: 6px 10px; margin-top: 4px; overflow-x: auto; white-space: nowrap; }
+.pill {
+  flex: none; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px;
+}
+.pill.fast { background: var(--accent-bg); color: var(--accent-deep); }
+.pill.mid { background: var(--warm-bg); color: var(--warm-deep); }
+.pill.slow { background: var(--danger-bg); color: var(--danger); }
+
+/* ---------- Thought ---------- */
+.thought {
+  background: var(--accent-bg);
+  border-left: 4px solid var(--accent);
+  padding: 26px 30px; margin: 40px 0;
+  border-radius: 4px; position: relative;
+}
+.thought .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--accent-deep); margin-bottom: 10px;
+}
+.thought h4 { font-size: 19px; margin: 0 0 14px; color: var(--accent-deep); line-height: 1.45; }
+.thought p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin-bottom: 8px; }
+.thought .hint {
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px dashed rgba(13, 82, 54, 0.3);
+  font-size: 14px; color: var(--accent-deep);
+}
+.thought .hint::before { content: "建議方向："; font-weight: 700; }
+
+/* ---------- Code block ---------- */
+.codeblock { margin: 30px 0; }
+.codeblock .file {
+  display: inline-block; font-family: var(--font-mono);
+  font-size: 12px; color: var(--ink-mute);
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow); border-bottom: none;
+  border-radius: 8px 8px 0 0; padding: 7px 14px;
+}
+pre.code {
+  margin: 0; background: var(--code-bg); color: var(--code-ink);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65;
+  padding: 22px 24px; border-radius: 0 10px 10px 10px;
+  overflow-x: auto; tab-size: 2; white-space: pre;
+}
+pre.code.solo { border-radius: 10px; }
+pre.code .c { color: var(--code-mute); }
+pre.code .k { color: var(--code-blue); }
+pre.code .s { color: var(--code-green); }
+pre.code .a { color: var(--code-amber); font-weight: 700; }
+
+/* ---------- Flow（eval 迴圈圖） ---------- */
+.flow { display: flex; align-items: stretch; margin: 40px 0; }
+.flow-step {
+  flex: 1 1 0; min-width: 0;
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow);
+  border-radius: 10px; padding: 18px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.flow-step .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--primary); letter-spacing: 0.1em; }
+.flow-step strong { font-size: 17px; line-height: 1.3; }
+.flow-step span.d { font-size: 14px; line-height: 1.55; color: var(--ink-soft); }
+.flow-step.score { border-color: var(--accent); background: var(--accent-bg); }
+.flow-step.score .k { color: var(--accent-deep); }
+.flow-arrow { flex: none; width: 30px; position: relative; }
+.flow-arrow::before {
+  content: ""; position: absolute; top: 50%; left: 2px; right: 2px; height: 2px;
+  background: var(--primary); transform: translateY(-50%);
+}
+.flow-arrow::after {
+  content: ""; position: absolute; top: 50%; right: 4px; width: 9px; height: 9px;
+  border-top: 2px solid var(--primary); border-right: 2px solid var(--primary);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+/* ---------- Cascade（編號步驟） ---------- */
+.cascade { display: flex; flex-direction: column; gap: 14px; margin: 32px 0; }
+.cascade-step {
+  display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px;
+}
+.cascade-step .n {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-mono); font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.cascade-step .t { font-size: 16.5px; line-height: 1.65; }
+.cascade-step .t strong { display: block; margin-bottom: 2px; }
+
+/* ---------- Checklist ---------- */
+.checklist { list-style: none; padding: 0; margin: 32px 0; display: flex; flex-direction: column; gap: 12px; }
+.checklist li {
+  display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px; margin: 0;
+  font-size: 16.5px; line-height: 1.65;
+}
+.checklist .box {
+  width: 24px; height: 24px; margin-top: 3px;
+  border: 2px solid var(--accent); border-radius: 6px; background: var(--paper);
+}
+.checklist strong { display: block; }
+.checklist small { display: block; color: var(--ink-soft); font-size: 15px; }
+
+/* ---------- Glossary ---------- */
+.glossary { background: var(--primary-deep); color: var(--paper); padding-block: 64px; }
+.glossary h2 { color: var(--paper); margin-top: 0; }
+.glossary .eyebrow { color: var(--accent-bg); }
+.glossary .lede { color: var(--paper); opacity: 0.8; }
+.glossary-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 26px; margin: 42px 0 0;
+}
+.term { border-top: 2px solid var(--accent); padding-top: 16px; }
+.term:nth-child(3n+2) { border-color: var(--warm); }
+.term:nth-child(3n+3) { border-color: var(--paper); }
+.term dt {
+  font-family: var(--font-mono);
+  font-size: 14px; font-weight: 700;
+  color: var(--accent-bg); letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+.term .zh-name { font-family: var(--font-cjk); font-size: 16px; font-weight: 600; color: var(--paper); margin-bottom: 8px; display: block; }
+.term dd { margin: 0; font-family: var(--font-cjk); font-size: 14.5px; line-height: 1.65; color: rgba(255, 255, 255, 0.8); }
+
+/* ---------- TOC ---------- */
+.toc {
+  position: fixed; right: 24px; top: 50%; transform: translateY(-50%); z-index: 10;
+  font-family: var(--font-sans); font-size: 12px;
+  background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 10px;
+  padding: 18px 20px; max-width: 236px;
+  box-shadow: 0 4px 18px rgba(18, 24, 33, 0.08);
+}
+.toc h5 { margin: 0 0 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-mute); }
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc -1; }
+.toc li { margin-bottom: 6px; counter-increment: toc; font-size: 12px; line-height: 1.45; display: flex; gap: 8px; }
+.toc li::before { content: counter(toc, decimal-leading-zero); font-family: var(--font-mono); color: var(--ink-mute); font-size: 10.5px; padding-top: 2px; }
+.toc a { color: var(--ink-soft); text-decoration: none; }
+.toc a:hover { color: var(--primary); }
+@media (max-width: 1340px) { .toc { display: none; } }
+
+/* ---------- Footer ---------- */
+footer {
+  padding-block: 48px 64px;
+  background: var(--paper-soft);
+  text-align: center;
+  font-family: var(--font-cjk);
+  font-size: 13.5px; color: var(--ink-mute);
+}
+footer p { margin: 0 0 8px; }
+footer .credit { font-family: var(--font-sans); }
+footer .disclaimer { margin-top: 14px; font-size: 12px; opacity: 0.75; max-width: 640px; margin-inline: auto; }
+
+/* ---------- 響應式 ---------- */
+@media (max-width: 768px) {
+  body { font-size: 17px; }
+  .hero { padding-block: 56px 42px; }
+  .hero h1 { font-size: 36px; }
+  .hero .lede { font-size: 18px; }
+  h2 { font-size: 27px; }
+  h3 { font-size: 22px; }
+  section { padding-block: 46px; }
+  .lede { font-size: 19px; }
+  .pullquote { font-size: 21px; margin: 34px 0; padding: 24px; }
+  .story { padding: 30px 24px; }
+  .stat-card .big { font-size: 36px; }
+  .flow { flex-direction: column; }
+  .flow-arrow { width: auto; height: 30px; }
+  .flow-arrow::before { top: 2px; bottom: 2px; left: 50%; right: auto; width: 2px; height: auto; transform: translateX(-50%); }
+  .flow-arrow::after { top: auto; bottom: 4px; left: 50%; right: auto; transform: translateX(-50%) rotate(135deg); }
+  .compare td:first-child { width: auto; }
+}
+
+/* ---------- 列印 ---------- */
+@media print {
+  .toc { display: none; }
+  body { font-size: 12pt; }
+  .hero, .glossary {
+    color: var(--ink) !important; background: white !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .glossary h2, .glossary .term dt, .glossary .lede, .glossary .term .zh-name { color: var(--ink) !important; }
+  .glossary .term dd { color: var(--ink-soft) !important; }
+  pre.code { background: #f3f5f8 !important; color: #121821 !important; border: 1px solid #ccd; white-space: pre-wrap; }
+  pre.code .c, pre.code .k, pre.code .s, pre.code .a { color: inherit !important; }
+  section { page-break-inside: avoid; }
+}
+
+/* ---------- 整合版：模式列、圖卡帶、燈箱 ---------- */
+.modebar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; padding: 10px var(--gutter); background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--paper-shadow); font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.modebar .brand { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.modebar .left { display: flex; align-items: center; gap: 14px; }
+.modebar .homelink { font-size: 12px; font-weight: 600; color: var(--ink-mute); text-decoration: none; }
+.modebar .homelink:hover { color: var(--primary); text-decoration: underline; }
+.modebar .switch { display: flex; gap: 6px; }
+.modebar button { font: inherit; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.modebar button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+.modebar button:focus-visible, .cardlabel .zoom:focus-visible, .lightbox .close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.modebar .canvaslink { font-size: 12px; color: var(--ink-mute); }
+.cardband { max-width: 1600px; margin: 4px auto 40px; padding: 0 var(--gutter); }
+.cardlabel { display: flex; align-items: baseline; gap: 14px; padding: 0 2px 8px; font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.cardlabel .n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--warm); }
+.cardlabel .zoom { margin-left: auto; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--paper-shadow); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; font-size: 16px; color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(18, 24, 33, 0.86); display: none; align-items: center; justify-content: center; padding: 24px; }
+.lightbox.open { display: flex; }
+.lightbox .frame { border: none; border-radius: 8px; max-width: none; width: auto; flex: none; }
+.lightbox .close { position: absolute; top: 14px; right: 18px; font: inherit; font-family: var(--font-sans); font-size: 13px; color: #FFFFFF; background: transparent; border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.faq { margin: 36px 0 8px; padding: 0; }
+.faq > div { padding: 18px 0; border-top: 1px solid var(--paper-shadow); }
+.faq > div:last-child { border-bottom: 1px solid var(--paper-shadow); }
+.faq dt { margin: 0 0 6px; font-weight: 700; font-size: 17px; color: var(--ink); }
+.faq dt::before { content: "問"; display: inline-block; margin-right: 10px; padding: 1px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; color: #FFFFFF; background: var(--primary); vertical-align: 2px; }
+.faq dd { margin: 0; font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+body.mode-cards section .prose { display: none; }
+body.mode-cards section.nocard { display: none; }
+body.mode-cards section { padding-block: 44px; }
+body.mode-cards .toc li.nocard { display: none; }
+@media (max-width: 768px) { .cardband { margin-bottom: 32px; } .modebar { font-size: 12px; } }
+@media print {
+  .modebar, .lightbox, .cardlabel .zoom { display: none !important; }
+  body.mode-cards section .prose { display: block !important; }
+  body.mode-cards section.nocard { display: block !important; }
+  section { page-break-inside: auto; }
+  .cardband, .story, .explain, .thought, .stat-grid, .values, .cards, .table-scroll { page-break-inside: avoid; }
+  .frame { height: auto !important; border: none; border-radius: 0; }
+  .frame > div { transform: none !important; zoom: 0.44; }
+}
+
+</style>
+</head>
+<body>
+<div class="modebar">
+  <div class="left"><a class="homelink" href="../../">← 首頁</a><span class="brand">AutoLibra 2025 · 圖卡 + 教材</span></div>
+  <div class="switch" role="group" aria-label="閱讀模式">
+    <button type="button" data-mode="full" aria-pressed="true">圖卡＋詳解</button>
+    <button type="button" data-mode="cards" aria-pressed="false">只看圖卡</button>
+  </div>
+  <a class="canvaslink" href="cards.html">圖卡連續閱讀版</a>
+</div>
+<nav class="toc" aria-label="目錄">
+  <h5>目錄</h5>
+  <ol>
+    <li class="nocard"><a href="#prologue">第 8 週為什麼讀它</a></li>
+    <li><a href="#why-feedback">成功率太粗</a></li>
+    <li><a href="#feedback">回饋怎麼收</a></li>
+    <li><a href="#induction">落地與分群</a></li>
+    <li><a href="#meta-evaluation">覆蓋率與冗餘率</a></li>
+    <li><a href="#optimization">指標數怎麼挑</a></li>
+    <li><a href="#human-check">人工抽查</a></li>
+    <li><a href="#lens">和專家分類比</a></li>
+    <li><a href="#ladder">拿指標改 agent</a></li>
+    <li><a href="#appendix-runs">附錄的人工版本</a></li>
+    <li class="nocard"><a href="#related">相關工作</a></li>
+    <li><a href="#takeaways">結論與更大的圖像</a></li>
+    <li class="nocard"><a href="#glossary">名詞速查</a></li>
+  </ol>
+</nav>
+<header class="hero">
+  <div class="container">
+    <div class="hero-meta">
+      <span>arXiv · 2025-05-05（v3 2025-10-29；課程書單列為 ICLR 2026）</span>
+      <span>研究論文（Stanford University、University of Toronto、University of Pennsylvania）</span>
+      <span>數字依 arXiv v3；會議版（OpenReview）內容可能不同</span>
+      <span>作者 Hao Zhu、Phil Cuvin、Xinkai Yu、Charlotte Ka Yee Yan、Jason Zhang、Diyi Yang</span>
+    </div>
+    <p class="eyebrow">AUTOLIBRA · METRIC INDUCTION · 圖卡＋教材整合版</p>
+    <h1>從人的一句回饋， 長出評估 agent 的指標<span class="accent">AutoLibra：把回饋對到行為、 分群成有定義與正反例的指標， 再用覆蓋率與冗餘率檢查</span></h1>
+    <p class="lede">評估 agent 最常看任務有沒有完成，一條很長的軌跡只換來一個分數。這篇以 Stanford 為主的團隊寫的論文，改從人的開放式回饋出發：AutoLibra 把人對執行軌跡的一句評語對到具體的行為，再把相近的行為分群成有定義、有好壞例子的指標，交給 LLM 評審打分；覆蓋率與冗餘率兩個後設指標，則回頭檢查這組指標漏了什麼、多了什麼。作者在協作、社交、網頁與文字遊戲的 agent 上試，也拿歸納出的指標當目標改進 agent。每章開頭先放一張圖解卡講重點，往下是詳細作法；想速讀就切到「只看圖卡」。</p>
+    <dl class="hero-keystat">
+      <div><dt>每個資料集的回饋</dt><dd>80<small>條</small></dd></div>
+      <div><dt>最高覆蓋率 · 網頁任務</dt><dd>88<small>%</small></dd></div>
+      <div><dt>回饋落地的人工抽查</dt><dd>0.95<small>平均</small></dd></div>
+      <div><dt>文字遊戲成功率提升</dt><dd>20<small>%</small></dd></div>
+    </dl>
+  </div>
+</header>
+
+
+<section id="prologue" data-toc="第 8 週為什麼讀它" class="nocard">
+  <div class="container">
+    <p class="chapter">Prologue · 整理者的引言</p>
+    <h2><span class="seg">評估指標，</span><span class="seg">可以從回饋裡歸納</span></h2>
+    <p class="lede">Stanford CS 329Z 第 8 週「LLM-as-Judge &amp; Evaluation Infrastructure」那一講（Evaluation for Agentic Systems 分區），談怎麼用模型當評分者、評分者有哪些偏誤、評估的基礎設施怎麼搭。這篇 2025 年的論文是同一講的選讀，它處理評分之前的一個問題：評估 agent 的指標從哪裡來。</p>
+
+    <p>這一講的講題有七個：三種 grader、judge prompt 怎麼設計、已知的偏誤、pairwise 對 pointwise、非確定性的指標（pass@k 對 pass^k）、harness 設計，以及 Anthropic 的八步路線圖。同一講的必讀是 Anthropic〈Demystifying evals for AI agents〉、MT-Bench 論文（Zheng 等）與 AutoMetrics（Ryan 等）。AutoLibra 的回答是：先收人對 agent 執行軌跡的開放式評語，從裡面歸納出指標，再把指標交給 LLM 評審打分。</p>
+    <p>兩件整理者對照出來的事。對照參考文獻：論文第 2.3 節說明 LLM 評審時引用的 Zheng 等 2023，就是同一講必讀的 MT-Bench 論文。對照作者名單：最後一位作者 Diyi Yang 是這門課的講師。</p>
+    <p>把這一講的講題對到論文裡的內容，大致如下。這張表是整理者的對照，論文沒有用這些講題分類。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>這一講的講題</th><th>論文裡對應的內容（整理者的對照）</th><th>本頁在哪一章</th></tr></thead>
+        <tbody>
+          <tr><td>三種 grader</td><td>用 LLM 評審替每個指標打分；第 2.3 節說它可以換成規則式的檢查，替指標寫程式則留給未來</td><td>第 4 章</td></tr>
+          <tr><td>judge prompt 怎麼設計</td><td>評審拿到的是每個指標的定義與好壞行為的例子；拿掉例子，CoGym 的覆蓋率最多掉 30%</td><td>第 3、5 章</td></tr>
+          <tr><td>已知的偏誤</td><td>論文沒有分析評審的偏誤，改用人工抽查評審這一步：平均 0.92，Sotopia 最低 0.85</td><td>第 6 章</td></tr>
+          <tr><td>pairwise 對 pointwise</td><td>評審逐條軌跡、逐個指標打 +1、−1 或 N/A，屬於 pointwise；論文沒有做兩兩比較</td><td>第 4 章</td></tr>
+          <tr><td>非確定性的指標</td><td>論文沒有處理 pass@k 這類重複取樣的指標；第 5 節引的排行榜數字附有 ± 範圍</td><td>第 8 章</td></tr>
+          <tr><td>harness 設計</td><td>歸納、評審、後設評估接成一個閉環，後設指標回頭決定要留幾個指標</td><td>第 1、5 章</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>整理者的補充：本站整理過的〈Who Validates the Validators?〉發現評估標準是在評分的過程中才成形，MAST 則是從多代理系統的執行軌跡歸納出失敗分類；AutoLibra 把「從人的評語歸納出評估標準」這件事交給 LLM 做，對象是 agent 的執行軌跡。</p>
+    <p>六位作者裡，Hao Zhu、Charlotte Ka Yee Yan、Jason Zhang、Diyi Yang 來自 Stanford University，Phil Cuvin 來自 University of Toronto，Xinkai Yu 來自 University of Pennsylvania。論文在 2025 年 5 月 5 日第一次貼上 arXiv，7 月 28 日的 v2 與 10 月 29 日的 v3 各改過一次。課程書單連到的是 OpenReview 上的 ICLR 2026 版本；那個網站不開放程式抓取，這一頁改以 arXiv v3 為準，頁面上的數字依 v3，會議版的內容可能不同。arXiv 版的 PDF、HTML 與摘要頁都沒有寫會議名，ICLR 2026 是依課程書單標注的。實驗用的模型（GPT-4o、o3-mini、Gemini 2.5 Flash 等）與排行榜名次，都是寫作當時的狀況。</p>
+    <p>早期版本的第 5 節和 v3 不同：當時是人照著指標手動改 prompt，另有一節用指標挑選網頁 agent 的微調資料。v3 把第 5 節改寫成讓 LLM 自動改 prompt，微調那一節拿掉了，附錄則保留了人工版本的設定與結果表。本頁一律依 v3：附錄的人工版本放在第 9 章，早期版本正文裡的數字不寫。</p>
+    <p>處理方式也先交代。章節跟著論證走：第 1 章是問題，第 2 到 5 章是方法（回饋怎麼收、怎麼歸納、怎麼評估與後設評估、指標數怎麼挑），第 6 章是人工抽查，第 7、8 章是兩種用法（當透鏡評估 agent、當階梯改進 agent），第 9 章是附錄裡的人工版本，第 10 章是相關工作，第 11 章是結論與作者的大圖像。有幾處合併：回饋落地與行為分群併成第 3 章，第 3.2 節的迭代歸納併進第 5 章，第 7、8 節併成第 11 章。數字只用正文、表 1 到表 6，以及圖 1 上印出的值；圖 3、圖 4 的點沒有標數字，只轉述作者的描述與整理者看得出的走勢。論文前後寫法不一致的地方，兩邊都寫出來。指標名稱保留英文，括號裡的中文是整理者譯的；回饋的例子一律改寫成中文轉述，程式與 prompt 都是教學用的精簡版。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>論文的用語</th><th>意思（整理者加的對照）</th><th>這一頁怎麼寫</th></tr></thead>
+        <tbody>
+          <tr><td>trajectory</td><td>agent 完成一個任務的整段紀錄：每一步的觀察與行動</td><td>軌跡</td></tr>
+          <tr><td>open-ended feedback</td><td>人用自己的話寫的評語，沒有固定的量表或選項</td><td>開放式回饋</td></tr>
+          <tr><td>aspect</td><td>從一句回饋拆出的一點：行為、回饋、正負號的三元組</td><td>面向</td></tr>
+          <tr><td>metric</td><td>一群相似的面向歸納成的評估項目，附定義與好壞行為的例子</td><td>指標</td></tr>
+          <tr><td>trait</td><td>LLM 評審替一條軌跡在某個指標上打 +1 或 −1 的結果</td><td>特徵（正特徵、負特徵）</td></tr>
+          <tr><td>meta-evaluation</td><td>評估指標本身：把特徵和人的面向配對</td><td>後設評估</td></tr>
+          <tr><td>coverage</td><td>面向裡配得到特徵的比例</td><td>覆蓋率</td></tr>
+          <tr><td>redundancy</td><td>特徵裡沒有和任何面向配上的比例，也就是人沒提到的</td><td>冗餘率</td></tr>
+          <tr><td>LLM-as-a-Judge</td><td>讓 LLM 依一段說明判斷另一段輸出</td><td>LLM 評審</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>先把幾個名詞對齊</h4>
+      <ul>
+        <li><strong>主題分析（thematic analysis）</strong>：社會科學的質性研究方法。先替訪談或文字資料裡的每一句貼標籤（編碼），再把相近的標籤歸成較大的主題。AutoLibra 的兩步就是照這個順序設計的。</li>
+        <li><strong>後設指標（meta-metrics）</strong>：評估「評估指標」的指標。這篇有兩個：覆蓋率與冗餘率。</li>
+        <li><strong>限制解碼（constrained decoding）</strong>：生成時強制模型的輸出符合某種格式，例如一定要是某個欄位齊全的 JSON。</li>
+        <li><strong>Baba-Is-AI</strong>：改編自解謎遊戲 Baba Is You 的文字版環境，agent 要推動文字方塊改寫遊戲規則才能贏；第 8、9 章用它改進 agent。</li>
+      </ul>
+    </div>
+
+    <div class="pullquote">
+      要評什麼，可以先問看過 agent 做事的人；指標是從他們的話裡整理出來的。
+      <cite>整理者的引言</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="why-feedback" data-toc="成功率太粗">
+  <div class="container head">
+    <p class="chapter">Chapter 01 · Introduction</p>
+    <h2><span class="seg">成功率太粗，</span><span class="seg">指標該從回饋歸納</span></h2>
+    <p class="lede">一條幾十步的軌跡只換來一個「完成或沒完成」，中間哪些行為做對、哪些做錯都看不到。作者改從人的開放式回饋出發：先把回饋歸納成指標，再用指標評估與改進 agent，並用兩個後設指標檢查這組指標。</p>
+    
+  </div>
+  <div class="cardband" id="card-02"><div class="cardlabel"><span class="n">圖卡 02 / 11</span><span class="t">一個成功率，對上一句回饋</span><button type="button" class="zoom" data-card="02">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">指標不是先想好的，是從回饋長出來的</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">摘要與第 1 節：任務成功率很粗、要靠專家設計、不獎勵中間的行為；AutoLibra 改從人對軌跡的一句回饋出發，並用兩個後設指標回頭檢查</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 只看任務成功率</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 從回饋歸納指標</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:180px; top:200px; width:440px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">一條軌跡：幾十步的觀察與行動</div>
+  <div style="position:absolute; left:90px; top:290px; width:110px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">第 1 步</div>
+  <div style="position:absolute; left:222px; top:290px; width:110px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">第 2 步</div>
+  <div style="position:absolute; left:354px; top:290px; width:110px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">……</div>
+  <div style="position:absolute; left:486px; top:290px; width:110px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">第 n−1 步</div>
+  <div style="position:absolute; left:618px; top:290px; width:110px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #9AA3AE; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#1C2431;">最後一步</div>
+  <div style="position:absolute; left:90px; top:352px; width:500px; font-size:13px; font-weight:500; color:#C8501F; line-height:1.5;">中間哪些行為做對、哪些做錯，都沒有被記下來</div>
+  <div style="position:absolute; left:528px; top:400px; width:250px; height:52px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#C8501F;">任務成功率：0 或 1</div><div style="font-size:12px; color:#6B7380;">只看終點的狀態</div></div></div>
+  <div style="position:absolute; left:90px; top:400px; width:400px; height:52px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; padding:0px 16px; display:flex; align-items:center; justify-content:space-between;"><div style="font-size:14px; font-weight:700; color:#1C2431;">要看細一點：專家先定好維度</div><div style="flex-shrink:0; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">手工設計</div></div>
+  <div style="position:absolute; left:60px; top:478px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">一條軌跡只換來一個分數。想看得更細，就要請專家事先想好評估維度或失敗分類；<br>事先沒想到、過程中自己冒出來的行為，不會被獎勵。</div>
+
+  <div style="position:absolute; left:960px; top:200px; width:460px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">一條軌跡 ＋ 人寫的一句回饋</div>
+  <div style="position:absolute; left:960px; top:272px; width:460px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 16px; display:flex; align-items:center; gap:12px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#8A93A0;">①</div><div style="font-size:14px; color:#1C2431;"><b>回饋落地</b>：拆成面向（行為、回饋、正負號）</div></div>
+  <div style="position:absolute; left:960px; top:334px; width:460px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 16px; display:flex; align-items:center; gap:12px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#8A93A0;">②</div><div style="font-size:14px; color:#1C2431;"><b>行為分群</b>：聚成 N 個指標，附定義與好壞例子</div></div>
+  <div style="position:absolute; left:960px; top:396px; width:460px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 16px; display:flex; align-items:center; gap:12px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#8A93A0;">③</div><div style="font-size:14px; color:#1C2431;"><b>LLM 評審</b>：每個指標打 +1、−1 或 N/A</div></div>
+  <div style="position:absolute; left:960px; top:458px; width:460px; height:44px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:0px 16px; display:flex; align-items:center; gap:12px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">④</div><div style="font-size:14px; color:#1C2431;"><b>後設評估</b>：覆蓋率與冗餘率</div></div>
+  <div style="position:absolute; left:1444px; top:394px; width:96px; font-size:12.5px; font-weight:500; color:#2E7B4F; line-height:1.45;">回頭調<br>指標數</div>
+  <div style="position:absolute; left:840px; top:526px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">人只要寫一句話，拆面向、分群、打分、配對都交給 LLM；<br>後設指標回頭檢查這組指標漏了什麼、多了什麼（第 04 到 06 卡）。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#C8501F;">一條軌跡，一個 0 或 1</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">摘要的三個批評：這種指標太粗、要靠專家手工設計，<br>也不獎勵過程中自己冒出來的中間行為。</div>
+    <div style="font-size:13px; color:#8A93A0;">第 5 節仍用成功率量結果，只是不拿它當最佳化的目標。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#2E7B4F;">一句回饋，長成能重用的指標</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">作者說給具體回饋比設計指標容易得多，<br>也能從使用者的角度評估 agent。</div>
+    <div style="font-size:13px; color:#8A93A0;">每個資料集 80 條軌跡、每條一句回饋就夠（第 1 節）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：✗／✓ 依摘要與第 1 節對任務成功率的批評；左側的步數與右側的四格是整理者的示意，四步的細節見第 04 到 06 卡。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M400 250L400 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M200 313H220" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M332 313H352" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M464 313H484" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M596 313H616" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M673 336L673 398" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c02)"></path>
+    <path d="M1190 250L1190 270" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1190 316L1190 332" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1190 378L1190 394" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1190 440L1190 456" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1420 480H1436V356H1422" stroke="#2E7B4F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#an-c02)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>摘要先點出現況的三個問題：agent 主要靠任務成功率來評估與最佳化，這種指標很粗、要靠專家手工設計，也不會獎勵過程中自己冒出來的中間行為。引言從人怎麼學技能講起：人從別人的開放式指示與回饋學習，並把回饋內化，變成自我調節學習時持續改進的訊號（作者引發展心理學與教育研究）。作者想知道，AI agent 能不能用同樣的方式，從人的回饋裡歸納出可以推廣的指標，並從中受益。</p>
+    <p>AutoLibra 是一個歸納指標的方法，作者也把它定位成一套新的評估框架。回饋可以來自 agent 的終端使用者，也可以來自專家。作者說這樣做有兩個好處，第一個是：</p>
+
+    <div class="quote-en">
+      "It is much easier to provide concrete feedback for trajectories than creating metrics"
+      <span class="zh">「對軌跡給具體的回饋，比設計指標容易得多」：第 1 節列的第一個好處。</span>
+    </div>
+
+    <p>第二個好處是可以從使用者的角度評估 agent。歸納出來的指標寫清楚了用模型評估時要找哪些行為，可以拿來理解 agent 在做什麼，也可以當成改進 agent 的最佳化目標。</p>
+    <p>歸納分成兩步，參考社會科學裡主題分析的「編碼、歸納主題」兩個步驟。第一步是回饋落地：把回饋的每個面向，對到整條軌跡裡的某一段行為。第二步是行為分群：把這些面向聚成幾群相似的行為，每一群整理成一個指標。圖 1 的例子是網頁 agent：使用者說它沒有選 iPhone 14 或 15，這句話被對到它在下拉選單選了 iPhone 16 Pro 的那一步；和它相似的行為聚成一群，整理成 Element Interaction Accuracy（介面元素操作的準確度）這個指標（第 3 章）。</p>
+    <p>評估的那一段，負責替歸納提供閉環的回饋訊號。歸納時用過的軌跡，交給 LLM 評審依歸納出的指標打分，得到一組特徵；再把人的回饋拆出的面向（例如「食譜裡沒有藜麥」）和特徵（例如 task-requirement-achievement）配對，就能反過來評估這組指標：覆蓋率是面向裡配得到特徵的比例，冗餘率是偵測到的特徵裡沒有人提到的比例（第 4 章）。有了這兩個數，就能去找冗餘率最低、覆蓋率最高的一組指標。作者發現指標越多，冗餘率越高，覆蓋率則收斂到最大值（第 5 章）。</p>
+    <p>第 2 節開頭把設計要求寫成三條：指標要從 agent 的行為歸納，扎根在軌跡上，不由專家預先定義；要能自我驗證，挑出能涵蓋沒看過的回饋、又夠抽象可以跨任務使用的最小一組指標；要能推廣，適用各種 agent 環境，不綁特定領域的設計。整個系統是一條閉環：從人收來的回饋（第 2 章）進入歸納流程，產出指標（第 3 章）；評估流程再用這些指標替新的 agent 行為打分、並評估指標本身的品質（第 4 章）。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>第 1 節 · 研究問題</th><th>問的是什麼</th><th>本頁在哪一章</th></tr></thead>
+        <tbody>
+          <tr><td>RQ1</td><td>AutoLibra 每一步的結果，和人的判斷一致嗎</td><td>第 6 章</td></tr>
+          <tr><td>RQ2</td><td>它能不能看出專家設計的指標之外的 agent 行為</td><td>第 7 章</td></tr>
+          <tr><td>RQ3</td><td>它能不能提供改進 agent 表現的最佳化訊號</td><td>第 8、9 章</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>引言最後預告了結果。在協作、社交、網頁與文字遊戲四類 agent 上，每個資料集 80 條軌跡、每條一句回饋，就能在沒看過的回饋上歸納出覆蓋率高、冗餘率低的細緻指標；這些指標比較具體，有些還是專家設計的指標或錯誤分析沒列出的。在改進 agent 的過程中，AutoLibra 能一輪一輪發現新冒出來的指標，並在一個有挑戰性的 2D 文字遊戲裡提供最佳化訊號：三個階段、每個階段只標 18 條軌跡，讓前沿 LLM 的表現提升超過 20%。</p>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>AutoLibra 沒有丟掉成功率</h4>
+      <p>第 8 章的實驗仍用成功率量結果，只是不拿它當最佳化的目標。作者在結論把兩者比作軟體測試：端到端的成功率像整合測試，歸納出的行為指標像單元測試（第 11 章）。這段對照是整理者依第 5、7 節整理的。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="feedback" data-toc="回饋怎麼收">
+  <div class="container head">
+    <p class="chapter">Chapter 02 · Collecting Human Feedback</p>
+    <h2><span class="seg">回饋來自使用者或專家，</span><span class="seg">一條軌跡一句</span></h2>
+    <p class="lede">論文的回饋有兩個來源：和 agent 一起工作的終端使用者，以及事後看完軌跡的專家。每條軌跡只收一句回饋，要求點出哪些行為好、哪些不好；作者說一條不到五分鐘。</p>
+    
+  </div>
+  <div class="cardband" id="card-03"><div class="cardlabel"><span class="n">圖卡 03 / 11</span><span class="t">回饋的兩種來源</span><button type="button" class="zoom" data-card="03">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">回饋有兩種來源，都是一條軌跡一句話</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2.1 節：agent 直接和人互動時，用終端使用者的留言；其餘環境由專家看完軌跡再寫。兩群都要點出哪些行為好、哪些不好</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">END USERS</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">終端使用者：和 agent 一起做事的人</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">EXPERTS</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">專家：事後一步一步看文字版的軌跡</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:100px; top:232px; width:180px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#1C2431;">使用者</div>
+  <div style="position:absolute; left:480px; top:232px; width:180px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">agent</div>
+  <div style="position:absolute; left:290px; top:268px; width:180px; text-align:center; font-size:12.5px; color:#8A93A0;">一起完成任務、對話</div>
+  <div style="position:absolute; left:100px; top:330px; width:460px; height:58px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:0px 18px; display:flex; align-items:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">任務之後的留言：一句回饋</div><div style="font-size:12.5px; color:#6B7380;">作者用的是 CoGym 研究收集的使用者留言</div></div></div>
+  <div style="position:absolute; left:100px; top:412px; width:460px; height:46px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">CoGym：197 條附回饋的軌跡</div>
+  <div style="position:absolute; left:60px; top:486px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">論文舉的兩句留言（中文轉述）：「行程排得前後一致，但最後幾分鐘當掉了」；<br>「AI 很快就寫好並執行了 Python 腳本」。</div>
+
+  <div style="position:absolute; left:870px; top:222px; width:640px; height:38px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:22px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#8A93A0;">01</div><div style="font-size:14px; color:#1C2431;">先看 agent 要做的任務</div></div>
+  <div style="position:absolute; left:870px; top:268px; width:640px; height:38px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:22px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#8A93A0;">02</div><div style="font-size:14px; color:#1C2431;">一步一步看它的觀察與行動：純文字，終端機或網頁介面都可以</div></div>
+  <div style="position:absolute; left:870px; top:314px; width:640px; height:38px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:22px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">03</div><div style="font-size:14px; color:#1C2431;">明確點出哪些行為面向是好的、哪些是不好的</div></div>
+  <div style="position:absolute; left:870px; top:360px; width:640px; height:38px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:22px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#C8501F;">✗</div><div style="font-size:14px; color:#1C2431;">避免「這個 agent 很會解這個任務」這種籠統的評語</div></div>
+  <div style="position:absolute; left:870px; top:406px; width:640px; height:38px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:22px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:rgba(255,255,255,0.6);">04</div><div style="font-size:14px; color:#FFFFFF;">寫下一句回饋：作者說每條不到 5 分鐘</div></div>
+  <div style="position:absolute; left:840px; top:462px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">標註者是五位作者，環境有 Sotopia、WebArena、WebVoyager、<span style="white-space:nowrap">Baba-is-ai</span> 與 MiniHack；<br>多代理的任務，每個 agent 的軌跡分開標。網頁任務也只給文字，讓人和 agent 看同一種格式。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">終端使用者：CoGym 197 條</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">agent 直接和人互動時，就用和它對話的使用者留言；<br>回饋來自實際和 agent 一起做事的人。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">作者說這樣能從使用者的角度評估 agent（第 1 節）。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">專家：各 100 條 <span style="white-space:nowrap">GPT-4</span> 軌跡</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">Sotopia、WebArena、WebVoyager 各標 100 條；<br>第 5 節每一輪每個資料集標 18 條；留 20% 做驗證。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">100 條留 20% 剩 80 條，就是引言說的每個資料集 80 條（整理者核對）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩群都只對完整的軌跡寫一句；逐步給回饋、互動當中就收回饋，是作者在第 7 節列的未來方向。左側的流程是整理者的示意。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M282 252H476" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M478 262H284" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M190 288V328" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M330 388V410" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 2.1 節把回饋的提供者分成兩群。第一群是終端使用者：agent 直接和人互動時，就用和它互動、對話的使用者的回饋。CoGym 屬於這一類，作者用的是 CoGym 研究收集的使用者留言，共 197 條附回饋的軌跡。第二群是專家：agent 不直接和人互動時，由觀察軌跡的標註者給回饋，這篇的標註者是五位作者。其餘的環境都屬於這一類：Sotopia、WebArena、WebVoyager、Baba-is-ai 與 MiniHack。</p>
+    <p>收回饋有幾條規則。每條軌跡只根據完整的軌跡收一句回饋；作者在註腳說，理論上可以針對特定的步驟給回饋、或一條軌跡收好幾句，讓落地更準，這留給未來。標註者被要求明確點出他們覺得好或不好的行為面向，避免「這個 agent 很會解這個任務」這種籠統的評語。介面可以選終端機或網頁，標註者先看到 agent 的任務，再一步一步看它的觀察與行動，全部是文字。作者在另一個註腳說明：網頁導航的任務一般看截圖，這裡讓 agent 和人看同一種格式，是為了讓回饋更貼著行為。多代理的任務，一次互動裡每個 agent 的軌跡分開標。</p>
+    <p>數量方面，Sotopia、WebArena、WebVoyager 各標 100 條以 GPT-4 為底的 agent 軌跡；第 5 節的實驗每一輪每個資料集標 18 條。作者說標註很快，每條不到 5 分鐘。第 4 節的評估隨機留下 20% 的軌跡做驗證；100 條留下 20%，剩下 80 條，正好是引言說的「每個資料集 80 條軌跡」（整理者核對）。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>環境</th><th>agent 在做什麼</th><th>回饋來源</th><th>論文寫出的數量</th><th>用在哪裡</th></tr></thead>
+        <tbody>
+          <tr><td>CoGym</td><td>和使用者協作完成任務；論文的例子是排行程、寫 Python 腳本</td><td>終端使用者</td><td>197 條附回饋的軌跡</td><td>圖 3、表 1、第 4 節</td></tr>
+          <tr><td>Sotopia</td><td>社交情境裡的互動與對話</td><td>專家</td><td>100 條</td><td>圖 3、表 1、第 4 節</td></tr>
+          <tr><td>WebArena</td><td>擬真網站上的網頁任務</td><td>專家</td><td>100 條</td><td>圖 3、表 1</td></tr>
+          <tr><td>WebVoyager</td><td>在真實網站上完成任務；圖 1 的例子是比價、搜尋、找食譜</td><td>專家</td><td>100 條</td><td>圖 1、圖 3、表 1、第 4 節</td></tr>
+          <tr><td>Baba-is-ai</td><td>推文字方塊改寫規則的 2D 遊戲</td><td>專家</td><td>第 5 節每輪 18 條</td><td>表 1、第 5 節、附錄</td></tr>
+          <tr><td>MiniHack</td><td>源自 NetHack 的格子地圖遊戲</td><td>專家</td><td>論文沒寫總數</td><td>附錄</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>這張表是整理者從第 2.1 節、第 3、4、5 節與附錄彙整的；「agent 在做什麼」一欄取自論文的例子與參考文獻的標題。</p>
+
+    <div class="explain stone">
+      <span class="label">設計取捨</span>
+      <h4>為什麼一條軌跡只收一句</h4>
+      <p>一句話很便宜，但也只說了評語者當下最在意的幾點。第 3 章會看到，一句回饋平均只拆得出 1 到 2 個面向；第 4 章的冗餘率會因此偏高，因為軌跡裡很多行為根本沒有人提。作者把「逐步給回饋」與「互動當中就收回饋」列為未來方向（第 11 章）。這段是整理者依第 2.1、7 節整理的讀法。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="induction" data-toc="落地與分群">
+  <div class="container head">
+    <p class="chapter">Chapter 03 · Induction Process</p>
+    <h2><span class="seg">先把回饋對到行為，</span><span class="seg">再把行為分群</span></h2>
+    <p class="lede">回饋落地把一句回饋拆成幾個面向，每個面向對到軌跡裡的一段行為；行為分群再把許多軌跡的面向聚成幾個指標，每個指標附一段定義，以及好行為與壞行為的例子。</p>
+    
+  </div>
+  <div class="cardband" id="card-04"><div class="cardlabel"><span class="n">圖卡 04 / 11</span><span class="t">從回饋長出指標的一棵樹</span><button type="button" class="zoom" data-card="04">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">一句回饋拆成幾個面向，面向再聚成指標</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 1 上半、第 2.2 節：兩條 WebVoyager 軌跡的回饋落地成三個面向，加上另一條軌跡的一個，分群成兩個指標；箭頭從證據指向它歸納出的類別</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:460px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 16px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#8A93A0;">01</div><div><div style="font-size:15px; font-weight:700; color:#1C2431;">收回饋：一條軌跡一句話</div><div style="margin-top:3px; font-size:12.5px; color:#6B7380;">例：沒用下拉選單選到 iPhone 14／15 Pro</div></div></div>
+  <div style="position:absolute; left:60px; top:234px; width:460px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 16px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#8A93A0;">02</div><div><div style="font-size:15px; font-weight:700; color:#1C2431;">回饋落地：<span style="white-space:nowrap">GPT-4o</span> 拆成面向</div><div style="margin-top:3px; font-size:12.5px; color:#6B7380;">每條對到一段軌跡：行為、回饋、正負號</div></div></div>
+  <div style="position:absolute; left:60px; top:318px; width:460px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 16px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#8A93A0;">03</div><div><div style="font-size:15px; font-weight:700; color:#1C2431;">行為分群：<span style="white-space:nowrap">o3-mini</span> high 聚成 N 群</div><div style="margin-top:3px; font-size:12.5px; color:#6B7380;">M 條軌跡的面向一起分，粒度盡量小</div></div></div>
+  <div style="position:absolute; left:60px; top:402px; width:460px; height:70px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:10px 16px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#2E7B4F;">04</div><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">寫成指標：定義＋好壞例子</div><div style="margin-top:3px; font-size:12.5px; color:#6B7380;">每一群一段定義，加上好行為與壞行為的例子</div></div></div>
+  <div style="position:absolute; left:60px; top:490px; width:460px; font-size:13px; color:#6B7380; line-height:1.6;">「搜尋做對了，但沒依價格排序」這一句，<br>就落地成一正一負兩個面向。</div>
+
+  <div style="position:absolute; left:900px; top:150px; width:320px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:rgba(255,255,255,0.65);">METRICS</div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">WebVoyager 的指標組 · N 個</div></div></div>
+
+  <div style="position:absolute; left:620px; top:236px; width:380px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">Element Interaction Accuracy</div><div style="font-size:12px; color:#6B7380;">介面元素操作的準確度</div></div></div>
+  <div style="position:absolute; left:1120px; top:236px; width:380px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">Query and Search Strategy</div><div style="font-size:12px; color:#6B7380;">查詢與搜尋策略</div></div></div>
+
+  <div style="position:absolute; left:580px; top:326px; width:225px; height:60px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13px; font-weight:700; color:#1C2431;">選了 iPhone 16 Pro Max</div><div style="font-size:12px; color:#C8501F;">沒選到 14 或 15 · 負</div></div></div>
+  <div style="position:absolute; left:825px; top:326px; width:225px; height:60px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13px; font-weight:700; color:#1C2431;">點了商品分類</div><div style="font-size:12px; color:#C8501F;">沒用對排序的選單 · 負</div></div></div>
+  <div style="position:absolute; left:1070px; top:326px; width:225px; height:60px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13px; font-weight:700; color:#1C2431;">搜尋字詞用對了</div><div style="font-size:12px; color:#2E7B4F;">回饋 · 正</div></div></div>
+  <div style="position:absolute; left:1315px; top:326px; width:225px; height:60px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13px; font-weight:700; color:#1C2431;">這種查詢不被支援</div><div style="font-size:12px; color:#C8501F;">回饋 · 負</div></div></div>
+
+  <div style="position:absolute; left:580px; top:426px; width:225px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">TRAJECTORY A</div><div style="font-size:13px; color:#2B3340;">比價 iPhone 14 Pro／15 Pro</div></div></div>
+  <div style="position:absolute; left:825px; top:426px; width:470px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">TRAJECTORY B</div><div style="font-size:13px; color:#2B3340;">找登山用品並依價格排序：搜尋做對了，但沒排序</div></div></div>
+  <div style="position:absolute; left:1315px; top:426px; width:225px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">OTHER PAIRS</div><div style="font-size:13px; color:#2B3340;">其他軌跡與回饋</div></div></div>
+  <div style="position:absolute; left:580px; top:506px; width:960px; font-size:13px; color:#6B7380; line-height:1.6;">樹由下往上長：軌跡與回饋是葉，面向是證據，指標是歸納出的類別。兩個「沒用對介面元素」的負面向，都成了同一個指標的壞行為例子。</div>
+
+  <div style="position:absolute; left:60px; top:590px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">面向是一個三元組</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">行為、回饋、正負號。<span style="white-space:nowrap">GPT-4o</span> 先拆條列，<br>再替每條找出對應的那段軌跡，<br>最後用限制解碼照格式輸出。</div>
+    <div style="font-size:13px; color:#8A93A0;">每條軌跡通常 1 到 5 個面向，平均 1 到 2 個。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:590px; width:470px; height:196px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;"><span style="white-space:nowrap">K-means</span> 只會依任務分群</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">把面向轉成向量做 <span style="white-space:nowrap">K-means</span>，群多半依任務分，<br>不是依行為；改由 LLM 直接分群，<br>指示：粒度盡量小，但不要只限一個網站。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說 <span style="white-space:nowrap">o3-mini</span> high 得到最準的覆蓋率與冗餘率。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:590px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">指標有定義，也有正反例</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">同一維度的正負面向放進同一個指標，<br>例如「最後當掉」與「很快寫好腳本」；<br>定義寫什麼算好，例子讓評審認得出來。</div>
+    <div style="font-size:13px; color:#8A93A0;">拿掉例子，CoGym 的覆蓋率最多掉 30%（第 3.1 節）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：樹依圖 1 上半重畫，節點是整理者的中文摘要；圖上後兩個面向只印了回饋、沒印行為。由下往上的箭頭是整理者的畫法。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M284 222L296 222L290 231Z" fill="#9AA3AE"></path>
+    <path d="M284 306L296 306L290 315Z" fill="#9AA3AE"></path>
+    <path d="M284 390L296 390L290 399Z" fill="#9AA3AE"></path>
+    <path d="M692 424V388" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M937 424V388" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1182 424V388" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1427 424V388" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M692 324L752 294" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M937 324L878 294" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1182 324L1250 294" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1427 324L1370 294" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M810 234L990 202" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1310 234L1130 202" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p><strong>回饋落地。</strong>標註者的一句回饋常常包含好幾個面向。論文舉 CoGym 的一句使用者留言：agent 很會排出前後一致的行程與度假計畫，只是最後幾分鐘當掉了。這句話裡有一個正面的面向（行程前後一致），也有一個負面的面向（最後當掉）。作者把面向定義成三元組：行為、回饋、正負號。以正面那個為例，行為是 agent 替馬爾地夫排出 20 天行程的那些動作，回饋是這份行程前後一致，正負號是正。作者說這一步和主題分析裡的編碼很像。</p>
+    <p>做法是把軌跡和回饋一起交給 GPT-4o（作者說它在前導實驗裡表現好），指示它先把回饋拆成條列，再替每一條找出回饋指的那一段軌跡，最後用限制解碼逼它照三元組的格式輸出。實驗裡多數資料集，每條軌跡能產生 1 到 5 個面向，平均 1 到 2 個。</p>
+    <p><strong>行為分群。</strong>第二步把面向分成 N 群，每一群就是一個指標。論文用同一個資料集的另一句留言說明：AI 很快就寫好並執行了 Python 腳本。這個面向是正面的，但它和前面「最後當掉」反映的是同一個行為維度，只是方向相反，所以會落進同一個指標。每個指標有三個部分：一段定義，寫出什麼樣的行為算好；一組好行為的例子；一組壞行為的例子。作者說這一步和主題分析裡歸納主題的那一步很像。</p>
+    <p>把相似的 agent 行為聚在一起，對統計式的分群方法很難。作者在註腳說，他們在前期實驗試過把面向用 text-embedding-3-large 轉成向量再做 K-means，分出來的群大多依任務分，而不是依行為分。他們改學 LLM 做語意分群與概念歸納的研究（作者引 LLooM 等），直接請 LLM 分群；用的是 o3-mini high，因為它在後面的評估裡得到最準的覆蓋率與冗餘率。M 條軌跡的所有面向一起分成 N 個指標，N 是第 5 章要調的參數。給分群模型的指示大意是：分群的粒度要盡量小，只有非常相似的行為才放在一起；但不要只限於某一個網站或某一個角色。作者說這樣做出來的指標比較具體，又還能跨任務使用。</p>
+    <p>圖 1 的上半是一個完整的例子（第 04 卡）。兩條 WebVoyager 軌跡各有一句回饋：一條要比較 iPhone 14 Pro 與 15 Pro，回饋說 agent 沒用下拉選單選到 14 或 15；另一條要搜尋登山用品並依價格排序，回饋說搜尋做對了、但沒有依價格排序。第二句回饋拆成一正一負兩個面向。兩個「沒用對介面元素」的負面向，都成了 Element Interaction Accuracy 的壞行為例子；「搜尋字詞用對了」成了 Query and Search Strategy（查詢與搜尋策略）的好行為例子，另一條軌跡的「這種查詢不被支援」則成了它的壞行為例子。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>附錄 G · 一個指標</th><th>內容（整理者精簡改寫）</th></tr></thead>
+        <tbody>
+          <tr><td>名稱</td><td>Context-Sensitive Decision Making（依情境做決定）；Baba-is-ai 第 0 輪歸納出的指標之一</td></tr>
+          <tr><td>定義</td><td>agent 能不能依眼前的遊戲狀況調整行動：什麼時候障礙需要處理、改規則，什麼時候直接走過去就好</td></tr>
+          <tr><td>好行為的例子</td><td>勝利條件已經拿得到時，不去做多餘的規則修改；行動集中在看得到的勝利條件上；依地圖配置與目前的規則調整策略</td></tr>
+          <tr><td>壞行為的例子</td><td>做一堆對贏沒有幫助的探索；一直往牆上撞，很久才換策略；去改不相關的規則；不依情境線索調整，進度拖延</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="pullquote">
+      面向是一筆筆證據，指標是從證據裡歸納出的類別；定義說它是什麼，例子讓評審認得出它。
+      <cite>整理自第 2.2 節</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="meta-evaluation" data-toc="覆蓋率與冗餘率">
+  <div class="container head">
+    <p class="chapter">Chapter 04 · Evaluation Process · Meta Evaluation</p>
+    <h2><span class="seg">覆蓋率看漏了什麼，</span><span class="seg">冗餘率看多了什麼</span></h2>
+    <p class="lede">歸納出的指標交給 LLM 評審，替每條軌跡在每個指標上打正、負或不適用；打出來的特徵再和人的回饋拆出的面向配對。配得到的面向算涵蓋，沒有人提到的特徵算冗餘。</p>
+    
+  </div>
+  <div class="cardband" id="card-05"><div class="cardlabel"><span class="n">圖卡 05 / 11</span><span class="t">覆蓋率與冗餘率怎麼算</span><button type="button" class="zoom" data-card="05">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">覆蓋率看漏了什麼，冗餘率看多了什麼</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 1 下半、第 2.3 節：一條要找「雞肉加藜麥」食譜的 WebVoyager 軌跡。評審打出的特徵和人的回饋拆出的面向配對，正配正、負配負</div>
+
+  <div style="position:absolute; left:420px; top:138px; font-size:13px; font-weight:700; color:#4B5866;">LLM 評審替這條軌跡打出的特徵 →</div>
+  <div style="position:absolute; left:60px; top:196px; font-size:13px; font-weight:700; color:#4B5866;">人的回饋拆出的面向 ↓</div>
+  <div style="position:absolute; left:1150px; top:196px; width:150px; text-align:center; font-size:13px; font-weight:700; color:#4B5866;">這一列</div>
+
+  <div style="position:absolute; left:420px; top:164px; width:170px; height:50px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:12px; font-weight:700; color:#2E7B4F;">正特徵 +1</div><div style="font-size:13px; color:#1C2431;">搜尋字詞正確</div></div></div>
+  <div style="position:absolute; left:600px; top:164px; width:170px; height:50px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:12px; font-weight:700; color:#2E7B4F;">正特徵 +1</div><div style="font-size:13px; color:#1C2431;">用對了按鈕</div></div></div>
+  <div style="position:absolute; left:780px; top:164px; width:170px; height:50px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:12px; font-weight:700; color:#C8501F;">負特徵 −1</div><div style="font-size:13px; color:#1C2431;">應選 Chicken w/ …</div></div></div>
+  <div style="position:absolute; left:960px; top:164px; width:170px; height:50px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:12px; font-weight:700; color:#C8501F;">負特徵 −1</div><div style="font-size:13px; color:#1C2431;">沒有藜麥，不合需求</div></div></div>
+
+  <div style="position:absolute; left:60px; top:226px; width:340px; height:58px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:0px 16px; display:flex; align-items:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">食譜裡沒有雞胸肉，也沒有藜麥</div><div style="font-size:12px; color:#C8501F;">負面向 · 來自人的回饋</div></div></div>
+  <div style="position:absolute; left:60px; top:296px; width:340px; height:58px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:0px 16px; display:flex; align-items:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">agent 很有效率地找到食譜</div><div style="font-size:12px; color:#2E7B4F;">正面向 · 來自人的回饋</div></div></div>
+
+  <div style="position:absolute; left:420px; top:226px; width:170px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#F7F8FA; border:1px dashed #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:12px; color:#8A93A0;">正負不同，不配</div>
+  <div style="position:absolute; left:600px; top:226px; width:170px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#F7F8FA; border:1px dashed #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:12px; color:#8A93A0;">正負不同，不配</div>
+  <div style="position:absolute; left:780px; top:226px; width:170px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:13px; color:#6B7380;">沒配上</div>
+  <div style="position:absolute; left:960px; top:226px; width:170px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#FFFFFF;">✓ 配上</div>
+
+  <div style="position:absolute; left:420px; top:296px; width:170px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:13px; color:#6B7380;">沒配上</div>
+  <div style="position:absolute; left:600px; top:296px; width:170px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:13px; color:#6B7380;">沒配上</div>
+  <div style="position:absolute; left:780px; top:296px; width:170px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#F7F8FA; border:1px dashed #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:12px; color:#8A93A0;">正負不同，不配</div>
+  <div style="position:absolute; left:960px; top:296px; width:170px; height:58px; box-sizing:border-box; border-radius:4px; background-color:#F7F8FA; border:1px dashed #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:12px; color:#8A93A0;">正負不同，不配</div>
+
+  <div style="position:absolute; left:1150px; top:240px; width:150px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#2E7B4F;">✓ 涵蓋</div>
+  <div style="position:absolute; left:1150px; top:310px; width:150px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#C8501F;">✗ 沒涵蓋</div>
+
+  <div style="position:absolute; left:450px; top:368px; width:110px; height:28px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#C8501F;">冗餘</div>
+  <div style="position:absolute; left:630px; top:368px; width:110px; height:28px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#C8501F;">冗餘</div>
+  <div style="position:absolute; left:810px; top:368px; width:110px; height:28px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#C8501F;">冗餘</div>
+  <div style="position:absolute; left:990px; top:368px; width:110px; height:28px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#2E7B4F;">有人提到</div>
+  <div style="position:absolute; left:250px; top:372px; width:150px; text-align:right; font-size:13px; font-weight:700; color:#4B5866;">這一欄 →</div>
+
+  <div style="position:absolute; left:1330px; top:226px; width:210px; height:110px; box-sizing:border-box; border-radius:8px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:19px; font-weight:700; color:#2E7B4F;">覆蓋率 1／2</div><div style="margin-top:4px; font-size:12.5px; color:#6B7380;">看每一列：面向<br>有沒有配到特徵</div></div></div>
+  <div style="position:absolute; left:1330px; top:350px; width:210px; height:70px; box-sizing:border-box; border-radius:8px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:19px; font-weight:700; color:#C8501F;">冗餘率 3／4</div><div style="margin-top:2px; font-size:12.5px; color:#6B7380;">4 個特徵，3 個沒人提</div></div></div>
+
+  <div style="position:absolute; left:60px; top:440px; width:1070px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:16px; padding:0px 18px;"><div style="flex-shrink:0; padding:4px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">N/A</div><div style="font-size:14px; color:#2B3340;">另有 4 個指標被判不適用，不產生特徵；第二個面向沒涵蓋，是因為和它對應的指標被判 N/A。</div></div>
+  <div style="position:absolute; left:1150px; top:436px; width:390px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">整個資料集的彙總（圖 1 印出）</div><div style="font-size:17px; font-weight:700; color:#FFFFFF;">覆蓋率 82% · 冗餘率 75%</div></div></div>
+  <div style="position:absolute; left:60px; top:512px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">第 2.3 節：覆蓋率＝所有例子的面向裡，配到特徵的比例；冗餘率＝所有例子的特徵裡，沒和任何面向配上的比例。正面向只和正特徵配、負面向只和負特徵配，配對交給 <span style="white-space:nowrap">GPT-4o</span>。</div>
+
+  <div style="position:absolute; left:60px; top:590px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">評審：每個指標 +1、−1 或 N/A</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">+1 是正特徵、−1 是負特徵；指標的分數是<br>打正的軌跡數 ÷（打正＋打負），N/A 不算。<br>評審也能換成規則式的檢查。</div>
+    <div style="font-size:13px; color:#8A93A0;">例：<span style="white-space:nowrap">valid-search-terms</span> 只在要搜尋的任務適用。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:590px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">覆蓋率：人在意的，抓到幾成</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">面向要配到特徵才算涵蓋：要有相近的指標，<br>評審的判斷也要和人一樣；<br>任一件沒做到，就算沒涵蓋。</div>
+    <div style="font-size:13px; color:#8A93A0;">每個面向找最配的一個特徵，或判定沒有。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:590px; width:470px; height:196px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">冗餘率：偵測到，但沒人提</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">特徵沒和任何面向配上，就算冗餘；<br>第 1 節說它是人沒提到的特徵比例。<br>作者挑指標時把它壓低，讓指標組精簡。</div>
+    <div style="font-size:13px; color:#8A93A0;">指標越多，冗餘率越高（第 1、3.1 節）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：方格照圖 1 下半重畫，面向與特徵是整理者的中文摘要；1／2、3／4、82%、75% 都是圖 1 印的值。第 3.1 節寫的 WebVoyager 最高覆蓋率是 88%。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M1132 255H1148" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M1132 325H1148" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M1302 255H1328" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M1302 325H1328" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M1102 382H1328" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c05)"></path>
+    <path d="M505 356V366" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M685 356V366" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M865 356V366" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M1045 356V366" stroke="#9AA3AE" stroke-width="1.5"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p><strong>用歸納出的指標評估 agent。</strong>LLM 評審（LLM-as-a-Judge），更廣地說是用模型評估，就是讓一個機器學習模型評估另一個模型的輸出。作者說它行不行，要看評估（或驗證）比生成、比行動容易多少；agent 任務裡這個差距通常很大：做事的模型要一步步做很多決策，評估的模型只要替軌跡分類，所以 agent 的基準常用它（作者引 WebArena、WebVoyager、Sotopia）。AutoLibra 把歸納出的指標放進評審的設定裡，替軌跡打分。</p>
+    <p>評審也可以換掉。作者舉例，一個叫 interact-valid-element 的指標，可以改用規則式的評估器，檢查 agent 有沒有和網頁上有效的元素互動；AutoLibra 也能搭配程式化的評估，替歸納出的指標產生程式則留給未來。</p>
+    <p>評審的做法（圖 8）：輸入歸納出的指標，LLM 替每條軌跡在每個指標上打 +1、−1 或 N/A，用的是 o3-mini medium，作者說它在這一步和 o3-mini high 的結果差不多。打 +1 的指標是這條軌跡的正特徵，打 −1 的是負特徵。算一個指標的分數時，用打正的軌跡數除以打正與打負的軌跡數，打 N/A 的不算，因為不是每個指標都適用每條軌跡；例如 valid-search-terms 只有任務需要搜尋時才適用。</p>
+    <p><strong>後設評估。</strong>這是閉環的最後一段，評估的對象是 AutoLibra 歸納出的指標本身。它把評審偵測到的特徵，和人的回饋落地出的面向配對，要確認兩件事：歸納出的指標有沒有涵蓋標註者在意的行為，以及評審用這些指標能不能評得準。以第 3 章的例子說，如果 respond-promptly 被歸納成一個指標，評審的看法也和標註者一樣，這個面向就算成功涵蓋；如果沒有歸納出相近的指標，或評審給了不同的分數，就算沒涵蓋。</p>
+    <p>配對的做法（圖 9）：每一對軌跡與回饋，先把面向分成正負兩組，特徵也依打分分成正負兩組，正面向只和正特徵配，負面向只和負特徵配。作者把面向清單和特徵清單交給 GPT-4o，請它替每個面向找出最配的特徵，或判定沒有。整個資料集的覆蓋率，是所有例子的面向裡配得到特徵的比例；冗餘率是所有例子的特徵裡沒和任何面向配上的比例。</p>
+    <p>圖 1 的下半是一個實例（第 05 卡）。一條要找「雞肉加藜麥」食譜並存起來的軌跡，評審打出兩個正特徵、兩個負特徵，另有四個指標判為不適用；人的回饋拆成兩個面向。「agent 找的食譜沒有雞胸肉也沒有藜麥」配上了一個負特徵，算涵蓋；「agent 很有效率地找到食譜」沒配上，因為和它對應的指標被評審判成不適用。圖上印出這一例「2 個面向涵蓋 1 個、4 個特徵有 3 個冗餘」，以及彙總的覆蓋率 82%、冗餘率 75%。圖 1 的例子都來自 WebVoyager；第 3.1 節寫的 WebVoyager 最高覆蓋率是 88%，論文沒有說明圖 1 的彙總值用的是哪一組指標，兩個數字照錄。</p>
+
+    <div class="codeblock">
+      <span class="file">四次 LLM 呼叫 · 依第 2.2、2.3 節的文字整理的教學用精簡版，不是論文的程式</span>
+<pre class="code"><span class="c"># ① 回饋落地（GPT-4o，限制解碼）</span>
+aspects = llm(軌跡, 回饋, 指示=<span class="s">"把回饋拆成條列；每一條找出它指的那段軌跡"</span>)
+<span class="c"># 每個 aspect ＝ (behavior 行為, feedback 回饋, sign 正負號)</span>
+
+<span class="c"># ② 行為分群（o3-mini high）</span>
+metrics = llm(M 條軌跡的所有 aspects, <span class="k">N</span>,
+              指示=<span class="s">"粒度盡量小；只把非常相似的行為放一起；不要只限一個網站或角色"</span>)
+<span class="c"># 每個 metric ＝ 定義 ＋ 好行為例子 ＋ 壞行為例子</span>
+
+<span class="c"># ③ LLM 評審（o3-mini medium）</span>
+ratings = llm(軌跡, metrics)          <span class="c"># 每個指標：+1、-1 或 N/A</span>
+指標分數 = 打 +1 的軌跡數 ÷ (打 +1 的 ＋ 打 -1 的)   <span class="a"># N/A 不算</span>
+
+<span class="c"># ④ 後設評估（GPT-4o）</span>
+match = llm(aspects, traits)          <span class="c"># 正配正、負配負；每個 aspect 找最配的 trait 或「沒有」</span>
+coverage   = 配到 trait 的 aspect 數 ÷ aspect 總數
+redundancy = 沒配到任何 aspect 的 trait 數 ÷ trait 總數</pre>
+    </div>
+
+    <div class="explain stone">
+      <span class="label">整理者的讀法</span>
+      <h4>兩個數字各自在量什麼</h4>
+      <p>覆蓋率同時量兩件事：有沒有歸納出相近的指標，以及評審的判斷和人一不一致。任一件沒做到，這個面向就算沒涵蓋；所以覆蓋率低時，要分開看是指標缺了，還是評審判錯了，第 6 章的人工抽查就是單獨查評審這一步。冗餘率高，則不代表那些特徵判錯了：人每條軌跡只寫一句話，沒提到的行為不一定不存在。作者在選指標時壓低冗餘率，目的是讓指標組精簡、彼此少重疊（第 5 章）。這一段是整理者的讀法，論文沒有這樣拆。</p>
+    </div>
+
+    <div class="thought">
+      <span class="label">思考題 · 01</span>
+      <h4>你的評估清單裡，有幾條是使用者真的說過的？</h4>
+      <p>找 20 則最近的使用者評語或客訴，每則拆成一到兩個「行為＋評價」的面向，再對到你現有的評估清單。</p>
+      <p class="hint">對不上任何一條的面向，是清單漏掉的東西，相當於覆蓋率的缺口；清單裡從來沒有人提過的項目，則是冗餘率的來源，值得問一句還要不要留。這個練習是整理者依第 2.3 節的兩個定義設計的，論文沒有提供門檻或建議值。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="optimization" data-toc="指標數怎麼挑">
+  <div class="container head">
+    <p class="chapter">Chapter 05 · Metric Optimization · Iterative Metric Induction</p>
+    <h2><span class="seg">先求覆蓋率，</span><span class="seg">再壓低冗餘率</span></h2>
+    <p class="lede">指標要有幾個，AutoLibra 用後設指標來挑：每一輪產生 20 組指標數不同的指標，先留下覆蓋率接近最高的幾組，再從中挑冗餘率最低的；指標數的範圍一輪一輪縮小，通常三輪內收斂。</p>
+    
+  </div>
+  <div class="cardband" id="card-06"><div class="cardlabel"><span class="n">圖卡 06 / 11</span><span class="t">指標數怎麼挑</span><button type="button" class="zoom" data-card="06">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">先求覆蓋率，再挑冗餘率最低的一組</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.1 節、圖 2：指標數 N 是要調的參數。每一輪產生 20 組指標、在人的回饋上算兩個後設指標，依規則挑一組，再把 N 的範圍縮到它的 ±2</div>
+
+  <div style="position:absolute; left:636px; top:130px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">閘：覆蓋率優先</div>
+  <div style="position:absolute; left:924px; top:130px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">再比冗餘率</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:120px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">Step 1　產生指標組</div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#1C2431; line-height:1.2;">20 組</div>
+    <div style="margin-top:4px; font-size:12.5px; color:#6B7380;">第一輪 N 從 4 到 13</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:120px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">Step 2　算兩個後設指標</div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#1C2431; line-height:1.2;">2 個數</div>
+    <div style="margin-top:4px; font-size:12.5px; color:#6B7380;">每組的覆蓋率與冗餘率</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:120px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">Step 3　留下覆蓋率高的</div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#C8501F; line-height:1.2;">−1%</div>
+    <div style="margin-top:4px; font-size:12.5px; color:#6B7380;">覆蓋率不低於最高值減 1%</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:120px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">Step 4　挑冗餘率最低</div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#2E7B4F; line-height:1.2;">1 組</div>
+    <div style="margin-top:4px; font-size:12.5px; color:#6B7380;">留下的組裡，冗餘率最低的</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:120px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#FFFFFF;">Step 5　收斂就停</div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#FFFFFF; line-height:1.2;">≤ 3 輪</div>
+    <div style="margin-top:4px; font-size:12.5px; color:rgba(255,255,255,0.75);">選中那組的兩個數不再變</div>
+  </div>
+
+  <div style="position:absolute; left:220px; top:310px; font-size:13px; font-weight:500; color:#C8501F;">還沒收斂：N 的範圍改成選中的 N ± 2，回到 Step 1 再產生一輪</div>
+
+  <div style="position:absolute; left:60px; top:346px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">圖 3</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">各種 N 的最高覆蓋率在 N ＝ 6 到 10 附近收斂。Sotopia 的最佳覆蓋率 60% 最低，WebArena 與 WebVoyager 的 88% 最高；<br>作者也試過遺傳演算法與迭代分群，都沒有比這個簡單的做法好。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:458px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:480px; font-size:20px; font-weight:700; color:#1C2431;">三件和挑指標有關的事</div>
+
+  <div style="position:absolute; left:60px; top:524px; width:470px; height:224px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">保留的回饋，差不到 5%</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">沒用來歸納的軌跡，覆蓋率只比歸納用的差一點；<br>作者說這在預期之內，因為指標裡的例子<br>就取自歸納用的那些軌跡。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">每個資料集隨機留 20% 的軌跡做驗證（第 2.1 節）。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:524px; width:470px; height:224px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">拿掉正反例，覆蓋率最多掉 30%</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">圖 3 的方塊是消融：指標只留定義，<br>拿掉好行為與壞行為的例子；<br>作者說 CoGym 掉得最多。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">每個小圖的方塊都比星號低（整理者看圖）。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:524px; width:470px; height:224px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">迭代歸納：舊指標不改</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">agent 變好之後再歸納：不改既有的定義，<br>只加新行為與新指標，再用同樣的挑法；<br>作者比作一直保留著的單元測試。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">每輪從頭歸納也不掉覆蓋率（第 3.2 節註腳）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：圖 3 的點沒有標數字，60%、88%、5%、30% 都是正文寫的；五格是整理者依第 3.1 節的文字畫的，圖 2 只畫出歸納、評估、最佳化三段。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ao-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+    </defs>
+    <path d="M331 212L343 220L331 228Z" fill="#9AA3AE"></path>
+    <path d="M619 212L631 220L619 228Z" fill="#9AA3AE"></path>
+    <path d="M907 212L919 220L907 228Z" fill="#9AA3AE"></path>
+    <path d="M1195 212L1207 220L1195 228Z" fill="#9AA3AE"></path>
+    <path d="M1057 282V300H193V284" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c06)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 3 節開頭說，AutoLibra 設計成能透過評估流程自我驗證，所以可以去搜尋最能涵蓋人的意見的一組指標。這個最佳化也能在改進 agent 的過程中反覆做：agent 被改好之後，可以在既有的指標上再加新的；作者把它比作軟體開發時一直保留單元測試，避免新功能弄壞既有的功能。</p>
+    <p>第 3.1 節的目標是最大化覆蓋率、最小化冗餘率，兩者之中先顧覆蓋率：先讓評估完整涵蓋 agent 的行為，再減少指標之間的重疊，讓歸納出的指標最有用。做法是產生 20 組不同的指標，指標數 N 從 4 到 13，在人的回饋上算每一組的覆蓋率與冗餘率；留下覆蓋率至少是最高覆蓋率減 1% 的那幾組，再從中選冗餘率最低的一組。接著把 N 的範圍重設成選中的 N 加減 2，再做一次，直到選中那組的覆蓋率與冗餘率收斂，通常 3 輪以內。作者說這個方法很簡單，但他們試過遺傳演算法與迭代分群等其他最佳化策略，沒有一個比它好。</p>
+    <p>結果畫在圖 3。各種指標數的最高覆蓋率，在 N 等於 6 到 10 附近收斂，看資料集而定。Sotopia 的最佳覆蓋率是四個資料集裡最低的 60%，作者認為可能是任務太多樣；WebArena 與 WebVoyager 最高，都是 88%。保留下來沒用來歸納的軌跡，覆蓋率只比歸納用的軌跡差一點（不到 5%），作者說這在預期之內，因為指標裡的例子就是從歸納用的軌跡抽出來的。最後一個發現是好行為與壞行為的例子對指標很關鍵：把它們拿掉，CoGym 的覆蓋率最多掉 30%。</p>
+
+    <div class="explain stone">
+      <span class="label">怎麼讀圖 3</span>
+      <h4>點沒有標數字，只看位置與形狀</h4>
+      <p>圖 3 有四個小圖，各是 CoGym、Sotopia、WebArena、WebVoyager；橫軸是冗餘率、縱軸是覆蓋率。圓點是不同的指標組，顏色代表指標數 N；星號是最佳那一組在保留回饋上的位置；方塊是拿掉好壞例子的消融。點都沒有標數字，本頁只轉述作者寫出的 60%、88%、5% 與 30%。整理者對圖的讀法：四個小圖的圓點大致從左下往右上排，覆蓋率越高的組，冗餘率通常也越高；每個小圖的方塊都比星號低。</p>
+    </div>
+
+    <p><strong>迭代歸納。</strong>第 3.2 節處理改進 agent 的情境：agent 變好之後會出現新的失敗模式或新的行為，所以可以一輪一輪歸納新的指標，這也方便追蹤 agent 在不同輪次的進展。做法是改行為分群那一步：把既有的指標與定義交給 LLM，要求它不改既有指標的定義，只把新的行為加進既有的指標，必要時才加新指標；然後用同樣的最佳化策略，確保新指標涵蓋新冒出來的行為，又不和既有的指標重疊。作者在註腳說，每一輪從頭重新歸納一組指標，實際上也不會損失覆蓋率，他們為了前後一致選了前一種。第 8 章的實驗用的就是這個做法。</p>
+
+    <div class="thought">
+      <span class="label">思考題 · 02</span>
+      <h4>你的評估指標該有幾個，又該多久加一次？</h4>
+      <p>想一個你正在迭代的 agent：現在的評估項目有幾個，最近一次新增是因為什麼？</p>
+      <p class="hint">可以借第 3.1 節的順序：先確認現有項目能涵蓋最近收到的回饋，再刪掉彼此重疊、或從來沒人提到的項目；新版本上線後，只新增、不改舊項目的定義，分數才能跨版本比較。這些步驟是整理者依第 3.1、3.2 節整理的建議。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="human-check" data-toc="人工抽查">
+  <div class="container head">
+    <p class="chapter">Chapter 06 · How Aligned Are the Steps with Human Judgment?</p>
+    <h2><span class="seg">三個步驟請人抽查，</span><span class="seg">平均都有九成</span></h2>
+    <p class="lede">AutoLibra 每一步都靠 LLM，作者就請人逐步抽查：回饋落地、LLM 評審、後設評估三步，每一步在每個資料集隨機抽 40 筆，看結果是不是完全正確。行為分群沒辦法直接查，靠整個迴圈間接驗證。</p>
+    
+  </div>
+  <div class="cardband" id="card-07"><div class="cardlabel"><span class="n">圖卡 07 / 11</span><span class="t">人工抽查四個 LLM 步驟</span><button type="button" class="zoom" data-card="07">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">三個 LLM 步驟請人抽查，分群靠間接驗證</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.3 節、表 1：每一步、每個資料集隨機抽 40 筆，請人判斷是否完全正確（信賴區間約 0.04）；分群要處理 400 多個面向，沒有直接查</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:410px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:18px; font-weight:700; color:#FFFFFF;">一條軌跡經過的四個 LLM</div>
+  <div style="position:absolute; left:60px; top:198px; width:410px; height:270px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:20px 24px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431; line-height:1.5;">每一步的輸出都是模型給的，<br>不是人判斷的</div>
+    <div style="display:flex; align-items:center; gap:10px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#8A93A0;">①</div><div style="font-size:15px; color:#2B3340;">回饋落地 · <span style="white-space:nowrap">GPT-4o</span></div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#8A93A0;">②</div><div style="font-size:15px; color:#2B3340;">行為分群 · <span style="white-space:nowrap">o3-mini</span> high</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#8A93A0;">③</div><div style="font-size:15px; color:#2B3340;">LLM 評審 · <span style="white-space:nowrap">o3-mini</span> medium</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#8A93A0;">④</div><div style="font-size:15px; color:#2B3340;">後設評估 · <span style="white-space:nowrap">GPT-4o</span></div></div>
+    <div style="margin-top:2px; font-size:13px; color:#8A93A0;">↑ 第一個研究問題：這些輸出和人的判斷一致嗎</div>
+  </div>
+
+  <div style="position:absolute; left:580px; top:120px; font-size:20px; font-weight:700; color:#1C2431;">四道檢查（表 1 的平均與各資料集的範圍）</div>
+  <div style="position:absolute; left:580px; top:158px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">1</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">回饋落地：平均 0.95（±0.03）</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">GROUNDING</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">五個資料集 0.93 到 0.98；作者說 WebVoyager 的軌跡長、可做的動作多，落地比較難　✓ 通過</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:250px; width:960px; height:80px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#C8501F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">2</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">行為分群：沒有人工抽查</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">CLUSTERING</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">要人分群 400 多個面向太耗時；改用覆蓋率、冗餘率與其他步驟的結果間接驗證　△ 間接</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:342px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">3</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">LLM 評審：平均 0.92（±0.04）</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0; white-space:nowrap;">LLM-AS-A-JUDGE</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">Sotopia 最低 0.85（作者說社交互動難評），WebVoyager 是 1.00　✓ 通過</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:434px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">4</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">後設評估：平均 0.90（±0.04）</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0; white-space:nowrap;">META-EVALUATION</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">WebVoyager 最低 0.83、WebArena 0.85，CoGym 最高 0.98　✓ 通過</div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:545px; width:480px; height:136px; box-sizing:border-box; background-color:#1F2A3A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#FFFFFF;">判定：三步的平均都在 0.90 以上</div>
+    <div style="font-size:14px; color:rgba(255,255,255,0.78); line-height:1.6;">作者說大部分結果可靠，明顯高於 85%；<br>分群這一步只有間接的證據。</div>
+  </div>
+  <div style="position:absolute; left:580px; top:545px; width:960px; height:136px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">每個資料集的三步平均，最低也有 0.90</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">整理者算的：CoGym、WebArena、WebVoyager、<span style="white-space:nowrap">Baba-is-AI</span> 都在 0.92 以上，Sotopia 是 0.90。<br>單一格低於 0.85 的只有 WebVoyager 的後設評估 0.83；表 1 的圖說寫平均都明顯高於 0.85。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:695px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:716px; font-size:20px; font-weight:700; color:#1C2431;">直接可以拿去用的三條</div>
+  <div style="position:absolute; left:60px; top:752px; font-size:16px; color:#2B3340;">① 每個用 LLM 的步驟，都要能單獨抽出來，請人判斷那一筆對不對。</div>
+  <div style="position:absolute; left:60px; top:784px; font-size:16px; color:#2B3340;">② 抽查的單位是「這一筆完全正確嗎」：一筆裡有一處錯，就算錯。</div>
+  <div style="position:absolute; left:60px; top:816px; font-size:16px; color:#2B3340;">③ 查不了的步驟，用整個迴圈的結果間接驗證，並寫明它沒被直接查過。</div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三條做法是整理者依第 3.3 節歸納的；表 1 有五個資料集，沒有 MiniHack。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M482 336L558 336" stroke="#9AA3AE" stroke-width="2" marker-end="url(#ag-c07)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>這一節回答第一個研究問題：AutoLibra 每一步都用 LLM，這些輸出可不可靠、和人的判斷一不一致。作者請人類專家人工檢查回饋落地、評審與後設評估三個步驟，依是否同意每一筆的結果打 1 或 0。行為分群除外：要人處理並分群超過 400 個面向，太花時間。作者的說法是，覆蓋率與冗餘率，加上迴圈裡其他步驟的驗證結果，可以當作分群這一步的間接驗證。</p>
+    <p>表 1 的數字是被標為完全正確的比例。每一步、每個任務隨機抽 40 筆，作者說這樣可以讓信賴區間小到 0.04 左右，再請標註者判斷每一筆是否完全正確。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 1 · 步驟</th><th>CoGym</th><th>Sotopia</th><th>WebArena</th><th>WebVoyager</th><th>Baba-is-AI</th><th>平均</th></tr></thead>
+        <tbody>
+          <tr><td>回饋落地</td><td>0.95</td><td>0.95</td><td>0.98</td><td>0.93</td><td>0.93</td><td>0.95（±0.03）</td></tr>
+          <tr><td>LLM 評審</td><td>0.90</td><td>0.85</td><td>0.95</td><td>1.00</td><td>0.90</td><td>0.92（±0.04）</td></tr>
+          <tr><td>後設評估</td><td>0.98</td><td>0.90</td><td>0.85</td><td>0.83</td><td>0.95</td><td>0.90（±0.04）</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>作者提醒這些任務差異很大：WebVoyager 的軌跡長、可做的動作多，落地比較難；Sotopia 評的是社交互動，評審比較難。作者的結論是，依人的驗證，AutoLibra 大部分的結果可靠，明顯高於 85%；表 1 的圖說寫每一步與每個資料集的平均都明顯高於 0.85。整理者算了每個資料集三步的平均，最低是 Sotopia 的 0.90；單一格最低的是 WebVoyager 的後設評估 0.83，低於 0.85；Sotopia 的評審與 WebArena 的後設評估都剛好是 0.85。</p>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>抽查量的是「這一步有沒有出錯」</h4>
+      <p>表 1 查的是單一步驟的輸出對不對，例如一句回饋拆出的面向有沒有對到正確的那段軌跡。它回答不了這組指標好不好用、有沒有漏掉人在意的行為，那要看第 4、5 章的覆蓋率與冗餘率；分群這一步也只有靠後者間接驗證。這段提醒是整理者依第 3.3 節整理的。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="lens" data-toc="和專家分類比">
+  <div class="container head">
+    <p class="chapter">Chapter 07 · AutoLibra as a Lens</p>
+    <h2><span class="seg">歸納出的指標，</span><span class="seg">比專家的分類更細</span></h2>
+    <p class="lede">作者把 AutoLibra 當透鏡，在 CoGym、Sotopia、WebVoyager 三個資料集上，把歸納出的指標和原論文作者提出的評估維度或失敗分類對照：多數對得上而且拆得更細，也多找到幾個專家沒列的，但只看行為，也有看不到的東西。</p>
+    
+  </div>
+  <div class="cardband" id="card-08"><div class="cardlabel"><span class="n">圖卡 08 / 11</span><span class="t">和專家的分類比</span><button type="button" class="zoom" data-card="08">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">歸納出的指標，比專家的分類更細</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4 節、表 2：三個資料集各和原論文作者提出的維度或失敗分類對照；百分比是失敗頻率或分數，來自 AutoLibra 或原論文</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:220px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">資料集</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">拆得更細（對上的）</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">專家沒列的（多找到的）</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">AutoLibra 抓不到的</div>
+  </div>
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:120px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:220px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">CoGym</div><div style="font-size:13px; color:#8A93A0;">終端使用者 · 5 類失敗</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; color:#2B3340; line-height:1.55;"><div>9 個指標都對上作者的 5 類失敗；<br>「規劃」39% 拆成反覆修正與適應 47%、<br>自主與主動 28%</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; color:#2B3340; line-height:1.55;"><div>無：9 個指標都對得上作者的類別</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; color:#2B3340; line-height:1.55;"><div>無：5 類都有對應的指標；<br>作者說失敗率也大致相符</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:330px; width:1480px; height:120px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:220px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">Sotopia</div><div style="font-size:13px; color:#8A93A0;">7 個社交智能維度</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; color:#2B3340; line-height:1.55;"><div>目標達成 19% 對上 Goal Completion 14%；<br>Believability 4% 拆成三個：<br>對話自然 5%、個性一致 2%、身分脈絡 1%</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; color:#2B3340; line-height:1.55;"><div>談判策略與策略調整 14%、<br>回應與結束對話 5%、對話的適應與彈性 7%；<br>正文寫 4 個，表 2 列出 3 個</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; color:#2B3340; line-height:1.55;"><div>Relationship、Social Rules 是長尾，沒抓到；<br>Knowledge、Secret、財物利益三個維度，<br>常被前兩個維度涵蓋</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:450px; width:1480px; height:120px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:0px 0px 8px 8px; display:grid; grid-template-columns:220px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#2E7B4F;">WebVoyager</div><div style="font-size:13px; color:#8A93A0;">先前研究的失敗分類</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; color:#2B3340; line-height:1.55;"><div>「卡住」44% 拆成四個：錯誤恢復 15%、<br>步驟效率 13%、導航準確 11%、處理阻擋 2%；<br>幻覺 22% 對上資訊與查證的準確 16%</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; color:#2B3340; line-height:1.55;"><div>查詢與搜尋策略 7%、<br>最後輸出與摘要 18%；<br>作者說兩者都是常見的問題</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; color:#2B3340; line-height:1.55;"><div>視覺定位問題 25%：<br>只看行為，讀不到模型內部的表徵</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">一個類別，拆成幾個行為</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">WebVoyager 的「卡住」拆成四個指標，<br>作者說它們更貼近 agent 的具體行為；<br>Sotopia 的可信度也拆成三個。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">CoGym 的溝通、規劃、環境覺察也各對上兩三個。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">失敗頻率大致對得上</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">CoGym 用指標得 −1 的頻率算失敗率，<br>和作者人工標的各類失敗率大致相符；<br>Sotopia 那兩類也和原本的分數相符。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者說這表示它能自動量測 agent 的失敗。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:196px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">只看行為，就有看不到的</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">視覺定位要解讀模型內部的表徵，<br>AutoLibra 只觀察行為，所以抓不到；<br>Sotopia 的長尾維度也沒歸納出來。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者說 Sotopia 另外五個維度仍然重要。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：欄位是整理者的分法，內容與百分比照表 2 的色塊分組，中文名是整理者譯的。表 2 在 Sotopia 列出 3 個沒對上的指標，正文寫 4 個。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>這一節回答第二個研究問題。比較的對象，是各資料集原本的作者憑經驗提出的評估維度，以及他們整理的失敗模式。表 2 把兩邊並排，括號裡的百分比是失敗頻率或分數，來自 AutoLibra 或原論文。</p>
+    <p><strong>CoGym。</strong>這裡的指標來自終端使用者的回饋。AutoLibra 歸納出 9 個指標，都能對上 CoGym 作者提出的 5 類失敗。AutoLibra 量到的失敗率（指標得 −1 的頻率），也和作者人工標註的各類失敗率大致相符。作者說這表示 AutoLibra 歸納的指標反映了人類專家的分類，還能自動量測 agent 的失敗。表 2 的對應如下（分組照 PDF 的色塊）：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 2 · CoGym 作者的失敗類別</th><th>對上的 AutoLibra 指標（失敗頻率）</th></tr></thead>
+        <tbody>
+          <tr><td>Communication<br>溝通（65%）</td><td>Responsiveness and Efficiency 回應與效率（75%）、Communication Clarity &amp; Notification 溝通清楚與通知（8%）</td></tr>
+          <tr><td>Situational Awareness<br>情境覺察（40%）</td><td>Instruction Adherence &amp; Follow-Through 遵守指示並貫徹（24%）</td></tr>
+          <tr><td>Planning<br>規劃（39%）</td><td>Iterative Refinement and Adaptability 反覆修正與適應（47%）、Autonomy and Proactiveness 自主與主動（28%）</td></tr>
+          <tr><td>Environmental Awareness<br>環境覺察（28%）</td><td>Content Quality and Coherence 內容品質與連貫（16%）、Search and Retrieval Accuracy 搜尋與取回的準確（13%）、Data Analysis Competence 資料分析能力（2%）</td></tr>
+          <tr><td>Personalization<br>個人化（16%）</td><td>Interface and User Experience 介面與使用者體驗（23%）</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p><strong>Sotopia。</strong>Sotopia 提出 7 個評估社交智能的維度。AutoLibra 找回了完全相同的 Goal Completion（目標達成），對上的指標是 Goal Achievement &amp; Outcome Effectiveness（目標達成與結果效果，19%；Goal Completion 是 14%）。另外 3 個指標可以看成 Believability（可信度，4%）的子維度：對話的自然與效率（5%）、個性的一致（2%）、融入身分的脈絡（1%）。作者認為 Believability 可能太高層，AutoLibra 給的是更具體的拆解；這兩類的失敗率，也和 agent 在 Sotopia 維度上的分數大致相符。</p>
+    <p>正文說 AutoLibra 另外歸納出四個 Sotopia-Eval 忽略的指標；表 2 在「沒對上的 AutoLibra 指標」一欄列出三個：Negotiation Tactics and Strategic Adaptability（談判策略與策略調整，14%）、Responsiveness and Conversational Termination（回應與結束對話，5%）、Adaptability and Flexibility in Dialogue（對話的適應與彈性，7%）。四與三兩個數字照錄。作者也說 Sotopia 另外五個維度仍是評估社交智能的重要維度：Financial and Material Benefits、Knowledge、Secret 捕捉到的行為，常常也被 Goal Completion 與 Believability 捕捉到，所以 AutoLibra 在壓低冗餘率時只留下單一的目標達成指標；Relationship 與 Social Rules 捕捉的是長尾的行為，AutoLibra 沒有抓到。</p>
+    <p><strong>WebVoyager。</strong>網頁導航任務也一樣。AutoLibra 歸納出 Access Barrier Handling（處理阻擋，2%）、Error Recovery &amp; Adjustment（錯誤恢復與調整，15%）、Step Efficiency &amp; Action Redundancy（步驟效率與多餘動作，13%）、Navigation Accuracy（導航準確，11%）這類指標；作者說它們比先前研究的失敗分析類別更貼近 agent 的具體行為，那些研究常把這些情況一律歸成「卡住」（Navigation Stuck，44%）。另兩組對應是 Hallucination（幻覺，22%）對上 Information &amp; Verification Accuracy（資訊與查證的準確，16%），Prompt Misalignment（和指示不符，9%）對上 Result Relevance Accuracy（結果的相關程度，9%）。AutoLibra 也找到失敗分析沒提的指標：Query and Search Strategy Efficiency（查詢與搜尋策略，7%）與 Final Output and Summarization Quality（最後輸出與摘要，18%），作者說它們都是常見的問題。反過來，AutoLibra 只觀察 agent 的行為，沒辦法解讀模型內部的表徵，所以抓不到 WebVoyager 論文提到的視覺定位問題（Visual Grounding Issue，25%）。</p>
+    <p>作者用這一節說明 AutoLibra 擅長抽出貼著行為的指標，特別是專家設計時抽不出來的細緻指標。</p>
+
+    <div class="story">
+      <div class="label">關鍵觀念 · 一</div>
+      <h4>同樣是「卡住」，要修的地方不一樣</h4>
+      <p>「卡住」是從結果回頭貼的標籤：任務沒做完，agent 停在某處。拆出來的四個指標說的是停住之前發生了什麼：出錯後沒有恢復、走了多餘的步驟、導航走錯地方、碰到阻擋不會處理。四種情況各有不同的改法，只看「卡住 44%」，不知道該先改哪一個。</p>
+      <p>這一段是整理者的讀法。論文只說這些指標更貼近具體行為，沒有比較四種各該怎麼修。</p>
+    </div>
+
+    <div class="explain stone">
+      <span class="label">整理者對照參考文獻</span>
+      <h4>「專家的分類」有兩份出自同一群研究者</h4>
+      <p>依參考文獻，Sotopia 論文的作者群包括 AutoLibra 的第一作者 Hao Zhu，CoGym 論文的作者群包括最後一位作者 Diyi Yang；WebVoyager 的失敗分類來自其他團隊。論文沒有討論這一點，這裡只列出作者名單的關係，不推論它對結果的影響。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="ladder" data-toc="拿指標改 agent">
+  <div class="container head">
+    <p class="chapter">Chapter 08 · AutoLibra as a Ladder</p>
+    <h2><span class="seg">照指標改 prompt，</span><span class="seg">成功率跟著升</span></h2>
+    <p class="lede">作者拿 AutoLibra 當改進 agent 的階梯：在要改寫遊戲規則的 Baba-Is-AI 上，每個階段先收人的回饋、歸納指標，再讓 LLM 依指標的評分改 agent 的 prompt。三個階段下來，沒有拿成功率當目標，成功率也提高了。</p>
+    
+  </div>
+  <div class="cardband" id="card-09"><div class="cardlabel"><span class="n">圖卡 09 / 11</span><span class="t">照指標改 prompt 的三個階段</span><button type="button" class="zoom" data-card="09">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">沒拿成功率當目標，成功率也升了</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 5 節、圖 4：<span style="white-space:nowrap">Baba-Is-AI</span> 的 40 個任務只挑 6 個收回饋；每個階段開始前，人看這 6 個任務各 3 條軌跡寫回饋，再由 LLM 依指標的評分改 agent 的 prompt</div>
+
+  <div style="position:absolute; left:100px; top:170px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;"><span style="letter-spacing:0.1em; white-space:nowrap">BABA-IS-AI</span> &#183; 三個階段</div>
+  <div style="position:absolute; left:180px; top:240px; width:426px; height:60px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">第 1 階段 · 歸納 5 個指標</div>
+  <div style="position:absolute; left:610px; top:240px; width:426px; height:60px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">第 2 階段 · 再歸納 5 個</div>
+  <div style="position:absolute; left:1040px; top:240px; width:316px; height:60px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">第 3 階段 · 再加 1 個</div>
+  <div style="position:absolute; left:1360px; top:240px; width:140px; height:60px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">想太多</div>
+
+  <div style="position:absolute; left:60px; top:345px; width:240px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">開始前：人給回饋</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center;">6 個任務各 3 條，共 18 條</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">學會依地圖邊界決定組哪些規則</div>
+  </div>
+  <div style="position:absolute; left:490px; top:345px; width:240px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">再收一次回饋</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center;">迭代歸納：舊的定義不改</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">組出勝利條件</div>
+  </div>
+  <div style="position:absolute; left:920px; top:345px; width:240px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">第三次回饋</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center;">這一階段只再加 1 個指標</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">組出自我指涉的規則</div>
+  </div>
+  <div style="position:absolute; left:1300px; top:345px; width:240px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-size:15px; font-weight:700; color:#C8501F;">agent 開始想太多</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center;">圖 4 標「表現下滑」</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">成功率在這裡回落</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:452px; width:1480px; height:52px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">階段之內</div>
+    <div style="font-size:15px; color:#2B3340;">反覆把 6 個任務各一條軌跡，連同依指標的評分交給 LLM 改 agent 的 prompt；圖 4 的統計用的是全部 40 個任務。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:540px; width:470px; height:206px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">一個模型包辦三個角色</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">Gemini 2.5 Flash 同時是 agent、<br>AutoLibra 裡的 LLM，以及改 prompt 的模型；<br>投稿時在 BALROG 排第 3：<span style="white-space:nowrap">50.8% ± 4.6%</span>。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">最好的結果是 <span style="white-space:nowrap">56.7% ± 4.5%</span>；作者說選它是成本與表現的取捨。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:540px; width:470px; height:206px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">照指標改，技能一階一階長</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">第 1 階段學會依地圖邊界組規則，<br>第 2、3 階段組出勝利條件與自我指涉的規則；<br>作者認為這可能來自對應的指標。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">指標名：<span style="white-space:nowrap">map-n-constraint-recognition</span>、<span style="white-space:nowrap">rule-manipulation-proficiency</span>。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:540px; width:470px; height:206px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">提升 20%，沒說是哪一種 %</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">作者說成功率提升 20%，引言寫超過 20%；<br>沒有交代是百分點還是相對比例，<br>圖 4 的線上也沒有標數字。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">圖說：成功率一路改善到第 3 階段，之後開始想太多。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：時間軸依圖 4 與第 5 節重畫，只標定性的事件，技能與指標的關聯是作者的推測。正文說第 1、2 階段得到 5 個指標，圖 4 標的是 5、再 5、再 1。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M100 320H1500" stroke="#D5DAE1" stroke-width="2"></path>
+    <circle cx="180" cy="320" r="9" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="610" cy="320" r="9" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="1040" cy="320" r="9" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="1420" cy="320" r="9" fill="#C8501F" stroke="#FFFFFF" stroke-width="3"></circle>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>這一節回答第三個研究問題：AutoLibra 既然能從人的回饋自動歸納指標，能不能讓 agent 透過反覆的回饋自我調節、變得更好？做法是把 agent 的 prompt 往 AutoLibra 指標上的更高分最佳化。</p>
+    <p>測試環境是有挑戰性的 2D 遊戲 Baba-Is-AI，靈感來自 Baba Is You：它不只要照規則達成目標，還要改寫規則，包括自我指涉的規則。圖 5 的例子裡，agent 要把「baba is you」改成「door is you」，才能控制牆另一邊的綠色門，再組出新的勝利規則「ball is win」，走到紅色的球才算贏。作者說要在這個資料集拿高分，agent 除了規劃，還要有後設認知的能力，這對用前沿模型的 LLM agent 很難（作者引 BALROG 基準）。</p>
+
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>Baba-Is-AI 的規則怎麼運作（附錄 D）</h4>
+      <p>地圖是方格，上面有物件、規則方塊與障礙。規則由文字方塊排成「主詞、動詞、受詞」三格一列，橫排或直排連成三格才生效，例如 wall is stop；動詞有 is、has、can、not 四種。agent 只能上下左右移動一格去推方塊，也不會被告知這一步有沒有真的移動。把「baba is you」弄斷、又沒控制新的物件，任務會自動重置到隨機的起點。每回合上限 100 步，避免亂走碰巧解出。共有 40 個由易到難的任務，由 Goto-Win、Make-Win、Break-Stop、Change-You 四種子任務組合而成。</p>
+    </div>
+
+    <p>這個實驗從頭到尾用 Gemini 2.5 Flash，同時當 agent、AutoLibra 裡的 LLM，以及改 prompt 的模型。作者說投稿時它在 BALROG 的 Baba-is-AI 排行榜上排第 3，成功率 50.8% ± 4.6%，最好的結果是 56.7% ± 4.5%；選它是在成本與表現之間取捨。</p>
+    <p>改進分三個階段，只對 Baba-Is-AI 40 個任務裡的 6 個提供人的回饋；這樣才能看給訓練任務的回饋，能不能推廣到沒看過的任務。每個階段開始前，人看這 6 個任務各 3 條軌跡、寫回饋，再套用第 5 章的迭代歸納。正文說第 1、2 階段得到 5 個指標，第 3 階段再加 1 個；圖 4 的標註是先歸納 5 個、再歸納 5 個、再歸納 1 個。每個階段之內，反覆把這 6 個任務各一條 agent 軌跡，連同依這些指標的評分，交給 LLM 改進 agent 的 prompt。</p>
+    <p>圖 4 畫的是全部 40 個任務的統計，雖然整個最佳化只用了其中 6 個。作者說，指標的執行中最高分、指標的累積平均，以及遊戲的成功率都持續改善。檢視軌跡，可以看出 agent 學到的技能：第 1 階段，agent 學會依地圖的邊界決定要組哪些規則，作者認為這可能來自歸納出的指標 map-n-constraint-recognition；第 2、3 階段學到更進階的技能，包括組出勝利條件與自我指涉的規則，作者認為可能來自 rule-manipulation-proficiency 這個指標。圖 4 的圖說補了一句：成功率一路改善到第 3 階段，之後 agent 開始想太多。</p>
+    <p>作者的結論是，AutoLibra 歸納的指標是透過 prompt 最佳化改進 agent 的有效目標；在沒有對成功率最佳化的情況下，成功率提高了 20%（引言寫超過 20%）。他們強調 AutoLibra 是歸納指標的方法，和學習演算法互相獨立，prompt 最佳化、微調或強化學習都能搭配；換成其他學習演算法的效果，留給未來研究。</p>
+
+    <div class="explain stone">
+      <span class="label">怎麼讀圖 4</span>
+      <h4>線上沒有數字，只看走勢</h4>
+      <p>圖 4 的縱軸是百分比，刻度標到 40、50、60、70，但每條線上都沒有標數字。整理者對圖的讀法：成功率那條虛線在第 1 階段往上，第 2 階段中間回落一次再往上，第 3 階段前段到最高點、後段往下，圖上在那裡標了「想太多，表現下滑」；三條各階段指標的線是階梯狀往上，累積平均那條最平。論文沒有說 20% 是百分點還是相對比例，圖上的點也沒有數字，本頁不替它補。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="appendix-runs" data-toc="附錄的人工版本">
+  <div class="container head">
+    <p class="chapter">Chapter 09 · Appendix B–P · Human-in-the-loop Runs</p>
+    <h2><span class="seg">人照著指標改提示，</span><span class="seg">分數一輪比一輪高</span></h2>
+    <p class="lede">這一章是整理者彙整 v3 附錄 B 到 P 的另一組實驗，正文沒有引用：人在迴圈裡看 AutoLibra 的指標，手動改 GPT-4o agent 的提示與程式。Baba-is-ai 的分數從 30% 升到 55%，MiniHack 從 0% 到 25%；作者說被瞄準的指標在下一輪明顯上升，但有兩類任務怎麼改都不動。</p>
+    
+  </div>
+  <div class="cardband" id="card-10"><div class="cardlabel"><span class="n">圖卡 10 / 11</span><span class="t">附錄：人照著指標改提示</span><button type="button" class="zoom" data-card="10">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">人照著指標改提示，分數一輪比一輪高</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">附錄 C、表 3、表 5（v3 正文沒有引用）：人在迴圈裡看 AutoLibra 的指標改 agent 的程式；<span style="white-space:nowrap">Baba-is-ai</span> 用 6 個任務歸納、34 個保留，MiniHack 用四個代表任務</div>
+
+  <div style="position:absolute; left:60px; top:146px; display:flex; gap:24px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>第 0 輪（沒改）</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #2E7B4F; box-sizing:border-box;"></div>第 1 輪</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>第 2 輪</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>第 3 輪</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:0px; height:16px; border-left:2px dashed #4B5866;"></div>BALROG 的基線 agent</div>
+    <div style="color:#8A93A0;">點上方的數字是分數 %</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:198px; width:220px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">Baba · <span style="white-space:nowrap">GPT-4o</span></div><div style="font-size:12px; color:#8A93A0;">全部 40 個任務</div></div>
+  <div style="position:absolute; left:60px; top:254px; width:220px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">Baba · <span style="white-space:nowrap">GPT-4o</span></div><div style="font-size:12px; color:#8A93A0;">只看保留的任務</div></div>
+  <div style="position:absolute; left:60px; top:310px; width:220px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">Baba · Claude 3.5</div><div style="font-size:12px; color:#8A93A0;">全部 40 個任務</div></div>
+  <div style="position:absolute; left:60px; top:366px; width:220px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">Baba · Claude 3.5</div><div style="font-size:12px; color:#8A93A0;">只看保留的任務</div></div>
+  <div style="position:absolute; left:60px; top:422px; width:220px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">MiniHack · <span style="white-space:nowrap">GPT-4o</span></div><div style="font-size:12px; color:#8A93A0;">兩輪（第 0 到 2 輪）</div></div>
+
+  <div style="position:absolute; left:300px; top:214px; width:1200px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:300px; top:270px; width:1200px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:300px; top:326px; width:1200px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:300px; top:382px; width:1200px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:300px; top:438px; width:1200px; height:0px; border-top:1px solid #E5E9EE;"></div>
+
+  <div style="position:absolute; left:900px; top:213px; width:500px; height:2px; background-color:#D5DAE1;"></div>
+  <div style="position:absolute; left:960px; top:269px; width:400px; height:2px; background-color:#D5DAE1;"></div>
+  <div style="position:absolute; left:1000px; top:325px; width:400px; height:2px; background-color:#D5DAE1;"></div>
+  <div style="position:absolute; left:1060px; top:381px; width:400px; height:2px; background-color:#D5DAE1;"></div>
+  <div style="position:absolute; left:300px; top:437px; width:500px; height:2px; background-color:#D5DAE1;"></div>
+
+  <div style="position:absolute; left:959px; top:202px; width:0px; height:24px; border-left:2px dashed #4B5866;"></div>
+  <div style="position:absolute; left:959px; top:258px; width:0px; height:24px; border-left:2px dashed #4B5866;"></div>
+  <div style="position:absolute; left:1039px; top:314px; width:0px; height:24px; border-left:2px dashed #4B5866;"></div>
+  <div style="position:absolute; left:959px; top:370px; width:0px; height:24px; border-left:2px dashed #4B5866;"></div>
+  <div style="position:absolute; left:499px; top:426px; width:0px; height:24px; border-left:2px dashed #4B5866;"></div>
+
+  <div style="position:absolute; left:893px; top:207px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:1093px; top:207px; width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #2E7B4F; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:1153px; top:207px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1393px; top:207px; width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:880px; top:184px; width:40px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#6B7380;">30</div>
+  <div style="position:absolute; left:1080px; top:184px; width:40px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">40</div>
+  <div style="position:absolute; left:1140px; top:184px; width:40px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">43</div>
+  <div style="position:absolute; left:1380px; top:184px; width:40px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#1F2A3A;">55</div>
+
+  <div style="position:absolute; left:953px; top:263px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:1093px; top:263px; width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #2E7B4F; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:1173px; top:263px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1353px; top:263px; width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:940px; top:240px; width:40px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#6B7380;">33</div>
+  <div style="position:absolute; left:1080px; top:240px; width:40px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">40</div>
+  <div style="position:absolute; left:1160px; top:240px; width:40px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">44</div>
+  <div style="position:absolute; left:1340px; top:240px; width:40px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#1F2A3A;">53</div>
+
+  <div style="position:absolute; left:993px; top:319px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:1093px; top:319px; width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #2E7B4F; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:1193px; top:319px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1393px; top:319px; width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:980px; top:296px; width:40px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#6B7380;">35</div>
+  <div style="position:absolute; left:1080px; top:296px; width:40px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">40</div>
+  <div style="position:absolute; left:1180px; top:296px; width:40px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">45</div>
+  <div style="position:absolute; left:1380px; top:296px; width:40px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#1F2A3A;">55</div>
+
+  <div style="position:absolute; left:1053px; top:375px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:1133px; top:375px; width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #2E7B4F; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:1233px; top:375px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1453px; top:375px; width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1040px; top:352px; width:40px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#6B7380;">38</div>
+  <div style="position:absolute; left:1120px; top:352px; width:40px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">42</div>
+  <div style="position:absolute; left:1220px; top:352px; width:40px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">47</div>
+  <div style="position:absolute; left:1440px; top:352px; width:40px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#1F2A3A;">58</div>
+
+  <div style="position:absolute; left:293px; top:431px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:543px; top:431px; width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #2E7B4F; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:793px; top:431px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:290px; top:408px; width:40px; text-align:left; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#6B7380;">0</div>
+  <div style="position:absolute; left:530px; top:408px; width:40px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">12.5</div>
+  <div style="position:absolute; left:780px; top:408px; width:40px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">25</div>
+
+  <div style="position:absolute; left:300px; top:470px; width:1200px; height:30px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:306px; top:476px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0</div>
+  <div style="position:absolute; left:490px; top:476px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">10</div>
+  <div style="position:absolute; left:690px; top:476px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">20</div>
+  <div style="position:absolute; left:890px; top:476px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">30</div>
+  <div style="position:absolute; left:1090px; top:476px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">40</div>
+  <div style="position:absolute; left:1290px; top:476px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">50</div>
+  <div style="position:absolute; left:1470px; top:476px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">60</div>
+  <div style="position:absolute; left:1300px; top:504px; width:200px; text-align:right; font-size:12px; color:#8A93A0;">分數 %（表 3、表 5）</div>
+  <div style="position:absolute; left:60px; top:528px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">灰點是沒改過的第 0 輪；短虛線是 BALROG 的基線 agent，<span style="white-space:nowrap">Baba-is-ai</span> 各列依表 3（33% 或 37%），MiniHack 依表 5（10%）。MiniHack 只做了兩輪，所以沒有深藍點。</div>
+
+  <div style="position:absolute; left:60px; top:590px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;"><span style="white-space:nowrap">Baba-is-ai</span>：30% → 55%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;"><span style="white-space:nowrap">GPT-4o</span> 在 40 個任務上一輪比一輪高，<br>只看保留的任務是 33% → 53%；<br>平均的環境步數從 79 降到 51。</div>
+    <div style="font-size:13px; color:#8A93A0;">Claude 3.5 Sonnet 的兩列也是四輪都升（表 3）。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:590px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">覆蓋率 65% → 92%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">每一輪都有新的指標加進來（表 4）；<br>作者說被瞄準的指標在下一輪明顯上升，<br>例如認出勝利條件 35.0% → 55.0%。</div>
+    <div style="font-size:13px; color:#8A93A0;">附錄 I 把這一步寫成提高 22%，表 4 是 20 個百分點。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:590px; width:470px; height:200px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">MiniHack：兩類任務改不動</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">分數 0% → 12.5% → 25%（基線 10%），<br>但和 Boxoban、Quest 有關的四個指標<br>一直是 0.00%，多給例子也沒用。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說 agent 的能力和任務的複雜度差太多。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：這組實驗是早期版本的第 5 節，v3 留在附錄；附錄 C 寫 <span style="white-space:nowrap">GPT-4o</span> 用在所有實驗，表 3 另有 Claude 3.5 Sonnet 兩列。點依表格的數字擺放。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>v3 的摘要說 AutoLibra 有兩個改進 agent 的應用：一是幫人類 prompt 工程師診斷 agent 的失敗、反覆改進 prompt，二是替 agent 的自動最佳化歸納指標。正文第 5 節只寫了第二個；第一個的設定與結果只在附錄 B 到 O，而 v3 正文只引用了附錄 A 的圖。整理者抓了 v1、v2 對照：這些附錄是早期版本第 5 節的實驗，v3 改寫正文時留在附錄裡。所以附錄有幾處和 v3 正文對不上：附錄 C 說所有實驗的 agent 都用 GPT-4o-241120、採人在迴圈的設定，第 5 節則說用 Gemini 2.5 Flash；附錄 D 與 J 說這兩個遊戲是第 4 節用的實驗環境，但 v3 的第 4 節是透鏡那一節（v1 就是這樣寫）。這一章照附錄的表格寫，數字依 v3。</p>
+    <p>附錄 C 的設定：每個環境先跑一個沒改過的 agent 當基線（第 0 輪），再做三輪完整的迭代改進（第 1 到 3 輪），共四輪。Baba-is-ai 用 6 個代表任務歸納指標，其餘 34 個任務保留做評估；每一輪結束時，記錄對 agent 程式的改動、環境分數、軌跡表現與其他指標。附錄 B 的演算法 1 把一輪寫成下面這樣：</p>
+
+    <div class="codeblock">
+      <span class="file">附錄 B · 演算法 1 · 教學用精簡版</span>
+<pre class="code"><span class="k">for</span> 第 i 輪 <span class="k">in</span> range(n_iters):
+    <span class="k">for</span> 任務 <span class="k">in</span> 挑出的任務:
+        軌跡, 分數 = agent.play(任務, prompt)
+        標註 += editor.annotate(軌跡)          <span class="c"># 人對軌跡寫回饋</span>
+    指標 = AutoLibra.extract_metrics(軌跡, 標註)
+    軌跡分數 = AutoLibra.llm_eval(指標, 軌跡)
+    目前分數 = 這一輪的分數
+    <span class="k">while</span> 目前分數 &lt;= 這一輪的分數:          <span class="a"># 新 prompt 還沒超過就繼續改</span>
+        prompt = 改過的 prompt
+        重跑挑出的任務，更新目前分數</pre>
+    </div>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 3 · Baba-is-ai 分數</th><th>第 0 輪</th><th>第 1 輪</th><th>第 2 輪</th><th>第 3 輪</th><th>基線</th></tr></thead>
+        <tbody>
+          <tr><td>GPT-4o</td><td>30%</td><td>40%</td><td>43%</td><td><strong>55%</strong></td><td>33%</td></tr>
+          <tr><td>GPT-4o<br>只看保留任務</td><td>33%</td><td>40%</td><td>44%</td><td>53%</td><td>33%</td></tr>
+          <tr><td>Claude 3.5 Sonnet</td><td>35%</td><td>40%</td><td>45%</td><td>55%</td><td>37%</td></tr>
+          <tr><td>Claude 3.5 Sonnet<br>只看保留任務</td><td>38%</td><td>42%</td><td>47%</td><td>58%</td><td>33%</td></tr>
+          <tr><td>平均環境步數</td><td>79</td><td>63</td><td>60</td><td>51</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>表 3 除了 GPT-4o，也列了 Claude 3.5 Sonnet 的四輪分數，和附錄 C「所有實驗都用 GPT-4o」的說法對不上，兩邊照錄（v1 的正文把 Claude 那兩列寫成換模型的推廣實驗）。表 4 列出各輪歸納的指標，在全部 40 個任務上的分數。覆蓋率從第 0 輪的 65% 升到第 3 輪的 92%，冗餘率依序是 58%、59%、47%、59%；附錄 I 寫平均冗餘率 56%，和四輪的平均（約 55.75%）對得上（整理者核對）。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 4 · 指標</th><th>第 0 輪</th><th>第 1 輪</th><th>第 2 輪</th><th>第 3 輪</th></tr></thead>
+        <tbody>
+          <tr><td>Win Condition Recognition</td><td>35.0%</td><td>55.0%</td><td>87.5%</td><td>87.5%</td></tr>
+          <tr><td>Rule Modification</td><td>0.0%</td><td>10.0%</td><td>37.5%</td><td>61.9%</td></tr>
+          <tr><td>Direct Navigation Efficiency</td><td>5.6%</td><td>22.5%</td><td>27.5%</td><td>37.5%</td></tr>
+          <tr><td>Context-Sensitive Decision Making</td><td>2.5%</td><td>27.5%</td><td>30.0%</td><td>37.5%</td></tr>
+          <tr><td>Win Rule Construction</td><td>（0.0%）</td><td>0.0%</td><td>0.0%</td><td>5.3%</td></tr>
+          <tr><td>Selective Interaction With Relevant Objects</td><td>（35.0%）</td><td>40.0%</td><td>45.0%</td><td>82.5%</td></tr>
+          <tr><td>Rule Manipulation and Execution</td><td>（0.0%）</td><td>12.5%</td><td>31.0%</td><td>35.5%</td></tr>
+          <tr><td>Subtask Coordination</td><td>（2.5%）</td><td>（25.0%）</td><td>27.5%</td><td>35.0%</td></tr>
+          <tr><td>Immovable Interaction</td><td>（64.9%）</td><td>（69.7%）</td><td>（69.7%）</td><td>87.9%</td></tr>
+          <tr><td>覆蓋率</td><td>65.0%</td><td>83.0%</td><td>85.0%</td><td>92.0%</td></tr>
+          <tr><td>冗餘率</td><td>58.0%</td><td>59.0%</td><td>47.0%</td><td>59.0%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>括號裡的數字在原表是灰底。灰底的位置，正好是那個指標被歸納出來之前的輪次；這是整理者對照 v1 的「指標與歸納輪次」表得知的，v3 沒有說明灰底的意思。</p>
+
+    <p>附錄 I 逐輪記錄了 agent 的樣子與改了什麼。第 0 輪 agent 的行為隨機又不一致，進展全靠亂走；Win Condition Recognition（認出勝利條件）被判定是其他指標的前提，所以先改它：加一組觀察與對應的勝利條件、子任務的例子，並加上把特定觀察對到該做哪個子任務的規劃指引。第 1 輪 agent 開始瞄準特定的方塊與物件，但會卡在迴圈與推不動的物件上。接下來的改動包括：在規劃指引裡加入低層的位置指示、用後設提示提供辨認子任務的方法、在例子裡加上移動指示；再來把觀察改寫成絕對座標、列出能推與不能推的方塊、用思維鏈排出子任務的待辦順序、把單一例子擴充成附推理範本的多個例子。到第 3 輪，agent 幾乎都知道牆的規則什麼時候可以打破、什麼時候不必打破，也會組勝利規則，但還搞不懂方塊的方向，也不懂方塊會卡在牆邊。附錄 I 說第 0 到第 1 輪 Win Condition Recognition 提高了 22%，表 4 是 35.0% 到 55.0%，差 20 個百分點（整理者算的）；v1 就是這樣，兩個數字照錄。</p>
+    <p><strong>MiniHack。</strong>它源自 NetHack，比 Baba-is-ai 更複雜也更多變：附錄 J 說基線 agent 的完成率在 MiniHack 是 10%，在 Baba-is-ai 是 33%。作者挑了四個代表任務：推巨石的 Boxoban、在黑暗迷宮裡找下樓梯的 MazeWalk、要應付大老鼠的 Corridor Fight，以及要用工具跨過熔岩牆、在怪物之間存活的 Quest，其餘任務保留做評估，做了兩輪完整的迭代。表 5 的 MiniHack 分數從 0% 到 12.5% 再到 25%，基線 10%；平均步數 85、91、88。</p>
+    <p>表 6 的覆蓋率是 82.89%、81.82%、87.84%，冗餘率 61.11%、65.63%、71.30%。附錄 O 說被瞄準的指標在下一輪明顯上升，例如 Target Navigation Effectiveness（朝目標導航）從 16.67% 到 41.67%；它在第 1 輪反而掉了 8.3%，作者列了三個原因：MazeWalk 的策略太簡化，地圖有迴圈時幫不上忙；看起來直白的行為限制加例子，不足以讓 agent 避開錯誤的動作；Quest 太隨機，既有的指引涵蓋不了新生成的情況。附錄 O 點名四個一直沒變化的指標：Hazard Awareness and Equipment Utilization、Boulder Manipulation Strategy、Role-Specific Ability Utilization 與 Object Pickup Efficiency，表 6 上都是 0.00%，也都和 Boxoban 或 Quest 密切相關。作者說這兩個環境隨機性高、要和系統互動、要精細的規劃，加提示與例子沒有明顯效果：即使給了十幾個「把巨石推進死角」的反例，agent 還是會把巨石推進兩面牆形成的 L 形死角。</p>
+    <p>附錄 O.2 的一個失敗例子很實用。Corridor 系列的任務裡，目標樓梯有時在起點的西邊；Corridor Fight 的目標則總在東邊。一條死板地要 agent 只往東探索的指示，在 Corridor 系列就推廣不了。作者的結論是指示要具體又有彈性：給夠細的高層策略，不要依賴過度規定、只適用特定任務的步驟。附錄 P 只有一張表，列出 WebVoyager（NNetNav-Live）四輪歸納出的 12 個指標，正文沒有說明；早期版本拿這些指標挑網頁 agent 的微調資料，v3 刪掉了那一節。</p>
+
+    <div class="thought">
+      <span class="label">思考題 · 03</span>
+      <h4>你寫給 agent 的指示，有哪幾句只在某個任務成立？</h4>
+      <p>翻出你的 system prompt 或 skill 說明，把每一句指示標成「通用原則」或「某個任務的特例」。</p>
+      <p class="hint">像「只往東走」這種句子，在訓練用的任務上很有效，換一個任務就出錯。附錄 O.2 的做法是拿保留的任務檢查改動能不能推廣；你也可以替每個特例寫一個它會失效的反例任務。這個練習是整理者依附錄 O.2 設計的。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="related" data-toc="相關工作" class="nocard">
+  <div class="container">
+    <p class="chapter">Chapter 10 · Related Work</p>
+    <h2><span class="seg">主題分析的方法，</span><span class="seg">搬來評估 agent</span></h2>
+    <p class="lede">作者說 AutoLibra 接起三條研究線：它借主題分析的方法，做出從自然語言來的評估指標，用來評估與獎勵 AI agent。和各線相比，它不預設失敗分類，歸納出的指標也能跨任務用。</p>
+
+    <p><strong>評估 AI agent。</strong>這方面的研究多半圍繞基準，基準同時包含任務集與評估指標。除了這篇用到的資料集，作者舉了幾個例子：SWE-Bench 用人寫的單元測試當評估指標；Embodied Agent Interface 替以 LLM 為基礎的具身 agent 提供細緻的評估；τ-Bench 比對資料庫的狀態來評估；同時期的 AgentRewardBench 替網頁 agent 的獎勵模型建立基準。最近也有 Galileo、Vertex AI Gen AI、Docent 這類觀測工具，提供把 agent 失敗模式視覺化的介面。強化學習社群也研究過產生內在獎勵，鼓勵探索、完成子任務或發現技能。作者說相比之下，AutoLibra 是純資料驅動、不限任務的方法，不需要預先定義失敗分類，就能產生可解釋的指標。</p>
+    <p><strong>從自然語言與人的回饋學習。</strong>已有研究用語言回饋替 agent 提供密集獎勵，做強化學習（作者引 Goyal 等 2019）。LLM agent 在稀疏獎勵下更難訓練，所以從自然語言回饋訓練 agent 很受關注：Chen 等 2024 提出從人的回饋模仿學習的方法；Text2Reward 用程式生成，從開放式回饋產生機器人的獎勵函式；作者自己的另一篇研究（Chen 等 2025）先用回饋透過提示改進策略，再讓沒有提示的策略向有提示的看齊；Shi 等 2024 提出把人的回饋納入策略學習的新模型架構。非開放式的回饋也用在訓練 agent 上，包括評分、偏好與示範。作者說和這些研究不同，AutoLibra 從所有標註過的例子歸納指標，產生能推廣到不同任務的指標，可以用在評估，也可以用在微調 agent。</p>
+    <p><strong>主題分析。</strong>它是質性研究的工具，靠編碼與反覆歸納主題進行。已有研究提供輔助這個過程的計算工具，也有研究探索人與 AI 協作做主題分析；自動做概念歸納的 LLooM 和 AutoLibra 的做法最接近，也影響了它。作者說這篇把概念歸納的迴圈補完：用後設評估回頭最佳化歸納出的指標，再用在評估 agent 上。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>研究線</th><th>代表工作</th><th>和 AutoLibra 的差別（依第 6 節）</th></tr></thead>
+        <tbody>
+          <tr><td>評估 AI agent</td><td>SWE-Bench、Embodied Agent Interface、τ-Bench、AgentRewardBench；Galileo、Vertex AI Gen AI、Docent</td><td>基準的指標由設計者先定；AutoLibra 不預設失敗分類，從資料歸納</td></tr>
+          <tr><td>從語言與人的回饋學習</td><td>Text2Reward、Chen 等 2024、2025、Shi 等 2024；評分、偏好、示範回饋</td><td>多半把回饋直接用在單一例子的訓練；AutoLibra 從所有例子歸納出能跨任務的指標</td></tr>
+          <tr><td>主題分析與概念歸納</td><td>計算工具、人與 AI 協作的主題分析、LLooM</td><td>AutoLibra 多了後設評估這一步，回頭最佳化指標，並用在評估 agent</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>表的第三欄是整理者依第 6 節各段的最後一句歸納的。</p>
+  </div>
+</section>
+
+
+<section id="takeaways" data-toc="結論與更大的圖像">
+  <div class="container head">
+    <p class="chapter">Chapter 11 · Conclusion and Future Work · The Bigger Picture</p>
+    <h2><span class="seg">從整合測試，</span><span class="seg">走向單元測試</span></h2>
+    <p class="lede">作者把 AutoLibra 定位成評估 agent 的新做法：從軌跡歸納出能調整的評估準則，用量具體行為的細指標補上端到端的評估。未來方向有三個；第 8 節再把它放進人類社會學習的大圖像裡。</p>
+    
+  </div>
+  <div class="cardband" id="card-11"><div class="cardlabel"><span class="n">圖卡 11 / 11</span><span class="t">結論：整合測試與單元測試</span><button type="button" class="zoom" data-card="11">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">成功率像整合測試，行為指標像單元測試</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 7、8 節：作者把 AutoLibra 當成從端到端評估，轉向量具體行為的細指標；上排三條原則是整理者歸納的，下排是作者點名的方向</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:350px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:28px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">01　指標從哪裡來</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">先收回饋，<br>再歸納成指標</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">作者說給一句具體回饋，比設計指標容易得多；<br>回饋來自使用者，就是從使用者的角度評估。<br>每個資料集 80 條軌跡、每條一句就歸納得出來。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 一開始就由專家定好全部維度<br>✓ 先收回饋，再歸納、再檢查</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:350px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:28px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">02　指標組本身也要檢查</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">問兩件事：<br>漏了什麼、多了什麼</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">覆蓋率看人在意的行為抓到幾成，<br>冗餘率看多出幾成沒人提的；<br>先求覆蓋率、再壓冗餘率，<br>指標數在 6 到 10 附近收斂。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 只看評審和人一不一致<br>✓ 也看指標組涵蓋了多少回饋</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:350px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">03　跟著 agent 一起長</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">舊指標不改，<br>新行為出現就加新的</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">迭代歸納像一直保留著的單元測試。<br>第 5 節的三個階段依序歸納 5、5、1 個指標，<br>成功率沒被當成目標，也跟著提高。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 每次改版就重寫整份評估<br>✓ 只加不改，分數才能跨輪比較</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:592px; font-size:20px; font-weight:700; color:#1C2431;">作者點名的方向（不排順序）</div>
+  <div style="position:absolute; left:60px; top:634px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">01</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">對一兩步給回饋</div>
+  </div>
+  <div style="position:absolute; left:360px; top:634px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">02</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">互動當中就收回饋</div>
+  </div>
+  <div style="position:absolute; left:660px; top:634px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">03</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">每一步的密集獎勵</div>
+  </div>
+  <div style="position:absolute; left:960px; top:634px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">04</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">替指標寫成程式</div>
+  </div>
+  <div style="position:absolute; left:1260px; top:634px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">05</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">從所有使用者學</div>
+  </div>
+  <div style="position:absolute; left:60px; top:726px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">01、02、03 出自第 7 節（03 是用強化學習訓練 agent），04 出自第 2.3 節，05 出自第 8 節：從大規模的人類回饋學到個人與組織層級的技能，還能把熟手的專業提煉成指標與回饋，拿來帶新手。第 7 節也提到可以研究更好的人與 AI 協作。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">硬規則：評估清單要答得出「漏了什麼、多了什麼」。三條原則與 ✗／✓ 是整理者依第 1、3、5、7 節歸納的，論文沒有獨立的限制一節。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 7 節說，AutoLibra 是最早探索「從軌跡歸納出可調整的評估準則」的研究之一，比起傳統的端到端評估，在訓練 agent 上有明顯的好處。作者的發現是這個框架能推廣到各種 agent 任務、提供看 agent 行為的新角度，也能找出改進 agent 的有力最佳化目標。他們點名三個延伸方向：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>以行為為中心的評估</strong>從端到端評估（像軟體開發的整合測試）轉向量具體行為的細指標（像單元測試）；未來可以研究更好的人與 AI 協作能不能改進這個流程。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>子軌跡層級的回饋</strong>現在一條軌跡一句回饋，再落地到子軌跡的行為；未來可以讓使用者直接對一步或幾步給回饋，落地應該更準；也可以在互動當中收回饋，不必等任務做完，對使用者更友善。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>更多改進 agent 的方法</strong>這篇只試了非參數的改進方法；未來可以用 AutoLibra 替每一步提供密集獎勵，再用強化學習訓練 agent。</div></div>
+    </div>
+
+    <p>第 8 節是作者的大圖像。人不只從自己的經驗學，更從社會互動傳下來的集體知識學；這種社會學習與教學的能力讓知識跨世代累積，讓人能在既有的技能與工具上往上蓋，而不必每次重新發明。作者問：怎麼利用這種社會智能，讓 AI agent 用類似的方式向人學習，甚至教人？</p>
+    <p>作者指出，目前訓練語言 agent 主要靠行為複製，或從自己產生的經驗做強化學習；行為複製在學技能上有先天的限制。第一，示範者要和學習的 agent 在同一個環境裡操作，知識傳遞的規模被綁住。第二，只從一兩次示範學的 agent，可能誤解什麼才是恰當的行為；這時老師明確的口頭回饋，對劃出可接受行為的邊界、講清楚示範裡看不出的原則，就很重要。</p>
+    <p>AutoLibra 提供的是一個計算上的做法：把人在日常互動裡自然交換的口頭回饋，拿來有系統地改進 agent 的行為。作者的願景是把 AI agent 部署到真實環境，從大規模、多樣的人類回饋裡學習，從所有使用者的集體經驗學到技能，在個人與組織的層級，同時形成一般的能力與專門的技能組，就像人類社群累積與分享知識的方式。再往前一步，這樣的 agent 可以當人與人之間傳遞技能與文化的中介：把熟練使用者的專業，提煉成可解釋的指標與可執行的回饋，用來引導新手，縮短學習曲線。</p>
+
+    <p>論文沒有獨立的限制一節。下面是散在正文與附錄、作者自己寫出的代價與限制，由整理者彙整：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>代價或限制</th><th>出處</th></tr></thead>
+        <tbody>
+          <tr><td>一條軌跡只收一句回饋，逐步的回饋留給未來</td><td>第 2.1 節註腳、第 7 節</td></tr>
+          <tr><td>行為分群的結果沒有直接人工驗證，只能間接驗證</td><td>第 3.3 節</td></tr>
+          <tr><td>任務多樣的 Sotopia，最佳覆蓋率只有 60%</td><td>第 3.1 節</td></tr>
+          <tr><td>只看行為，抓不到視覺定位這類模型內部的問題；Sotopia 的長尾維度也沒抓到</td><td>第 4 節</td></tr>
+          <tr><td>第 3 階段 agent 開始想太多，成功率回落</td><td>第 5 節、圖 4</td></tr>
+          <tr><td>只試了非參數的改進方法；替指標寫程式也還沒做</td><td>第 7 節、第 2.3 節</td></tr>
+          <tr><td>MiniHack 的 Boxoban 與 Quest，加提示與例子改不動；過度具體的指示推廣不了</td><td>附錄 O</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <dl class="faq">
+      <div><dt>AutoLibra 能取代任務成功率嗎？</dt><dd>論文沒有這樣主張。第 5 節仍用成功率量改進的結果，只是不拿它當最佳化目標；結論把兩者比作整合測試與單元測試，細指標是用來看清楚行為的。</dd></div>
+      <div><dt>要收多少回饋才夠？</dt><dd>評估的實驗每個資料集用 80 條軌跡、每條一句回饋；第 5 節改進 agent 時，每個階段標 18 條（6 個任務各 3 條）。作者說每條回饋不到 5 分鐘。</dd></div>
+      <div><dt>評審一定要用 LLM 嗎？</dt><dd>不一定。第 2.3 節說 LLM 評審可以換成任何實作這些指標的評估方法，例如規則式的檢查；替歸納出的指標產生程式，作者留給未來。</dd></div>
+    </dl>
+
+    <div class="pullquote bronze">
+      評估 agent 不必等專家先寫好清單；先讓人說出看到了什麼，再讓機器整理，並檢查整理得漏了多少、多了多少。
+      <cite>整理自第 1、7 節</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="glossary" class="nocard glossary" data-toc="名詞速查">
+  <div class="wide">
+    <p class="eyebrow">Reference · 名詞速查</p>
+    <h2><span class="seg">關鍵名詞，</span><span class="seg">與它們在論文裡的位置</span></h2>
+    <p class="lede">先列方法的元件，再列兩個後設指標與最佳化，接著是實驗用的環境，最後是討論與相關研究裡的名詞。</p>
+    <dl class="glossary-grid">
+      <div class="term"><dt>AutoLibra</dt><span class="zh-name">指標歸納框架</span><dd>從開放式的人類回饋歸納 agent 評估指標的方法，由歸納流程與評估流程接成閉環（第 2 節）。</dd></div>
+      <div class="term"><dt>open-ended feedback</dt><span class="zh-name">開放式回饋</span><dd>人用自己的話對一整條軌跡寫的評語；來自終端使用者或專家，每條軌跡一句（第 2.1 節）。</dd></div>
+      <div class="term"><dt>trajectory</dt><span class="zh-name">軌跡</span><dd>agent 完成一個任務的完整紀錄，標註者以文字逐步看它的觀察與行動。</dd></div>
+      <div class="term"><dt>feedback grounding</dt><span class="zh-name">回饋落地</span><dd>把一句回饋拆成條列，每條對到軌跡裡的一段行為；用 GPT-4o 加限制解碼（第 2.2 節）。</dd></div>
+      <div class="term"><dt>aspect</dt><span class="zh-name">面向</span><dd>行為、回饋、正負號的三元組；每條軌跡通常 1 到 5 個，平均 1 到 2 個。</dd></div>
+      <div class="term"><dt>behavior clustering</dt><span class="zh-name">行為分群</span><dd>把許多軌跡的面向聚成 N 群，每群整理成一個指標；用 o3-mini high，不用 K-means（第 2.2 節）。</dd></div>
+      <div class="term"><dt>metric</dt><span class="zh-name">指標</span><dd>一群相似面向的歸納：一段定義，加上好行為與壞行為的例子；拿掉例子，CoGym 的覆蓋率最多掉 30%。</dd></div>
+      <div class="term"><dt>LLM-as-a-Judge</dt><span class="zh-name">LLM 評審</span><dd>用 LLM 依指標替軌跡打 +1、−1 或 N/A；這篇用 o3-mini medium，引用的是 MT-Bench 論文（第 2.3 節）。</dd></div>
+      <div class="term"><dt>trait</dt><span class="zh-name">特徵</span><dd>評審在某個指標上打 +1（正特徵）或 −1（負特徵）的結果；指標分數是正的比例，N/A 不算。</dd></div>
+      <div class="term"><dt>meta-evaluation</dt><span class="zh-name">後設評估</span><dd>用 GPT-4o 把特徵和面向配對，評估指標本身有沒有涵蓋人在意的行為、評審準不準（第 2.3 節）。</dd></div>
+      <div class="term"><dt>coverage</dt><span class="zh-name">覆蓋率</span><dd>所有面向裡配得到特徵的比例；WebArena、WebVoyager 最高 88%，Sotopia 最低 60%（第 3.1 節）。</dd></div>
+      <div class="term"><dt>redundancy</dt><span class="zh-name">冗餘率</span><dd>所有特徵裡沒和任何面向配上的比例，也就是人沒提到的；指標越多通常越高。</dd></div>
+      <div class="term"><dt>metric optimization</dt><span class="zh-name">指標最佳化</span><dd>每輪產生 20 組指標、N 從 4 到 13，留覆蓋率在最高減 1% 內的、挑冗餘率最低的，範圍縮成 ±2（第 3.1 節）。</dd></div>
+      <div class="term"><dt>iterative metric induction</dt><span class="zh-name">迭代歸納</span><dd>agent 改進後再歸納：不改舊指標的定義，只加新行為與新指標（第 3.2 節）。</dd></div>
+      <div class="term"><dt>Lens / Ladder</dt><span class="zh-name">透鏡與階梯</span><dd>論文對兩種用法的稱呼：當透鏡評估 agent（第 4 節），當階梯改進 agent（第 5 節）。</dd></div>
+      <div class="term"><dt>CoGym</dt><span class="zh-name">人與 agent 協作環境</span><dd>agent 和使用者一起完成任務；回饋來自終端使用者，197 條；歸納出 9 個指標對上 5 類失敗。</dd></div>
+      <div class="term"><dt>Sotopia</dt><span class="zh-name">社交智能評估</span><dd>評估語言 agent 社交智能的互動環境，有 7 個維度；AutoLibra 把 Believability 拆成 3 個指標。</dd></div>
+      <div class="term"><dt>WebVoyager</dt><span class="zh-name">網頁 agent 基準</span><dd>在真實網站上完成任務；AutoLibra 把「卡住」拆成 4 個指標，但抓不到視覺定位問題。</dd></div>
+      <div class="term"><dt>Baba-Is-AI</dt><span class="zh-name">改規則的文字遊戲</span><dd>推文字方塊改寫規則的 2D 遊戲，40 個任務；第 5 節與附錄用它改進 agent。</dd></div>
+      <div class="term"><dt>MiniHack</dt><span class="zh-name">格子地圖遊戲</span><dd>源自 NetHack；附錄用 Boxoban、MazeWalk、Corridor Fight、Quest 四個代表任務。</dd></div>
+      <div class="term"><dt>BALROG</dt><span class="zh-name">agent 遊戲基準</span><dd>收錄 Baba-is-AI 與 MiniHack 的基準與排行榜；Gemini 2.5 Flash 投稿時排第 3。</dd></div>
+      <div class="term"><dt>thematic analysis</dt><span class="zh-name">主題分析</span><dd>質性研究方法：先編碼、再歸納主題；AutoLibra 的落地與分群兩步照這個順序設計。</dd></div>
+      <div class="term"><dt>LLooM</dt><span class="zh-name">概念歸納</span><dd>用 LLM 從非結構化文字歸納高層概念的方法；作者說它和 AutoLibra 最接近（第 6 節）。</dd></div>
+      <div class="term"><dt>self-regulated learning</dt><span class="zh-name">自我調節學習</span><dd>把外來的回饋內化成持續改進的內在訊號；作者用它說明為什麼要讓 agent 從回饋學（第 1、5 節）。</dd></div>
+    </dl>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>資料來源：arXiv，〈AutoLibra: Agent Metric Induction from Open-Ended Human Feedback〉，Hao Zhu、Phil Cuvin、Xinkai Yu、Charlotte Ka Yee Yan、Jason Zhang、Diyi Yang（Stanford University、University of Toronto、University of Pennsylvania），2025-05-05（v3 2025-10-29）。數字依 arXiv v3；課程書單列的是 ICLR 2026 版（OpenReview），會議版內容可能不同。會議名 ICLR 2026 依課程書單標注，arXiv 版本本身沒有寫。<br><a href="https://arxiv.org/abs/2505.02820">arxiv.org/abs/2505.02820</a>　·　會議版：<a href="https://openreview.net/forum?id=4BjGVZ7Bxn">openreview.net/forum?id=4BjGVZ7Bxn</a></p>
+    <p class="credit">整理於 2026-09-24</p>
+    <p class="disclaimer">本頁為學習用的重述與整理，不是原文逐句翻譯。觀點與著作權屬於原作者。程式片段為教學用精簡版，實際用法請以原文與官方文件為準。</p>
+  </div>
+</footer>
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="圖卡大圖"><button type="button" class="close">關閉（Esc）</button><div class="frame"></div></div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fitFrames() {
+    var frames = document.querySelectorAll('.cardband .frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  var KEY = 'rearranged-article-mode';
+  function setMode(m, save) {
+    document.body.classList.toggle('mode-cards', m === 'cards');
+    var btns = document.querySelectorAll('.modebar button[data-mode]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-mode') === m ? 'true' : 'false');
+    }
+    if (save) { try { localStorage.setItem(KEY, m); } catch (e) {} }
+    fitFrames();
+  }
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  setMode(saved === 'cards' ? 'cards' : 'full', false);
+
+  var box = document.getElementById('lightbox');
+  var boxFrame = box.querySelector('.frame');
+  function fitLightbox() {
+    if (!box.classList.contains('open')) return;
+    var root = boxFrame.firstElementChild;
+    if (!root) return;
+    var s = Math.min(1, (window.innerWidth - 48) / W, (window.innerHeight - 48) / H);
+    root.style.transform = 'scale(' + s + ')';
+    boxFrame.style.width = Math.round(W * s) + 'px';
+    boxFrame.style.height = Math.round(H * s) + 'px';
+  }
+  function openLightbox(num) {
+    var bandEl = document.getElementById('card-' + num);
+    if (!bandEl) return;
+    var root = bandEl.querySelector('.frame > div');
+    boxFrame.innerHTML = '';
+    var clone = root.cloneNode(true);
+    clone.style.transform = '';
+    boxFrame.appendChild(clone);
+    box.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    fitLightbox();
+  }
+  function closeLightbox() {
+    box.classList.remove('open');
+    boxFrame.innerHTML = '';
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var b = t.closest('.modebar button[data-mode]');
+    if (b) { setMode(b.getAttribute('data-mode'), true); return; }
+    var z = t.closest('.cardlabel .zoom');
+    if (z) { openLightbox(z.getAttribute('data-card')); return; }
+    if (t.closest('.lightbox') && !t.closest('.lightbox .frame')) { closeLightbox(); }
+  });
+  document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') closeLightbox(); });
+  window.addEventListener('resize', function () { fitFrames(); fitLightbox(); });
+  window.addEventListener('load', fitFrames);
+  fitFrames();
+})();
+</script>
+</body>
+</html>
