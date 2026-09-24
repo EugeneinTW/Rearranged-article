@@ -1,0 +1,2185 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DSPy（Khattab et al. 2023）</title>
+<meta name="description" content="Stanford 等團隊在 2023 年提出 DSPy：用 signature 宣告每個 LM 呼叫要做什麼，用模組把 Chain of Thought、ReAct 這類技巧變成可以互換的層，再由 teleprompter 依 metric 自動 bootstrap 示範，把整條管線編譯成 prompt 或微調。GSM8K 與 HotPotQA 上，幾行程式編譯幾分鐘，就讓 GPT-3.5 與 llama2-13b-chat 勝過標準 few-shot 與專家寫的示範。每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="dspy, prompt-optimization, llm-pipelines, frameworks, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2310.03714">
+<meta name="date" content="2026-09-24">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Theme: tech-modern 變體「測試報告語意色」
+   藍 = 主色 / 綠 = pass / 琥珀 = 注意 / 紅 = fail
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --paper: #ffffff;
+  --paper-soft: #f3f5f8;
+  --paper-shadow: #dde2e8;
+  --ink: #121821;
+  --ink-soft: #3b4450;
+  --ink-mute: #6b7481;
+  --primary: #1e56a8;
+  --primary-deep: #143a72;
+  --primary-bg: #e6eef9;
+  --accent: #157a52;
+  --accent-deep: #0d5236;
+  --accent-bg: #e1f3e9;
+  --warm: #b8620e;
+  --warm-deep: #7d4108;
+  --warm-bg: #fbeddc;
+  --danger: #b83228;
+  --danger-bg: #f9e3e0;
+  --stone: #5a6370;
+  --stone-bg: #eceff3;
+  --code-bg: #0f1720;
+  --code-ink: #e6edf3;
+  --code-mute: #8b98a8;
+  --code-blue: #7cc4ff;
+  --code-green: #7ee2b8;
+  --code-amber: #ffc46b;
+
+  --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-cjk: 'Noto Sans TC', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --content-width: 780px;
+  --wide-width: 1100px;
+  --gutter: 24px;
+}
+
+/* ---------- reset & 排版 ---------- */
+* { box-sizing: border-box; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+body {
+  margin: 0; padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-cjk);
+  font-size: 18px;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: var(--content-width); margin: 0 auto; padding: 0 var(--gutter); }
+.wide { max-width: var(--wide-width); margin: 0 auto; padding: 0 var(--gutter); }
+section { padding-block: 64px; }
+section + section { border-top: 1px solid var(--paper-shadow); }
+
+h1, h2, h3, h4 { font-family: var(--font-cjk); font-weight: 700; text-wrap: balance; }
+h1 { font-size: 56px; line-height: 1.14; margin: 0 0 24px; font-weight: 800; }
+h2 { font-size: 36px; line-height: 1.25; margin: 0 0 18px; letter-spacing: -0.01em; }
+h3 { font-size: 25px; line-height: 1.35; margin: 44px 0 14px; }
+h4 { font-size: 20px; line-height: 1.4; margin: 26px 0 10px; }
+p { margin: 0 0 18px; }
+ul, ol { padding-left: 26px; margin: 0 0 18px; }
+li { margin-bottom: 8px; }
+em { font-style: normal; color: var(--primary-deep); font-weight: 600; }
+strong { font-weight: 700; }
+a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+code {
+  font-family: var(--font-mono); font-size: 0.86em;
+  background: var(--stone-bg); color: var(--primary-deep);
+  padding: 2px 6px; border-radius: 4px;
+}
+.mono { font-family: var(--font-mono); }
+
+/* ---------- Hero ---------- */
+.hero {
+  padding-block: 84px 60px;
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-soft) 100%);
+  border-bottom: 2px solid var(--primary-deep);
+  position: relative;
+}
+.hero::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: linear-gradient(90deg,
+    var(--primary) 0%, var(--primary) 25%,
+    var(--accent) 25%, var(--accent) 50%,
+    var(--warm) 50%, var(--warm) 75%,
+    var(--danger) 75%, var(--danger) 100%);
+}
+.hero-meta {
+  display: flex; flex-wrap: wrap; gap: 10px 22px;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  margin-bottom: 32px;
+}
+.hero-meta span::before { content: "—"; margin-right: 10px; color: var(--paper-shadow); }
+.hero-meta span:first-child::before { content: ""; margin: 0; }
+.hero h1 { font-size: 60px; font-weight: 800; word-break: keep-all; }
+.hero h1 .accent {
+  display: block; margin-top: 12px;
+  font-size: 0.55em; font-weight: 600; line-height: 1.3;
+  color: var(--primary-deep);
+}
+.hero .lede { font-size: 22px; max-width: 720px; }
+.hero-keystat {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 28px; margin: 44px 0 0; padding-top: 34px;
+  border-top: 1px dashed var(--paper-shadow);
+}
+.hero-keystat dt {
+  font-family: var(--font-sans);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--ink-mute); margin-bottom: 6px;
+}
+.hero-keystat dd {
+  margin: 0; font-family: var(--font-mono);
+  font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1;
+}
+.hero-keystat dd small { font-family: var(--font-cjk); font-size: 14px; color: var(--ink-mute); font-weight: 400; margin-left: 6px; }
+
+/* ---------- Chapter / lede / eyebrow ---------- */
+.chapter {
+  font-family: var(--font-mono);
+  font-size: 12.5px; color: var(--primary);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 0 0 10px;
+}
+.chapter::before { content: "§ "; color: var(--paper-shadow); margin-right: 4px; }
+.lede {
+  font-size: 22px; line-height: 1.6; color: var(--ink-soft);
+  margin: 0 0 28px; font-weight: 400;
+}
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--primary); margin: 0 0 14px;
+}
+
+/* ---------- Pull quote ---------- */
+.pullquote {
+  margin: 48px -16px; padding: 32px 40px;
+  font-family: var(--font-cjk);
+  font-size: 27px; line-height: 1.5; font-weight: 600;
+  color: var(--primary-deep);
+  border-left: 5px solid var(--primary);
+  background: linear-gradient(90deg, var(--primary-bg) 0%, transparent 100%);
+}
+.pullquote.bronze {
+  color: var(--accent-deep); border-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-bg) 0%, transparent 100%);
+}
+.pullquote.terra {
+  color: var(--warm-deep); border-color: var(--warm);
+  background: linear-gradient(90deg, var(--warm-bg) 0%, transparent 100%);
+}
+.pullquote cite {
+  display: block; margin-top: 16px; font-style: normal; font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  letter-spacing: 0.06em;
+}
+.pullquote cite::before { content: "— "; }
+
+/* ---------- English quote ---------- */
+.quote-en {
+  margin: 28px 0;
+  font-family: var(--font-sans); font-style: italic;
+  font-size: 21px; line-height: 1.5; color: var(--ink);
+  padding-left: 20px; border-left: 3px solid var(--accent);
+}
+.quote-en .zh {
+  display: block; margin-top: 10px;
+  font-family: var(--font-cjk); font-style: normal;
+  font-size: 15px; color: var(--ink-soft); line-height: 1.6;
+}
+
+/* ---------- Story ---------- */
+.story {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 14px;
+  padding: 38px 44px; margin: 48px 0;
+  position: relative;
+}
+.story::before {
+  content: "❝"; position: absolute; top: -6px; left: 24px;
+  font-size: 72px; color: var(--warm); line-height: 1;
+  font-family: var(--font-sans);
+}
+.story .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.18em;
+  color: var(--warm); margin-bottom: 10px; padding-left: 42px;
+}
+.story h4 { margin: 0 0 16px; font-size: 22px; color: var(--warm-deep); }
+.story p { margin-bottom: 14px; font-size: 17px; line-height: 1.7; }
+.story p:last-child { margin-bottom: 0; }
+
+/* ---------- Explain ---------- */
+.explain {
+  background: var(--primary-bg);
+  border-left: 4px solid var(--primary);
+  border-radius: 4px;
+  padding: 26px 30px; margin: 36px 0;
+  font-family: var(--font-cjk); position: relative;
+}
+.explain.bronze { background: var(--accent-bg); border-color: var(--accent); }
+.explain.terra { background: var(--warm-bg); border-color: var(--warm); }
+.explain.stone { background: var(--stone-bg); border-color: var(--stone); }
+.explain .label {
+  position: absolute; top: -12px; left: 16px;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.15em; padding: 4px 12px;
+  border-radius: 3px; text-transform: uppercase;
+}
+.explain.bronze .label { background: var(--accent); }
+.explain.terra .label { background: var(--warm); }
+.explain.stone .label { background: var(--stone); }
+.explain h4 { margin: 4px 0 12px; font-size: 19px; color: var(--primary-deep); }
+.explain.bronze h4 { color: var(--accent-deep); }
+.explain.terra h4 { color: var(--warm-deep); }
+.explain.stone h4 { color: var(--ink); }
+.explain p { font-size: 16.5px; }
+.explain p:last-child { margin-bottom: 0; }
+.explain ul, .explain ol { margin: 8px 0 0; padding-left: 22px; }
+.explain li { margin-bottom: 6px; font-size: 16px; }
+.explain code { background: rgba(255,255,255,0.75); }
+
+/* ---------- Stat grid ---------- */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.stat-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 28px 24px; text-align: center;
+  border-top: 4px solid var(--primary);
+}
+.stat-card.bronze { border-color: var(--accent); }
+.stat-card.terra { border-color: var(--warm); }
+.stat-card.danger { border-color: var(--danger); }
+.stat-card .big {
+  font-family: var(--font-mono);
+  font-size: 46px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1; margin-bottom: 10px;
+}
+.stat-card.bronze .big { color: var(--accent-deep); }
+.stat-card.terra .big { color: var(--warm-deep); }
+.stat-card.danger .big { color: var(--danger); }
+.stat-card .big small { font-family: var(--font-cjk); font-size: 16px; opacity: 0.75; margin-left: 4px; font-weight: 500; }
+.stat-card .label {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.stat-card .note { margin-top: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.55; }
+
+/* ---------- Compare table ---------- */
+.table-scroll { overflow-x: auto; margin: 36px 0; }
+.compare {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-cjk); font-size: 15.5px;
+  background: var(--paper-soft);
+  border-radius: 10px; overflow: hidden;
+  min-width: 560px;
+}
+.compare th, .compare td {
+  padding: 15px 18px; text-align: left;
+  border-bottom: 1px solid var(--paper-shadow);
+  vertical-align: top; line-height: 1.6;
+}
+.compare th {
+  background: var(--primary-deep); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+}
+.compare tr:last-child td { border-bottom: none; }
+.compare td:first-child { font-weight: 700; color: var(--primary-deep); width: 24%; }
+.compare .id { font-family: var(--font-mono); font-size: 13px; display: block; color: var(--ink-mute); font-weight: 500; margin-bottom: 2px; }
+.compare .yes { color: var(--accent-deep); font-weight: 700; }
+.compare .no { color: var(--danger); font-weight: 700; }
+
+/* ---------- Value cards ---------- */
+.values {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.value-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 26px 24px;
+  border-top: 5px solid var(--primary);
+}
+.value-card:nth-child(2) { border-top-color: var(--accent); }
+.value-card:nth-child(3) { border-top-color: var(--warm); }
+.value-card:nth-child(4) { border-top-color: var(--primary-deep); }
+.value-card:nth-child(5) { border-top-color: var(--stone); }
+.value-card .num {
+  font-family: var(--font-mono);
+  font-size: 38px; font-weight: 700;
+  color: var(--primary); line-height: 1; margin-bottom: 12px;
+}
+.value-card:nth-child(2) .num { color: var(--accent); }
+.value-card:nth-child(3) .num { color: var(--warm); }
+.value-card:nth-child(4) .num { color: var(--primary-deep); }
+.value-card:nth-child(5) .num { color: var(--stone); }
+.value-card .tag {
+  display: inline-block; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--primary); margin-bottom: 10px;
+}
+.value-card:nth-child(2) .tag { color: var(--accent); }
+.value-card:nth-child(3) .tag { color: var(--warm); }
+.value-card:nth-child(4) .tag { color: var(--primary-deep); }
+.value-card h4 { margin: 0 0 10px; font-size: 19px; line-height: 1.4; }
+.value-card p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin: 0; }
+
+/* ---------- 擴充檢查卡（附成本標籤） ---------- */
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px; margin: 40px 0;
+}
+.card {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 12px;
+  padding: 24px 24px 22px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.card .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card h4 { margin: 0; font-size: 18.5px; line-height: 1.4; }
+.card p { margin: 0; font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); }
+.card .signal { font-family: var(--font-mono); font-size: 12.5px; color: var(--primary-deep); background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 6px; padding: 6px 10px; margin-top: 4px; overflow-x: auto; white-space: nowrap; }
+.pill {
+  flex: none; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px;
+}
+.pill.fast { background: var(--accent-bg); color: var(--accent-deep); }
+.pill.mid { background: var(--warm-bg); color: var(--warm-deep); }
+.pill.slow { background: var(--danger-bg); color: var(--danger); }
+
+/* ---------- Thought ---------- */
+.thought {
+  background: var(--accent-bg);
+  border-left: 4px solid var(--accent);
+  padding: 26px 30px; margin: 40px 0;
+  border-radius: 4px; position: relative;
+}
+.thought .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--accent-deep); margin-bottom: 10px;
+}
+.thought h4 { font-size: 19px; margin: 0 0 14px; color: var(--accent-deep); line-height: 1.45; }
+.thought p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin-bottom: 8px; }
+.thought .hint {
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px dashed rgba(13, 82, 54, 0.3);
+  font-size: 14px; color: var(--accent-deep);
+}
+.thought .hint::before { content: "建議方向："; font-weight: 700; }
+
+/* ---------- Code block ---------- */
+.codeblock { margin: 30px 0; }
+.codeblock .file {
+  display: inline-block; font-family: var(--font-mono);
+  font-size: 12px; color: var(--ink-mute);
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow); border-bottom: none;
+  border-radius: 8px 8px 0 0; padding: 7px 14px;
+}
+pre.code {
+  margin: 0; background: var(--code-bg); color: var(--code-ink);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65;
+  padding: 22px 24px; border-radius: 0 10px 10px 10px;
+  overflow-x: auto; tab-size: 2; white-space: pre;
+}
+pre.code.solo { border-radius: 10px; }
+pre.code .c { color: var(--code-mute); }
+pre.code .k { color: var(--code-blue); }
+pre.code .s { color: var(--code-green); }
+pre.code .a { color: var(--code-amber); font-weight: 700; }
+
+/* ---------- Flow（eval 迴圈圖） ---------- */
+.flow { display: flex; align-items: stretch; margin: 40px 0; }
+.flow-step {
+  flex: 1 1 0; min-width: 0;
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow);
+  border-radius: 10px; padding: 18px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.flow-step .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--primary); letter-spacing: 0.1em; }
+.flow-step strong { font-size: 17px; line-height: 1.3; }
+.flow-step span.d { font-size: 14px; line-height: 1.55; color: var(--ink-soft); }
+.flow-step.score { border-color: var(--accent); background: var(--accent-bg); }
+.flow-step.score .k { color: var(--accent-deep); }
+.flow-arrow { flex: none; width: 30px; position: relative; }
+.flow-arrow::before {
+  content: ""; position: absolute; top: 50%; left: 2px; right: 2px; height: 2px;
+  background: var(--primary); transform: translateY(-50%);
+}
+.flow-arrow::after {
+  content: ""; position: absolute; top: 50%; right: 4px; width: 9px; height: 9px;
+  border-top: 2px solid var(--primary); border-right: 2px solid var(--primary);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+/* ---------- Cascade（編號步驟） ---------- */
+.cascade { display: flex; flex-direction: column; gap: 14px; margin: 32px 0; }
+.cascade-step {
+  display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px;
+}
+.cascade-step .n {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-mono); font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.cascade-step .t { font-size: 16.5px; line-height: 1.65; }
+.cascade-step .t strong { display: block; margin-bottom: 2px; }
+
+/* ---------- Checklist ---------- */
+.checklist { list-style: none; padding: 0; margin: 32px 0; display: flex; flex-direction: column; gap: 12px; }
+.checklist li {
+  display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px; margin: 0;
+  font-size: 16.5px; line-height: 1.65;
+}
+.checklist .box {
+  width: 24px; height: 24px; margin-top: 3px;
+  border: 2px solid var(--accent); border-radius: 6px; background: var(--paper);
+}
+.checklist strong { display: block; }
+.checklist small { display: block; color: var(--ink-soft); font-size: 15px; }
+
+/* ---------- Glossary ---------- */
+.glossary { background: var(--primary-deep); color: var(--paper); padding-block: 64px; }
+.glossary h2 { color: var(--paper); margin-top: 0; }
+.glossary .eyebrow { color: var(--accent-bg); }
+.glossary .lede { color: var(--paper); opacity: 0.8; }
+.glossary-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 26px; margin: 42px 0 0;
+}
+.term { border-top: 2px solid var(--accent); padding-top: 16px; }
+.term:nth-child(3n+2) { border-color: var(--warm); }
+.term:nth-child(3n+3) { border-color: var(--paper); }
+.term dt {
+  font-family: var(--font-mono);
+  font-size: 14px; font-weight: 700;
+  color: var(--accent-bg); letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+.term .zh-name { font-family: var(--font-cjk); font-size: 16px; font-weight: 600; color: var(--paper); margin-bottom: 8px; display: block; }
+.term dd { margin: 0; font-family: var(--font-cjk); font-size: 14.5px; line-height: 1.65; color: rgba(255, 255, 255, 0.8); }
+
+/* ---------- TOC ---------- */
+.toc {
+  position: fixed; right: 24px; top: 50%; transform: translateY(-50%); z-index: 10;
+  font-family: var(--font-sans); font-size: 12px;
+  background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 10px;
+  padding: 18px 20px; max-width: 236px;
+  box-shadow: 0 4px 18px rgba(18, 24, 33, 0.08);
+}
+.toc h5 { margin: 0 0 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-mute); }
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc -1; }
+.toc li { margin-bottom: 6px; counter-increment: toc; font-size: 12px; line-height: 1.45; display: flex; gap: 8px; }
+.toc li::before { content: counter(toc, decimal-leading-zero); font-family: var(--font-mono); color: var(--ink-mute); font-size: 10.5px; padding-top: 2px; }
+.toc a { color: var(--ink-soft); text-decoration: none; }
+.toc a:hover { color: var(--primary); }
+@media (max-width: 1340px) { .toc { display: none; } }
+
+/* ---------- Footer ---------- */
+footer {
+  padding-block: 48px 64px;
+  background: var(--paper-soft);
+  text-align: center;
+  font-family: var(--font-cjk);
+  font-size: 13.5px; color: var(--ink-mute);
+}
+footer p { margin: 0 0 8px; }
+footer .credit { font-family: var(--font-sans); }
+footer .disclaimer { margin-top: 14px; font-size: 12px; opacity: 0.75; max-width: 640px; margin-inline: auto; }
+
+/* ---------- 響應式 ---------- */
+@media (max-width: 768px) {
+  body { font-size: 17px; }
+  .hero { padding-block: 56px 42px; }
+  .hero h1 { font-size: 36px; }
+  .hero .lede { font-size: 18px; }
+  h2 { font-size: 27px; }
+  h3 { font-size: 22px; }
+  section { padding-block: 46px; }
+  .lede { font-size: 19px; }
+  .pullquote { font-size: 21px; margin: 34px 0; padding: 24px; }
+  .story { padding: 30px 24px; }
+  .stat-card .big { font-size: 36px; }
+  .flow { flex-direction: column; }
+  .flow-arrow { width: auto; height: 30px; }
+  .flow-arrow::before { top: 2px; bottom: 2px; left: 50%; right: auto; width: 2px; height: auto; transform: translateX(-50%); }
+  .flow-arrow::after { top: auto; bottom: 4px; left: 50%; right: auto; transform: translateX(-50%) rotate(135deg); }
+  .compare td:first-child { width: auto; }
+}
+
+/* ---------- 列印 ---------- */
+@media print {
+  .toc { display: none; }
+  body { font-size: 12pt; }
+  .hero, .glossary {
+    color: var(--ink) !important; background: white !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .glossary h2, .glossary .term dt, .glossary .lede, .glossary .term .zh-name { color: var(--ink) !important; }
+  .glossary .term dd { color: var(--ink-soft) !important; }
+  pre.code { background: #f3f5f8 !important; color: #121821 !important; border: 1px solid #ccd; white-space: pre-wrap; }
+  pre.code .c, pre.code .k, pre.code .s, pre.code .a { color: inherit !important; }
+  section { page-break-inside: avoid; }
+}
+
+/* ---------- 整合版：模式列、圖卡帶、燈箱 ---------- */
+.modebar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; padding: 10px var(--gutter); background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--paper-shadow); font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.modebar .brand { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.modebar .left { display: flex; align-items: center; gap: 14px; }
+.modebar .homelink { font-size: 12px; font-weight: 600; color: var(--ink-mute); text-decoration: none; }
+.modebar .homelink:hover { color: var(--primary); text-decoration: underline; }
+.modebar .switch { display: flex; gap: 6px; }
+.modebar button { font: inherit; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.modebar button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+.modebar button:focus-visible, .cardlabel .zoom:focus-visible, .lightbox .close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.modebar .canvaslink { font-size: 12px; color: var(--ink-mute); }
+.cardband { max-width: 1600px; margin: 4px auto 40px; padding: 0 var(--gutter); }
+.cardlabel { display: flex; align-items: baseline; gap: 14px; padding: 0 2px 8px; font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.cardlabel .n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--warm); }
+.cardlabel .zoom { margin-left: auto; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--paper-shadow); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; font-size: 16px; color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(18, 24, 33, 0.86); display: none; align-items: center; justify-content: center; padding: 24px; }
+.lightbox.open { display: flex; }
+.lightbox .frame { border: none; border-radius: 8px; max-width: none; width: auto; flex: none; }
+.lightbox .close { position: absolute; top: 14px; right: 18px; font: inherit; font-family: var(--font-sans); font-size: 13px; color: #FFFFFF; background: transparent; border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.faq { margin: 36px 0 8px; padding: 0; }
+.faq > div { padding: 18px 0; border-top: 1px solid var(--paper-shadow); }
+.faq > div:last-child { border-bottom: 1px solid var(--paper-shadow); }
+.faq dt { margin: 0 0 6px; font-weight: 700; font-size: 17px; color: var(--ink); }
+.faq dt::before { content: "問"; display: inline-block; margin-right: 10px; padding: 1px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; color: #FFFFFF; background: var(--primary); vertical-align: 2px; }
+.faq dd { margin: 0; font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+body.mode-cards section .prose { display: none; }
+body.mode-cards section.nocard { display: none; }
+body.mode-cards section { padding-block: 44px; }
+body.mode-cards .toc li.nocard { display: none; }
+@media (max-width: 768px) { .cardband { margin-bottom: 32px; } .modebar { font-size: 12px; } }
+@media print {
+  .modebar, .lightbox, .cardlabel .zoom { display: none !important; }
+  body.mode-cards section .prose { display: block !important; }
+  body.mode-cards section.nocard { display: block !important; }
+  section { page-break-inside: auto; }
+  .cardband, .story, .explain, .thought, .stat-grid, .values, .cards, .table-scroll { page-break-inside: avoid; }
+  .frame { height: auto !important; border: none; border-radius: 0; }
+  .frame > div { transform: none !important; zoom: 0.44; }
+}
+
+</style>
+</head>
+<body>
+<div class="modebar">
+  <div class="left"><a class="homelink" href="../../">← 首頁</a><span class="brand">DSPy 2023 · 圖卡 + 教材</span></div>
+  <div class="switch" role="group" aria-label="閱讀模式">
+    <button type="button" data-mode="full" aria-pressed="true">圖卡＋詳解</button>
+    <button type="button" data-mode="cards" aria-pressed="false">只看圖卡</button>
+  </div>
+  <a class="canvaslink" href="cards.html">圖卡連續閱讀版</a>
+</div>
+<nav class="toc" aria-label="目錄">
+  <h5>目錄</h5>
+  <ol>
+    <li class="nocard"><a href="#prologue">第 3 週為什麼讀它</a></li>
+    <li><a href="#hand-prompts">手寫 prompt 的問題</a></li>
+    <li><a href="#abstractions">三個抽象</a></li>
+    <li><a href="#frameworks">和其他框架比</a></li>
+    <li><a href="#signatures">Signature 與 Predict</a></li>
+    <li><a href="#modules">模組與程式</a></li>
+    <li><a href="#bootstrap">編譯：bootstrap 示範</a></li>
+    <li><a href="#search">搜尋、微調、整合</a></li>
+    <li class="nocard"><a href="#goals">評估問什麼</a></li>
+    <li><a href="#gsm8k-programs">GSM8K：三個程式</a></li>
+    <li><a href="#gsm8k-results">GSM8K：結果</a></li>
+    <li><a href="#hotpotqa-programs">HotPotQA：四個程式</a></li>
+    <li><a href="#hotpotqa-results">HotPotQA：結果</a></li>
+    <li><a href="#takeaways">結論與代價</a></li>
+    <li class="nocard"><a href="#glossary">名詞速查</a></li>
+  </ol>
+</nav>
+<header class="hero">
+  <div class="container">
+    <div class="hero-meta">
+      <span>arXiv · 2023-10-05（v1；ICLR 2024）</span>
+      <span>研究論文（Stanford、UC Berkeley、Carnegie Mellon 等九個機構，ICLR 2024）</span>
+      <span>作者 Omar Khattab、Arnav Singhvi、Paridhi Maheshwari、Zhiyuan Zhang、Keshav Santhanam、Sri Vardhamanan、Saiful Haq、Ashutosh Sharma、Thomas T. Joshi、Hanna Moazam、Heather Miller、Matei Zaharia、Christopher Potts</span>
+    </div>
+    <p class="eyebrow">DSPY · COMPILING DECLARATIVE LM CALLS · 圖卡＋教材整合版</p>
+    <h1>prompt 不再手寫， 改由編譯器替管線產生<span class="accent">DSPy：signature 宣告做什麼，模組包住技巧，teleprompter 依 metric 產生示範</span></h1>
+    <p class="lede">2023 年的語言模型管線，多半靠一段段手寫、試錯出來的 prompt 模板串起來；換一個模型或多接一步，模板就得重調。這篇論文提出 DSPy：每個 LM 呼叫只宣告輸入與輸出欄位，Chain of Thought、ReAct 這類技巧變成可以互換的模組，再由稱為 teleprompter 的最佳化器拿少量訓練資料與一個 metric，自動跑出示範、挑出組合，把整個程式「編譯」成 prompt 或微調。作者在 GSM8K 數學題與 HotPotQA 多跳問答上，用幾行程式、幾分鐘的編譯，讓 GPT-3.5 與 llama2-13b-chat 勝過標準 few-shot 與專家寫的示範。每章開頭先放一張圖解卡講重點，往下是詳細作法；想速讀就切到「只看圖卡」。</p>
+    <dl class="hero-keystat">
+      <div><dt>GSM8K · GPT-3.5</dt><dd>82<small>% · 引言：簡單程式原本 33%</small></dd></div>
+      <div><dt>GSM8K · llama2-13b-chat</dt><dd>47<small>% · 引言：原本 9%</small></dd></div>
+      <div><dt>HotPotQA · T5-Large</dt><dd>39.3<small>% 答案 EM · 770M 參數，200 筆標註</small></dd></div>
+      <div><dt>超過 1,000 字元的字串</dt><dd>50<small>個 · LangChain 程式庫；DSPy 是 0</small></dd></div>
+    </dl>
+  </div>
+</header>
+
+
+<section id="prologue" data-toc="第 3 週為什麼讀它" class="nocard">
+  <div class="container">
+    <p class="chapter">Prologue · 整理者的引言</p>
+    <h2>框架各自抽象掉一層，DSPy 抽掉的是 prompt 本身</h2>
+    <p class="lede">Stanford CS 329Z 第 3 週「Frameworks &amp; Orchestration」那一講，講 DSPy 的 signature、module、optimizer，也講 LangChain／LangGraph 與 LlamaIndex，問框架替你抽象掉了什麼、抽象層級該怎麼選。這篇 2023 年的論文就是 DSPy 的出處，排在這一講的必讀。</p>
+
+    <p>做一條 LLM 管線或一個 agent，每一步幾乎都是一次 LM 呼叫，每次呼叫背後都有一段 prompt。各種框架的差別，在於它們替你包起來的是哪一層。依這篇論文附錄 B 的說法，LangChain 與 LlamaIndex 主要包的是現成的鏈、代理、檢索流程與各種工具連線，給需要現成元件的應用開發者用；這些元件裡的 prompt 多半是手寫的模板。DSPy 包的是 prompt 本身：你只宣告每一步吃什麼、吐什麼，prompt 的文字與範例交給一個最佳化器，依你給的 metric 去找。這正是這一講要比較的「框架抽象掉什麼」。</p>
+    <p>這篇論文的第一作者是 Stanford 的 Omar Khattab，作者群還有 Matei Zaharia、Christopher Potts 等人，2023 年 10 月貼上 arXiv（只有 v1，PDF 頁首標 Preprint），後來發表於 ICLR 2024。DSPy 念作 dee-ess-pie，是同一群人 2022 年 Demonstrate–Search–Predict（DSP）框架的第二代。論文用的模型是 GPT-3.5、llama2-13b-chat 與 T5-Large 這些 2023 年的模型，數字只對它們成立；這一頁更在意的是抽象怎麼設計、編譯怎麼運作。</p>
+    <p>讀論文和讀部落格不同，這一頁的處理方式也要先說清楚。章節跟著論文的論證走，不跟著節號走：第 1 到 3 章是問題與定位，第 4 到 7 章是程式模型與編譯器，第 8 到 12 章是評估與兩個案例，第 13 章是結論與代價。有兩處合併：第 3.3 節（teleprompter 的用法）和第 4 節第 1 階段（bootstrap 的內部）講的是同一個機制，併成第 6 章；第 4 節第 2、3 階段和第 6 節實際用到的編譯設定，併成第 7 章。數字只用正文、表 1、表 2、附錄 B 的文字與附錄 C 的表；摘要與引言的百分比照原文寫，不自己重算，整理者算的差距會標出來。程式片段都是教學用的精簡版，保留 API 名稱，結構與註解是整理者寫的。論文寫於 2023 年 10 月，沒有提到 LangGraph；這一頁提到它的地方都是整理者的補充。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>論文的用語（2023）</th><th>今天常見的說法（整理者加的對照）</th><th>這一頁怎麼寫</th></tr></thead>
+        <tbody>
+          <tr><td>teleprompter</td><td>optimizer：課程講題用這個詞，後來的 DSPy 文件也改稱 optimizer</td><td>照論文寫 teleprompter，必要時註明 optimizer</td></tr>
+          <tr><td>text transformation graph、LM pipeline</td><td>LLM 管線、compound AI system、agent 工作流</td><td>寫「管線」或「程式」</td></tr>
+          <tr><td>demonstration</td><td>few-shot 範例、demo</td><td>寫「示範」</td></tr>
+          <tr><td>compile</td><td>最佳化一個程式</td><td>寫「編譯」，對應論文 API 裡的 <code>compile</code></td></tr>
+          <tr><td>signature</td><td>帶型別的函式介面</td><td>保留 signature</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>先把幾個名詞對齊</h4>
+      <ul>
+        <li><strong>prompt 模板（prompt template）</strong>：一段固定的文字，留幾個空格填使用者的輸入；常常夾著幾個手寫的範例。管線裡每一步各有一段。</li>
+        <li><strong>few-shot／in-context learning</strong>：不改模型權重，只在 prompt 裡放幾個「輸入與正確輸出」的範例，讓模型照著做。</li>
+        <li><strong>管線（pipeline）</strong>：把一個任務拆成幾次 LM 呼叫，前一步的輸出接到後一步，中間可以穿插檢索、程式執行這類工具。</li>
+        <li><strong>metric</strong>：判斷一次輸出好不好的函式，例如答案是否完全相符（exact match）。DSPy 用它決定哪些示範留下來。</li>
+        <li><strong>微調（finetune）</strong>：用資料更新模型的權重。DSPy 把「挑 prompt 裡的示範」和「拿示範去微調」放在同一個框架裡。</li>
+      </ul>
+    </div>
+
+    <div class="pullquote">
+      寫程式的人決定每一步做什麼，prompt 裡的字與示範交給編譯器去找。
+      <cite>整理者的引言</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="hand-prompts" data-toc="手寫 prompt 的問題">
+  <div class="container head">
+    <p class="chapter">Chapter 01 · Introduction</p>
+    <h2>手寫的 prompt 模板，像手調分類器的權重</h2>
+    <p class="lede">LM 對 prompt 的寫法很敏感，多個呼叫接成管線之後更嚴重。現有管線與熱門框架的做法，是每一步配一段手工試錯出來的長字串；換模型、換管線、換資料，這段字串就可能失效。</p>
+    
+  </div>
+  <div class="cardband" id="card-02"><div class="cardlabel"><span class="n">圖卡 02 / 13</span><span class="t">手寫 prompt 像手調權重</span><button type="button" class="zoom" data-card="02">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">手寫 prompt 模板，像手調分類器的權重</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 1 節：LM 對 prompt 的寫法很敏感，管線裡好幾次呼叫要互相配合，敏感度被放大；現有管線與熱門框架的答案，是每一步配一段試錯出來的長字串</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 每一步一段手寫模板</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 每一步一個 signature，整條編譯</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:90px; top:200px; width:190px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">呼叫 1</div>
+  <div style="position:absolute; left:305px; top:200px; width:190px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">呼叫 2</div>
+  <div style="position:absolute; left:520px; top:200px; width:190px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">呼叫 3</div>
+
+  <div style="position:absolute; left:90px; top:290px; width:190px; height:70px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:8px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:14px; font-weight:700; color:#C8501F;">手寫模板 1</div><div style="font-size:12.5px; color:#6B7380;">指令＋範例，試錯調出來</div></div>
+  <div style="position:absolute; left:305px; top:290px; width:190px; height:70px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:8px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:14px; font-weight:700; color:#C8501F;">手寫模板 2</div><div style="font-size:12.5px; color:#6B7380;">要配合模板 1 的輸出</div></div>
+  <div style="position:absolute; left:520px; top:290px; width:190px; height:70px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:8px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:14px; font-weight:700; color:#C8501F;">手寫模板 3</div><div style="font-size:12.5px; color:#6B7380;">也要配合前兩段</div></div>
+
+  <div style="position:absolute; left:90px; top:400px; width:620px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; gap:14px; font-size:14px; font-weight:700; color:#C8501F;">換一個 LM &#183; 換一條管線 &#183; 換資料領域 &#183; 換一批輸入</div>
+  <div style="position:absolute; left:90px; top:462px; width:620px; text-align:center; font-size:13px; font-weight:500; color:#C8501F;">任何一項改變，三段字串都可能要回頭一起手調</div>
+  <div style="position:absolute; left:60px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">原文的類比：這像手動設定分類器的權重。指令怎麼措辭、放哪幾個範例、範例的順序，都在一條管線、一個 LM 上試出來；換掉其中一樣，就不一定適用。</div>
+
+  <div style="position:absolute; left:870px; top:200px; width:190px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">signature 1</div>
+  <div style="position:absolute; left:1085px; top:200px; width:190px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">signature 2</div>
+  <div style="position:absolute; left:1300px; top:200px; width:190px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">signature 3</div>
+
+  <div style="position:absolute; left:1000px; top:290px; width:360px; height:56px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">compile：程式＋少量資料＋metric</div><div style="font-size:12px; color:rgba(255,255,255,0.8);">teleprompter 替每一步找示範</div></div></div>
+  <div style="position:absolute; left:1372px; top:268px; font-size:12.5px; font-weight:500; color:#2E7B4F;">換 LM、改管線：重編</div>
+
+  <div style="position:absolute; left:870px; top:390px; width:190px; height:64px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:8px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:14px; font-weight:700; color:#2E7B4F;">產生的 prompt 1</div><div style="font-size:12.5px; color:#6B7380;">示範由 bootstrap 找</div></div>
+  <div style="position:absolute; left:1085px; top:390px; width:190px; height:64px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:8px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:14px; font-weight:700; color:#2E7B4F;">產生的 prompt 2</div><div style="font-size:12.5px; color:#6B7380;">和前一步一起通過 metric</div></div>
+  <div style="position:absolute; left:1300px; top:390px; width:190px; height:64px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:8px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:14px; font-weight:700; color:#2E7B4F;">產生的 prompt 3</div><div style="font-size:12.5px; color:#6B7380;">或微調成小模型</div></div>
+  <div style="position:absolute; left:870px; top:470px; width:620px; text-align:center; font-size:13px; font-weight:500; color:#2E7B4F;">signature 不用改，prompt 由編譯器依這次的 LM 與資料重新產生</div>
+  <div style="position:absolute; left:840px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">原文的方向：把建管線從「操作自由格式的字串」推向「寫程式」，由編譯器從程式自動產生最佳化過的 LM 呼叫策略與 prompt。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#C8501F;">手調：換一樣就重來</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">指令措辭、挑哪些範例、範例的順序，全是人工設定的參數。作者說這種做法到處都是，但脆弱、無法擴展。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文列的四種變動：別的管線、別的 LM、別的資料領域，甚至別的輸入。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#2E7B4F;">編譯：換一樣就重編</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">每一步只宣告輸入與輸出，少量資料與 metric 交給 teleprompter，由它產生示範、組出 prompt 或微調。</div>
+    <div style="font-size:13px; color:#8A93A0;">靈感來自深度學習：層可以組合，權重用最佳化器訓練、不手調。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左右兩邊的三步管線是整理者的示意；四種變動是原文列的，右邊的「重編」對應原文「編譯器從程式產生 prompt」的做法。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M287 217L299 225L287 233Z" fill="#9AA3AE"></path>
+    <path d="M502 217L514 225L502 233Z" fill="#9AA3AE"></path>
+    <path d="M185 250L185 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M400 250L400 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M615 250L615 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M185 398L185 362" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c02)"></path>
+    <path d="M400 398L400 362" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c02)"></path>
+    <path d="M615 398L615 362" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c02)"></path>
+    <path d="M1067 217L1079 225L1067 233Z" fill="#9AA3AE"></path>
+    <path d="M1282 217L1294 225L1282 233Z" fill="#9AA3AE"></path>
+    <path d="M965 250L1100 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1180 250L1180 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1395 250L1260 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1100 346L965 388" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c02)"></path>
+    <path d="M1180 346L1180 388" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c02)"></path>
+    <path d="M1260 346L1395 388" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c02)"></path>
+    <path d="M1492 422H1520V318H1362" stroke="#2E7B4F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#an-c02)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>論文從當時的熱潮講起。語言模型讓研究者能在更高的抽象層級、用更少的資料做出 NLP 系統，於是出現大量的 prompting 技巧與輕量微調方法：讓模型適應新任務、引導它一步步推理（例如 Chain of Thought），或讓它接上檢索來源與工具。這些技巧多半各自被研究，但越來越多人開始把任務拆成幾次比較好處理的 LM 呼叫，組成多階段的管線或 agent，希望整體表現更好。</p>
+    <p>問題出在接縫。LM 對每個任務的 prompt 寫法很敏感；在管線裡，好幾次呼叫還得彼此配合，敏感度被放大。結果是現有的管線與熱門的開發框架，都把每一次 LM 呼叫寫成寫死的 prompt 模板：一長串指令加示範，靠人工反覆試錯調出來。作者承認這種做法到處都是，但認為它脆弱、無法擴展，並用了一個類比：</p>
+
+    <div class="quote-en">
+      "conceptually akin to hand-tuning the weights for a classifier"
+      <span class="zh">「概念上就像手動調整分類器的權重」：第 1 節對手寫 prompt 模板的評語。</span>
+    </div>
+
+    <p>類比的意思可以這樣理解（這段是整理者的展開）：訓練分類器時，沒有人會自己一個一個設定權重，而是定好模型架構、給資料與損失函數，交給最佳化器去找。一段手寫的 prompt 模板，等於一組人工設定的權重：指令怎麼措辭、放哪幾個範例、範例的順序。原文點出它會在四種變動下失效：換到另一條管線、換一個 LM、換一個資料領域，甚至只是換一批輸入。</p>
+    <p>作者的方向是把建管線這件事，從「操作自由格式的字串」推向「寫程式」：用可組合的模組拼出一張文字轉換圖（text transformation graph），再由編譯器從程式自動產生最佳化過的 LM 呼叫策略與 prompt。後面幾章依序說明要寫的程式長什麼樣、編譯器又做了什麼。</p>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>手寫模板到底有多長</h4>
+      <p>論文附錄 C 抄了八段來自研究論文與熱門函式庫的 prompt，並數了它們的長度：最短的 LangChain zero-shot ReAct 有 600 個字元，最長的 LangChain「附來源的問答」有 6,197 個字元。第 3 章會把這張表完整列出來，並對照作者對 LangChain 程式庫的統計。</p>
+    </div>
+
+    <div class="thought">
+      <span class="label">思考題 · 01</span>
+      <h4>你的專案裡，有幾段 prompt 是對著某一個模型調出來的？</h4>
+      <p>想像下個月要把主力模型換成另一家、或換成小一號的開源模型。</p>
+      <p class="hint">先列出每一段 prompt 裡「只為了讓這個模型聽話」而加的東西：特別的措辭、刻意挑的範例、範例的順序。這些就是論文說的手調權重；換模型時，它們最可能變成要重調的部分。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="abstractions" data-toc="三個抽象">
+  <div class="container head">
+    <p class="chapter">Chapter 02 · Introduction · The DSPy Programming Model</p>
+    <h2>DSPy 借了深度學習的兩個想法：層可以組合，權重交給最佳化器</h2>
+    <p class="lede">signature 取代手寫的指令，module 取代手寫的 prompting 技巧，teleprompter 取代人工試錯；模組之間用一般的 Python 控制流程接起來，寫法和 PyTorch 一樣。</p>
+    
+  </div>
+  <div class="cardband" id="card-03"><div class="cardlabel"><span class="n">圖卡 03 / 13</span><span class="t">三個抽象對應深度學習</span><button type="button" class="zoom" data-card="03">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">三個抽象，各借深度學習的一樣東西</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 1、3 節：DSPy 把 LM 管線寫成程式，靈感來自深度學習框架的兩個共識：通用的層可以組合，權重用最佳化器訓練而不手調</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">抽象</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">取代手寫的什麼</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">原文的類比</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">程式裡長這樣</div>
+  </div>
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">signature</div><div style="font-size:13px; color:#8A93A0;">宣告一步吃什麼、吐什麼</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">自由格式的 prompt 字串裡，描述任務的那段指令</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">程式語言的型別簽章：只定介面，不管實作</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; color:#1C2431;">"question -&gt; answer"</div>
+  </div>
+  <div style="position:absolute; left:60px; top:306px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">module</div><div style="font-size:13px; color:#8A93A0;">包住一種 prompting 技巧</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">Chain of Thought、ReAct 這類技巧的手寫 prompt 與範例</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">神經網路的層：可以呼叫、可以組合、帶參數</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; color:#1C2431;">dspy.ChainOfThought(sig)</div>
+  </div>
+  <div style="position:absolute; left:60px; top:402px; width:1480px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#2E7B4F;">teleprompter</div><div style="font-size:13px; color:#8A93A0;">今天的文件叫 optimizer</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">人工反覆試錯、調 prompt 的那個過程</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">訓練權重的最佳化器：用資料找參數，取代手調</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; color:#1C2431; line-height:1.5;">BootstrapFewShot(metric)<br>.compile(program, trainset)</div>
+  </div>
+  <div style="position:absolute; left:60px; top:498px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">program</div><div style="font-size:13px; color:#8A93A0;">用 Python 把模組接起來</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">靠字串操作把一次次呼叫黏在一起的鏈</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">PyTorch 的 define-by-run 計算圖：跑到哪、圖就長到哪</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; color:#1C2431; line-height:1.5;">class RAG(dspy.Module):<br>&#160;&#160;def forward(self, q): ...</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">宣告做什麼，不寫怎麼問</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">signature 說明一次文字轉換吃什麼、吐什麼；要怎麼 prompt，交給 DSPy 展開與編譯。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">欄位名就是語意：question 和 answer 會被當成不同角色。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">模組的參數：LM、指令、示範</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">任何實作 signature 的呼叫都得決定這三樣；論文專注在自動產生與挑選示範。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">凍結的 LM 拿示範當 few-shot，要微調的 LM 拿它當訓練資料。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">編譯＝用資料找參數</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">teleprompter 吃程式、幾筆訓練輸入與一個 metric，回傳一個最佳化過的新程式。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">名字的由來：prompting 在「遠處」自動發生，不用人手介入。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：四個類比都是原文自己的比喻（型別簽章、神經網路的層、最佳化器、define-by-run）；把它們排成一張表、強調 teleprompter 那一列，是整理者的做法。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>作者說 DSPy 的靈感來自深度學習框架後來形成的共識，有兩點：第一，許多通用的層可以模組化地組成任意複雜的架構；第二，模型的權重用最佳化器訓練，而不是手調。第 2 節也把 Torch、Theano、Chainer 列為榜樣：它們提供的抽象推動了深度學習的發展，作者想為所謂的「基礎模型程式設計」（foundation model programming）提供同樣的概念框架。做法上借用了可微分程式設計的想法，只是對象換成 LM 呼叫而不是神經網路；語法則直接借自 PyTorch。</p>
+    <p>在 DSPy 裡，LM 被當成一個抽象的文字產生裝置：吃進 prompt 字串、吐出補全的文字。它可以是能做 in-context learning 的大模型（例如 GPT-3.5、Llama2-7b），也可以是可以微調的小模型（例如 T5-base），並可以設一個預設的 LM。一個 DSPy 程式就是一段 Python：拿任務的輸入（要回答的問題、要摘要的論文），經過幾個步驟，回傳輸出。DSPy 提出三個抽象來讓這件事能自動最佳化：</p>
+
+    <div class="values">
+      <div class="value-card"><span class="tag">signature</span><h4>抽象輸入輸出</h4><p>宣告一個模組吃什麼、吐什麼，例如「問題進、答案出」，不寫要怎麼問 LM。</p></div>
+      <div class="value-card"><span class="tag">module</span><h4>取代手寫的技巧</h4><p>把 Chain of Thought、ReAct 這類 prompting 技巧做成模組，可以接成任意的管線。</p></div>
+      <div class="value-card"><span class="tag">teleprompter</span><h4>最佳化整條管線</h4><p>對管線裡所有模組一起最佳化，讓 metric 最高；課程與後來的 DSPy 文件叫它 optimizer。</p></div>
+    </div>
+
+    <p>模組的角色就像神經網路的層，每一個都是能適應任務的元件，負責一種文字轉換，例如回答問題或摘要論文。每個模組都被參數化，能在管線裡反覆 bootstrap 出有用的示範，藉此學到該有的行為。管線的寫法分兩步：先宣告需要哪些模組，再用任何控制流程（if、for 迴圈、例外處理）把它們接起來。這是 define-by-run 的計算圖，圖長什麼樣，取決於程式實際跑了哪些程式碼。</p>
+    <p>編譯器吃三樣東西：程式、幾筆訓練輸入（標籤可有可無）、一個驗證用的 metric。它在這些輸入上模擬程式的各種版本，替每個模組 bootstrap 出範例的執行軌跡，再用這些軌跡組出有效的 few-shot prompt，或替管線的某幾步微調小型 LM。實際的最佳化由 teleprompter 負責，它們是通用的最佳化策略，決定模組怎麼從資料裡學。名字的由來是「遠距的 prompting」：prompting 這件事被抽象化、自動化，不需要人在旁邊手動介入。</p>
+    <p>作者把貢獻定位在經驗與演算法兩方面：這是第一個把 prompting 技巧轉成參數化宣告式模組的程式模型，加上一個能最佳化任意管線的編譯器。他們發現很短的程式就能 bootstrap 出會自我改進的多階段系統，用的 LM 小到 llama2-13b-chat 與 7.7 億參數的 T5-Large。不用手寫 prompt、編譯幾分鐘到幾十分鐘，引言報告的提升如下：</p>
+
+    <div class="stat-grid">
+      <div class="stat-card bronze"><div class="big">33→82<small>%</small></div><div class="label">GPT-3.5 · GSM8K 數學題</div><div class="note">引言的說法，細節在第 10 章</div></div>
+      <div class="stat-card bronze"><div class="big">32→46<small>%</small></div><div class="label">GPT-3.5 · HotPotQA 問答</div><div class="note">細節在第 12 章</div></div>
+      <div class="stat-card"><div class="big">9→47<small>%</small></div><div class="label">llama2-13b-chat · GSM8K</div><div class="note">同一組程式換成 13B 開源模型</div></div>
+      <div class="stat-card"><div class="big">22→41<small>%</small></div><div class="label">llama2-13b-chat · HotPotQA</div><div class="note">引言把這些都稱為「簡單程式」的提升</div></div>
+    </div>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>DSPy 與 DSP</h4>
+      <p>論文的第一個註腳說，DSPy 念作 dee-ess-pie，是作者群先前 Demonstrate–Search–Predict（DSP）框架的第二代。這篇論文只介紹關鍵概念；更完整、持續更新的文件放在 GitHub 的 stanfordnlp/dspy。論文裡的 API 名稱（例如 teleprompter、BootstrapFewShot）是 2023 年的版本，之後的版本有些改了名字。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="frameworks" data-toc="和其他框架比">
+  <div class="container head">
+    <p class="chapter">Chapter 03 · Related Work · Appendix B &amp; C</p>
+    <h2>現成框架包好了流程，裡面的 prompt 還是手寫的</h2>
+    <p class="lede">LangChain、LlamaIndex 替應用開發者包好常用的鏈、代理與工具連線。作者在 2023 年 9 月底做了非正式統計：LangChain 程式庫裡有 50 個超過 1,000 字元的字串，DSPy 裡一個也沒有。</p>
+    
+  </div>
+  <div class="cardband" id="card-04"><div class="cardlabel"><span class="n">圖卡 04 / 13</span><span class="t">框架裡的手寫 prompt</span><button type="button" class="zoom" data-card="04">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">框架包好了流程，prompt 仍是手寫的長字串</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">附錄 B、C：作者 2023 年 9 月底的非正式統計。LangChain、LlamaIndex 替應用開發者包好鏈、代理與工具連線；DSPy 提供的是三個可以組合的運算子</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 框架與論文裡的手寫 prompt</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ DSPy 的程式庫</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:203px; width:250px; font-size:13px; color:#2B3340;">1 文字與證據比對 &#183; 論文</div>
+  <div style="position:absolute; left:320px; top:202px; width:288px; height:22px; box-sizing:border-box; background-color:#D5DAE1; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:616px; top:203px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">4,964</div>
+
+  <div style="position:absolute; left:60px; top:237px; width:250px; font-size:13px; color:#2B3340;">2 數學題 PAL &#183; LangChain</div>
+  <div style="position:absolute; left:320px; top:236px; width:230px; height:22px; box-sizing:border-box; background-color:#E6B49A; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:558px; top:237px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">3,957</div>
+
+  <div style="position:absolute; left:60px; top:271px; width:250px; font-size:13px; color:#2B3340;">3 ReAct &#183; 論文</div>
+  <div style="position:absolute; left:320px; top:270px; width:226px; height:22px; box-sizing:border-box; background-color:#D5DAE1; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:554px; top:271px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">3,889</div>
+
+  <div style="position:absolute; left:60px; top:305px; width:250px; font-size:13px; color:#2B3340;">4 zero-shot ReAct &#183; LangChain</div>
+  <div style="position:absolute; left:320px; top:304px; width:35px; height:22px; box-sizing:border-box; background-color:#E6B49A; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:363px; top:305px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">600</div>
+
+  <div style="position:absolute; left:60px; top:339px; width:250px; font-size:13px; font-weight:700; color:#C8501F;">5 附來源的問答 &#183; LangChain</div>
+  <div style="position:absolute; left:320px; top:338px; width:360px; height:22px; box-sizing:border-box; background-color:#C8501F; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:688px; top:339px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#C8501F;">6,197</div>
+
+  <div style="position:absolute; left:60px; top:373px; width:250px; font-size:13px; color:#2B3340;">6 MyScale SQL &#183; LangChain</div>
+  <div style="position:absolute; left:320px; top:372px; width:130px; height:22px; box-sizing:border-box; background-color:#E6B49A; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:458px; top:373px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">2,239</div>
+
+  <div style="position:absolute; left:60px; top:407px; width:250px; font-size:13px; color:#2B3340;">7 找相關文件 &#183; LlamaIndex</div>
+  <div style="position:absolute; left:320px; top:406px; width:42px; height:22px; box-sizing:border-box; background-color:#E6B49A; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:370px; top:407px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">719</div>
+
+  <div style="position:absolute; left:60px; top:441px; width:250px; font-size:13px; color:#2B3340;">8 國稅局聊天機器人 &#183; LlamaIndex</div>
+  <div style="position:absolute; left:320px; top:440px; width:131px; height:22px; box-sizing:border-box; background-color:#E6B49A; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:459px; top:441px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">2,258</div>
+
+  <div style="position:absolute; left:320px; top:474px; font-size:12.5px; color:#8A93A0;">單位：字元（附錄 C 的表）　橘：函式庫的模板　灰：研究論文的 prompt</div>
+  <div style="position:absolute; left:60px; top:500px; width:700px; font-size:13.5px; font-weight:500; color:#C8501F;">LangChain 程式碼：50 個超過 1,000 字元的字串 &#183; 12 個 prompts.py &#183; 42 個 prompt.py</div>
+  <div style="position:absolute; left:60px; top:534px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">附錄 B 另外算了平均：SQL 查詢為五種資料庫各寫一份，平均 1,058 字元；「附來源的問答」與 Graph_QA 的模板平均 1,337 與 722 字元。</div>
+
+  <div style="position:absolute; left:850px; top:200px; width:212px; height:84px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#2E7B4F;">signature</div><div style="font-size:13px; color:#6B7380; line-height:1.4;">抽象 prompt 本身</div></div>
+  <div style="position:absolute; left:1074px; top:200px; width:212px; height:84px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#2E7B4F;">module</div><div style="font-size:13px; color:#6B7380; line-height:1.4;">抽象 prompting 技巧</div></div>
+  <div style="position:absolute; left:1298px; top:200px; width:212px; height:84px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#2E7B4F;">teleprompter</div><div style="font-size:13px; color:#6B7380; line-height:1.4;">最佳化串起模組的程式</div></div>
+
+  <div style="position:absolute; left:850px; top:306px; width:660px; height:100px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:0px 26px; display:flex; align-items:center; gap:22px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:54px; font-weight:600; color:#2E7B4F; line-height:1;">0</div>
+    <div style="display:flex; flex-direction:column; gap:4px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">個超過 1,000 字元的字串</div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">程式庫裡也沒有任何任務的手寫 prompt 示範（2023 年 9 月底）</div></div>
+  </div>
+  <div style="position:absolute; left:850px; top:424px; width:660px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:16px; padding:0px 20px;">
+    <div style="flex-shrink:0; padding:4px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.06em;">prompt 從哪來</div>
+    <div style="font-size:14px; color:#2B3340;">編譯時依 metric bootstrap 示範，換 LM 或換任務就重新產生</div>
+  </div>
+  <div style="position:absolute; left:840px; top:534px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">附錄 B：兩者焦點不同。前者給需要現成鏈、代理、資料庫連線與記憶的應用開發者；DSPy 給要自己組新管線、靠自動編譯追求高品質的研究者與實務工作者。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#C8501F;">50 個，對上 0 個</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">LangChain 程式碼裡超過 1,000 字元的字串有 50 個，多半是 prompt。作者說這些框架裡同樣有 DSPy 想解決的 prompt 工程問題。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者的看法：替每個資料庫供應商各寫死一段 prompt，不如依 LM 與任務自動 bootstrap。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#2E7B4F;">包的是 prompt 工程本身</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">LangChain、LlamaIndex 包的是熱門的流程與工具；DSPy 包的是 prompt、prompting 技巧，以及調 prompt 這件事。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者的目標：用自動編譯（自我改進）取代手動的 prompt 工程。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：統計是作者的非正式調查（2023 年 9 月底），兩邊的程式庫之後都改了很多。PAL 的模板在附錄 B 寫 3,982 字元、附錄 C 的表寫 3,957，兩個都是原文的數字。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 2 節把 DSPy 放進四條研究脈絡。第一條是 in-context learning，作者稱它為基礎模型程式設計的關鍵機制：尤其在指令微調之後，光靠 prompting 就能引出複雜的行為；以前需要任務專用或人工規則的弱監督，現在也交給 LM 來做。第二條是工具：in-context learning 的方法開始例行呼叫檢索模型、多模態模型、API 與計算機，於是出現 LangChain、Semantic Kernel、LlamaIndex 等工具包，提供把 LM 接上大量工具的現成鏈與代理。作者的評語是，這些工具包同樣有 DSPy 要處理的 prompt 工程問題：它們用手寫的 prompt 模板表達任務專屬的行為。</p>
+    <p>第三條是 prompt 最佳化。已經有研究用離散最佳化或強化學習找有效的 prompt，但通常只針對單一次邏輯上的 LM 呼叫。DSPy 想把這件事推廣到任意管線：從高層的宣告式 signature 出發，在約束下 bootstrap 出高品質的多階段示範。teleprompter 可以用交叉驗證這類模型選擇技巧，原則上也可以用強化學習、LM 回饋，或學習式、貝氏的超參數最佳化方法。第四條是寫法上的傳承：作者效法 Theano、PyTorch、HuggingFace 的論文，用基準數字加上一些質性說明來支持一個程式模型。</p>
+    <p>附錄 B 專門比較 LangChain 與 LlamaIndex。作者先說焦點不同：DSPy 要處理的是為新的 LM 計算圖做 prompt 工程這個根本問題；LangChain 與 LlamaIndex 通常幫的是需要現成元件的應用開發者，提供熱門、可重用的管線實作（特定的代理、特定的檢索流程），以及工具（接各種資料庫、替代理實作長期與短期記憶）。DSPy 提供的則是可以組合的核心運算子：signature 抽象 prompt，module 抽象 prompting 技巧，teleprompter 最佳化把模組串起來的任意命令式程式碼。它的目標是讓研究者與實務工作者快速做出新的管線，並用自動編譯（自我改進）而不是手動 prompt 工程達到高品質。</p>
+    <p>接著是那份非正式統計。2023 年 9 月底，作者發現 LangChain 的程式碼裡有 50 個超過 1,000 字元的字串，大多是 prompt；DSPy 裡一個都沒有。LangChain 還有相當多的 Python 檔專門放任務模板與 prompt 工程：12 個 <code>prompts.py</code> 與 42 個 <code>prompt.py</code>。反過來，DSPy 函式庫在當時沒有任何一個任務的手寫 prompt 示範。幾個具體例子：LangChain 的 Program-Aided Language Model（PAL）鏈用一個 3,982 字元的模板，裡面有 8 道數學應用題與對應的程式；SQL 查詢的 prompt 為 Oracle、GoogleSQL、DuckDB、Crate、MySQL 各寫一份，平均 1,058 字元；「附來源的問答」與 Graph_QA 的模板平均 1,337 與 722 字元。作者的看法是，專家寫的 prompt 有它的用處，但自動 bootstrap、能隨 LM 與任務調整的 prompt 更有力，也比在程式庫裡替每個資料庫供應商各寫死一段 prompt 更模組化。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>附錄 C 的表 · prompt</th><th>出處</th><th>英文字數</th><th>字元數</th></tr></thead>
+        <tbody>
+          <tr><td>1 · 文字與證據比對</td><td>Gao 等人（2023a）</td><td>818</td><td>4,964</td></tr>
+          <tr><td>2 · 數學應用題（PAL）</td><td>LangChain、Gao 等人（2023b）</td><td>566</td><td>3,957</td></tr>
+          <tr><td>3 · ReAct</td><td>Yao 等人（2022）</td><td>593</td><td>3,889</td></tr>
+          <tr><td>4 · zero-shot ReAct</td><td>LangChain</td><td>101</td><td>600</td></tr>
+          <tr><td>5 · 附來源的問答</td><td>LangChain</td><td>992</td><td>6,197</td></tr>
+          <tr><td>6 · MyScale 的 SQL 查詢</td><td>LangChain</td><td>343</td><td>2,239</td></tr>
+          <tr><td>7 · 找相關文件</td><td>LlamaIndex</td><td>129</td><td>719</td></tr>
+          <tr><td>8 · 國稅局聊天機器人</td><td>LlamaIndex</td><td>389</td><td>2,258</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>同一件事在附錄裡有兩個寫法，這裡兩個都留著：PAL 的模板在附錄 B 的正文是 3,982 字元，在附錄 C 的表是 3,957 字元；「附來源的問答」在附錄 B 是幾份模板的平均 1,337 字元，附錄 C 抄的那一份則有 6,197 字元。這些是作者的非正式調查，時間點是 2023 年 9 月底，之後兩邊的程式庫都改了很多。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>「焦點不同」與「同樣的問題」要分開讀</h4>
+      <p>附錄 B 同時說了兩件事。一件是定位：LangChain 與 LlamaIndex 服務的是要現成元件的應用開發者，DSPy 服務的是要自己組新管線的人。另一件是批評：現成元件裡的 prompt 仍是手寫的，所以有第 1 章說的脆弱問題。這一頁的圖卡用 ✗／✓ 是因為原文對手寫 prompt 有明確的評價；「焦點不同」那一半，原文沒有說哪一邊比較好。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="signatures" data-toc="Signature 與 Predict">
+  <div class="container head">
+    <p class="chapter">Chapter 04 · Natural Language Signatures · The Predict Module</p>
+    <h2>Signature 只宣告做什麼，prompt 由 Predict 展開</h2>
+    <p class="lede">signature 是一個用自然語言寫的函式型別：輸入欄位、輸出欄位、選填的指令。Predict 模組拿著它再加上示範，組出 prompt、呼叫 LM、把輸出拆回欄位。</p>
+    
+  </div>
+  <div class="cardband" id="card-05"><div class="cardlabel"><span class="n">圖卡 05 / 13</span><span class="t">Predict 怎麼展開 signature</span><button type="button" class="zoom" data-card="05">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">Signature 說做什麼，Predict 負責怎麼問</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.1、3.2 節與附錄 D.1：一次 Predict 呼叫的五步。你只寫第一格，其餘由 DSPy 處理；第三格的示範在編譯時由 teleprompter 填入</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　宣告 signature</div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#6B7380; line-height:1.55;">dspy.Predict(<br>"question -&gt; answer")</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　展開成指令與格式</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">欄位名產生一行指令，<br>每個欄位配一個前綴</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　放進示範</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">一開始是空的，編譯後填入</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">這就是參數</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　呼叫 LM</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">用全域預設的 LM，<br>或這個模組自己指定的 LM</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　解析成 Prediction</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">照輸出欄位拆回來，<br>用 pred.answer 取值</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:300px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">編譯模式</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">Predict 發現自己正在被編譯時，會把這一次的輸入與輸出記成 trace，交給 teleprompter 挑示範（第 7 卡）；平常呼叫時只做上面五步。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:420px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:444px; font-size:20px; font-weight:700; color:#1C2431;">展開後的 prompt，與 signature 的兩個好處</div>
+
+  <div style="position:absolute; left:60px; top:486px; width:470px; height:260px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">展開後長這樣</div>
+    <div style="display:flex; gap:10px; align-items:baseline;"><div style="flex-shrink:0; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">指令</div><div style="font-size:14.5px; color:#2B3340; line-height:1.55;">一行：給定 question 欄位，產生 answer 欄位</div></div>
+    <div style="display:flex; gap:10px; align-items:baseline;"><div style="flex-shrink:0; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">格式</div><div style="font-size:14.5px; color:#2B3340; line-height:1.55;">每個欄位一行，前綴是 Question: 與 Answer:</div></div>
+    <div style="display:flex; gap:10px; align-items:baseline;"><div style="flex-shrink:0; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">示範</div><div style="font-size:14.5px; color:#2B3340; line-height:1.55;">編譯時 bootstrap 出的幾組問答，以 --- 分隔</div></div>
+    <div style="display:flex; gap:10px; align-items:baseline;"><div style="flex-shrink:0; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">結尾</div><div style="font-size:14.5px; color:#2B3340; line-height:1.55;">這次的題目，Answer 留白給 LM 寫</div></div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">附錄 F 的圖 9 到圖 11 是 DSPy 實際產生的 prompt。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:486px; width:470px; height:260px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">好處一：可以被編譯</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">signature 能編譯成會自我改進、配合所在管線的 prompt 或微調，做法主要是替每個 signature bootstrap 有用的示範。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">欄位名就是語意：english_document -&gt; french_translation 會被展開成英翻法的 prompt。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:486px; width:470px; height:260px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">好處二：格式與解析交給它</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">結構化的格式與解析由 signature 處理，使用者的程式裡少掉、最好是免掉脆弱的字串操作。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">要更多控制時寫成類別：docstring 當指令，欄位加描述（附錄 A）；欄位型別在當時還是開發中的功能。</div>
+  </div>
+  <div style="position:absolute; left:60px; top:766px; width:1480px; font-size:14px; color:#6B7380; line-height:1.6;">一行就是一個完整的問答程式：<span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#1C2431;">qa = dspy.Predict("question -&gt; answer")</span>，呼叫 qa(question=…) 會回傳一個帶 answer 欄位的 Prediction。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：五步的切法依附錄 D.1 的簡化虛擬碼，是整理者排的；「展開後長這樣」依附錄 F 由 DSPy 產生的 prompt 改寫成中文說明。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M1345 262L1345 296" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>DSPy 程式不寫自由格式的 prompt，而是用自然語言的 signature 把工作交給 LM。signature 是一個帶自然語言型別的函式宣告：一段簡短的宣告式規格，說明一次文字轉換要做什麼（例如「吃進問題、回傳答案」），而不是某個 LM 該被怎麼 prompt。形式上，它是一組輸入欄位、一組輸出欄位，再加一個選填的指令；每個欄位有名字，也可以附上前綴與描述，但描述通常省略。欄位預設裝的是自由文字；作者正在試驗讓欄位宣告型別（例如 bool、int），在寫論文的當時還不是核心功能。</p>
+    <p>欄位的名字就是語意。DSPy 會從欄位名推斷每個欄位的角色，例如編譯器會用 in-context learning 把 <code>question</code> 和 <code>answer</code> 當成不同的東西，並在反覆編譯中調整用法。實務上可以用簡寫：</p>
+
+    <div class="codeblock">
+      <span class="file">signature 的簡寫 · 教學用精簡版</span>
+<pre class="code"><span class="c"># 宣告欄位，不寫 prompt：這一行就是一個完整的問答程式</span>
+qa = dspy.Predict(<span class="s">"question -&gt; answer"</span>)
+pred = qa(question=<span class="s">"台灣最高的山是哪一座？"</span>)
+pred.answer            <span class="c"># 輸出欄位的名字，就是取值的名字</span>
+
+<span class="c"># 欄位名換掉，任務就跟著換</span>
+translate = dspy.Predict(<span class="s">"english_document -&gt; french_translation"</span>)</pre>
+    </div>
+
+    <p>DSPy 會解析這種寫法，把欄位名展開成給 LM 的有意義指令；<code>english_document -&gt; french_translation</code> 就會變成英翻法的 prompt。作者說 signature 比 prompt 多兩個好處：第一，它可以被編譯成會自我改進、能配合所在管線的 prompt 或微調，做法主要是替每個 signature bootstrap 有用的示範（第 6 章）；第二，它處理結構化的格式與解析，減少、最好是免除使用者程式裡脆弱的字串操作。</p>
+    <p>需要更多控制時，signature 可以寫成 Python 類別（附錄 A）：類別的 docstring 就是指令，每個欄位用 <code>InputField</code>、<code>OutputField</code> 宣告並可附描述。下面是附錄 A 那個「依脈絡產生搜尋查詢」例子的精簡版；附錄 A 也提到，輸出欄位可以選擇宣告成 bool、int、float、list、dict，這在當時是開發中的功能。</p>
+
+    <div class="codeblock">
+      <span class="file">類別寫法的 signature · 教學用精簡版</span>
+<pre class="code">class GenerateSearchQuery(dspy.Signature):
+    <span class="s">"""寫一個能幫忙回答複雜問題的簡單搜尋查詢。"""</span>   <span class="c"># docstring 就是指令</span>
+    context  = dspy.InputField(desc=<span class="s">"可能含有相關事實"</span>)
+    question = dspy.InputField()
+    query    = dspy.OutputField()</pre>
+    </div>
+
+    <p>signature 只是介面。要用它，得宣告一個帶著它的模組；最核心的就是 <code>Predict</code>。Predict 內部存三樣東西：傳入的 signature、一個選填的 LM（預設是空的，代表用全域的預設 LM），以及一串示範（一開始是空的）。它和 PyTorch 的層一樣是可以呼叫的函式：收下對應輸入欄位的關鍵字參數，組出實作這個 signature 的 prompt 並放進適當的示範，呼叫 LM，再把輸出解析回各個輸出欄位。當 Predict 發現自己處在編譯模式，還會記下每次的輸入與輸出，也就是 trace，交給 teleprompter 做 bootstrap。附錄 D.1 的簡化虛擬碼就是這幾步，外加一個判斷「現在是不是在編譯」的 if。</p>
+
+    <div class="codeblock">
+      <span class="file">展開後的 prompt 長這樣 · 依附錄 F 的格式，示範內容改成佔位</span>
+<pre class="code">Given the fields `question`, produce the fields `answer`.   <span class="c"># 從欄位名產生的指令</span>
+---
+Follow the following format.
+Question: ${question}
+Answer: ${answer}
+---
+Question: <span class="a">〔示範 1 的題目〕</span>
+Answer: <span class="a">〔示範 1 的答案，編譯時由 bootstrap 產生〕</span>
+---
+Question: <span class="a">〔這次真正要問的題目〕</span>
+Answer:</pre>
+    </div>
+
+    <div class="explain bronze">
+      <span class="label">實作提示</span>
+      <h4>先把欄位名取好</h4>
+      <p>因為 DSPy 從欄位名推斷語意，名字本身就是給 LM 的第一份說明。<code>question -&gt; answer</code> 與 <code>context, question -&gt; search_query</code> 只差一個輸出欄位，後者就會去寫搜尋查詢而不是答案（第 5 章）。欄位名表達不了的限制，再用類別寫法補 docstring 與欄位描述。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="modules" data-toc="模組與程式">
+  <div class="container head">
+    <p class="chapter">Chapter 05 · Modules · Parameterization · Tools · Programs</p>
+    <h2>prompting 技巧變成可以互換的模組</h2>
+    <p class="lede">ChainOfThought、ReAct 這些內建模組都支援任何 signature，換一個模組就換一種技巧；它們只有幾行程式，裡面還是一個或幾個 Predict。模組的參數是 LM、指令與示範，其中示範最重要。</p>
+    
+  </div>
+  <div class="cardband" id="card-06"><div class="cardlabel"><span class="n">圖卡 06 / 13</span><span class="t">換模組就換技巧</span><button type="button" class="zoom" data-card="06">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">換一個模組，就換一種 prompting 技巧</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.2 節與附錄 D.2：同一個 signature 可以交給不同的模組實作；模組都只有幾行，先把 signature 改一改，再交給一個或幾個 Predict</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">PREDICT</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">Predict：照 signature 直接填輸出欄位</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">CHAIN OF THOUGHT</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">ChainOfThought：先多填一個推理欄位</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:230px; top:222px; width:340px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#FFFFFF;">question -&gt; answer</div>
+  <div style="position:absolute; left:230px; top:330px; width:340px; height:60px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">Predict</div><div style="font-size:12.5px; color:#6B7380;">組 prompt、呼叫 LM、解析欄位</div></div></div>
+  <div style="position:absolute; left:310px; top:448px; width:180px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; color:#1C2431;">answer</div>
+  <div style="position:absolute; left:60px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">最小的單位：上一張卡的五步都在它裡面。它存著 signature、選填的 LM 與一串示範，像 PyTorch 的層一樣可以直接呼叫。</div>
+
+  <div style="position:absolute; left:1020px; top:222px; width:340px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#FFFFFF;">question -&gt; answer</div>
+  <div style="position:absolute; left:920px; top:296px; width:540px; height:60px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">改寫 signature：在輸出前插入 rationale 欄位</div><div style="font-size:12.5px; color:#6B7380;">欄位前綴：Reasoning: Let's think step by step.</div></div></div>
+  <div style="position:absolute; left:1020px; top:380px; width:340px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">Predict（同一個核心模組）</div>
+  <div style="position:absolute; left:1010px; top:448px; width:150px; height:46px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; color:#2E7B4F;">rationale</div>
+  <div style="position:absolute; left:1220px; top:448px; width:150px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; color:#1C2431;">answer</div>
+  <div style="position:absolute; left:840px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">ChainOfThought 的全部程式：改寫 signature、宣告一個 Predict、把輸入原樣轉交。作者說它已是能替任何 LM 或任務學會 few-shot 的完整模組。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">模組帶三種參數</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">呼叫哪個 LM、指令與欄位前綴、示範。示範最重要：凍結的 LM 拿它當 few-shot prompt，要微調的 LM 拿它當訓練資料。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">這一版的 DSPy 專注在自動產生與挑選示範。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">技巧可以互換</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">ChainOfThought、ProgramOfThought、MultiChainComparison、ReAct 都支援任何 signature；把 Predict 換成 ChainOfThought，系統就先推理再作答。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">工具也是模組：dspy.Retrieve 接 ColBERTv2、Pyserini、Pinecone。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：原文在這一節只說兩者可以互換，效果到第 6 節才比（第 10 卡），所以這張不用 ✗／✓；節點排法是整理者依附錄 D 的虛擬碼畫的。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M400 272L400 328" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M400 390L400 446" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1190 272L1190 294" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1190 356L1190 378" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1130 426L1087 446" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1250 426L1293 446" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1184 463L1196 471L1184 479Z" fill="#9AA3AE"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>一般做法是把任務的細節直接寫進 prompt，例如手寫幾個 few-shot 範例。DSPy 的模組反過來，把 prompting 技巧翻成支援任何 signature 的模組化函式。內建的有 <code>ChainOfThought</code>、<code>ProgramOfThought</code>、<code>MultiChainComparison</code>、<code>ReAct</code>，分別推廣自 Wei 等人、Chen 等人、Yoran 等人與 Yao 等人的技巧，也把零樣本 prompting、讓模型自己產生推理這些想法，推廣成能 bootstrap 任意多階段管線的參數化模組。它們可以互相替換來實作同一個 signature：把上一章那一行程式的 <code>Predict</code> 換成 <code>ChainOfThought</code>，系統就會在填輸出欄位之前先一步步推理。</p>
+    <p>這些模組都只有幾行：把使用者的 signature 展開成新的 signature，再呼叫一次或幾次 Predict。以 ChainOfThought 為例，它把「輸入 → 輸出」改成「輸入 → rationale（推理）、輸出」，推理欄位的前綴是一句「Reasoning: Let's think step by step.」，然後用改過的 signature 宣告一個 Predict，呼叫時把輸入原封不動轉交給它。作者說這已經是一個完整的模組，能替任何 LM 或任務學會有效的 few-shot prompting，並拿附錄 C 那些又長又手寫的推理 prompt 來對照。</p>
+
+    <div class="codeblock">
+      <span class="file">ChainOfThought 的內部 · 依附錄 D.2 的精簡版</span>
+<pre class="code">class ChainOfThought(dspy.Module):
+    def __init__(self, signature):
+        <span class="c"># 在所有輸出欄位前面，多插一個推理欄位</span>
+        rationale = dspy.OutputField(prefix=<span class="s">"Reasoning: Let's think step by step."</span>)
+        signature = dspy.Signature(signature).prepend_output_field(rationale)
+        self.predict = dspy.Predict(signature)     <span class="c"># 裡面還是一個 Predict</span>
+
+    def forward(self, **kwargs):
+        return self.predict(**kwargs)              <span class="c"># 輸入原樣轉交</span></pre>
+    </div>
+
+    <p>接下來是作者特別強調的一點：DSPy 把這些 prompting 技巧參數化了。任何一次想實作某個 signature 的 LM 呼叫，都得決定幾個參數：</p>
+
+    <div class="values">
+      <div class="value-card"><span class="num">01</span><h4>呼叫哪個 LM</h4><p>預設用全域的 LM；每個模組可以各自指定，微調之後換成新的權重。</p></div>
+      <div class="value-card"><span class="num">02</span><h4>指令與欄位前綴</h4><p>prompt 的指令文字，以及每個欄位前面的字串，例如「Question:」。</p></div>
+      <div class="value-card"><span class="num">03</span><h4>示範</h4><p>最重要的一項：凍結的 LM 拿它當 few-shot prompt，要微調的 LM 拿它當訓練資料。</p></div>
+    </div>
+
+    <p>這篇論文把重點放在自動產生與挑選示範。作者說在兩個案例裡，bootstrap 出好的示範，是有系統地教一整條 LM 管線新行為的有力方法。</p>
+    <p>模組之外還有工具，也就是會執行計算的模組。檢索模型透過 <code>dspy.Retrieve</code> 接入，當時內建支援 ColBERTv2、Pyserini 與 Pinecone；作者也在試驗 <code>dspy.SQL</code>（執行 SQL 查詢）與 <code>dspy.PythonInterpreter</code>（在沙箱裡執行 Python）。</p>
+    <p>模組可以組成任意的管線，介面是 define-by-run，直接取法 PyTorch 與 Chainer：先在初始化時宣告需要的模組，讓 DSPy 能追蹤它們、之後拿來最佳化；再在 <code>forward</code> 方法裡用任意程式碼呼叫這些模組。論文用一個簡單但完整的 RAG 系統示範：</p>
+
+    <div class="codeblock">
+      <span class="file">一個完整的 RAG 程式 · 教學用精簡版</span>
+<pre class="code">class RAG(dspy.Module):
+    def __init__(self, num_passages=3):
+        self.retrieve = dspy.Retrieve(k=num_passages)          <span class="c"># 工具：用預設的檢索設定</span>
+        self.generate_answer = dspy.ChainOfThought(<span class="s">"context, question -&gt; answer"</span>)
+
+    def forward(self, question):
+        context = self.retrieve(question).passages             <span class="c"># 先檢索三段</span>
+        return self.generate_answer(context=context, question=question)
+
+RAG()(<span class="s">"日月潭在哪個縣？"</span>)                                   <span class="c"># 直接呼叫就能用</span></pre>
+    </div>
+
+    <p>為了示範模組化，這裡用 ChainOfThought 直接替換基本的 Predict。如果把 signature 改成 <code>"context, question -&gt; search_query"</code>，同一個結構就變成產生搜尋查詢而不是答案的系統；第 11 章的多跳程式正是這樣用的。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>為什麼模組要在 __init__ 宣告</h4>
+      <p>編譯的第一步，是在程式裡（遞迴地）找出所有獨一無二的 Predict 模組，包括藏在其他模組裡面的（第 6 章）。把模組宣告成程式的屬性，DSPy 才追蹤得到它們，就像 PyTorch 追蹤一個網路裡的各層與參數。forward 裡怎麼接、要不要迴圈，則完全是一般的 Python。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="bootstrap" data-toc="編譯：bootstrap 示範">
+  <div class="container head">
+    <p class="chapter">Chapter 06 · Teleprompters · The DSPy Compiler, Stage 1</p>
+    <h2>只要最終答案的標籤，中間步驟的示範靠 bootstrap 補</h2>
+    <p class="lede">teleprompter 拿程式、訓練集與 metric，回傳一個最佳化過的新程式。訓練集可以只有幾筆、只有問題與最終答案；BootstrapFewShot 讓程式自己跑，metric 通過的那幾次，每一步的輸入輸出就成了示範。</p>
+    
+  </div>
+  <div class="cardband" id="card-07"><div class="cardlabel"><span class="n">圖卡 07 / 13</span><span class="t">bootstrap：跑過再篩</span><button type="button" class="zoom" data-card="07">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">示範不是人寫的，是跑出來再篩過的</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.3、4 節與附錄 E.1：BootstrapFewShot 在訓練輸入上跑 teacher 程式，只留下整條管線一起通過 metric 的那幾次，把每一步的輸入輸出存成示範</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　取一筆訓練例</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">只有問題與最終答案，<br>中間步驟沒有標籤</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　teacher 以編譯模式跑</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">沒指定 teacher，就用零樣本的<br>自己；可以用高溫多跑幾次</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　記下每一步的 trace</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">每個 Predict 的輸入與輸出，<br>包括那次檢索到的脈絡</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　metric 檢查</div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#6B7380; line-height:1.55;">metric(範例, 預測, trace)</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">不通過就整次丟掉</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　存成示範</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">trace 的每一步，<br>交給對應的 predictor</div>
+  </div>
+
+  <div style="position:absolute; left:1212px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 6　示範夠了嗎</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">還不夠，就換下一筆</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">夠了：回傳新程式</div>
+  </div>
+  <div style="position:absolute; left:924px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 7　換下一筆訓練例</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">被丟掉的那次，<br>不影響已經存下的示範</div>
+  </div>
+  <div style="position:absolute; left:1066px; top:268px; font-size:12px; font-weight:700; color:#C8501F;">不通過</div>
+  <div style="position:absolute; left:60px; top:318px; width:820px; font-size:14px; color:#6B7380; line-height:1.6;">第 3.3 節的例子：只給問答對與完全相符的 metric，teleprompter 會替 RAG 補上缺的標籤，也就是推理鏈與檢索脈絡。作者說 LM 本身不可靠，但在多階段設計的解空間裡搜尋很有效率：拆得好的程式，總找得到幾筆能通過的訓練例。</div>
+  <div style="position:absolute; left:1300px; top:460px; font-size:13px; color:#8A93A0;">下一筆訓練例</div>
+
+  <div style="position:absolute; left:60px; top:480px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:504px; font-size:20px; font-weight:700; color:#1C2431;">三個讓標籤這麼省的前提</div>
+
+  <div style="position:absolute; left:60px; top:546px; width:470px; height:250px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">① 標籤最多只要最終輸出</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">訓練集可以只有幾筆，而且只有輸入也行；中間步驟的標籤不需要，除非 metric 要用到。作者通常最多只假設最終輸出有標籤。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">新管線只要重新編譯、不用重標資料：作者說這種標籤效率是模組化的關鍵。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:546px; width:470px; height:250px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">② metric 可以是一整個程式</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">EM、F1 之外可以自訂：例如答案要完全相符，而且要出現在某一段檢索結果裡。metric 也看得到那一次執行的 trace。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者的建議：答案有沒有忠實依據來源，可以交給另一個 DSPy 程式判斷。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:546px; width:470px; height:250px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">③ 示範是整條一起通過的</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">篩的是一整次執行，不是每一步各自打分；答案模組的示範裡，放的就是那次真的檢索到的脈絡與寫出的推理。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">好壞例子怎麼取捨，作者說都讓使用者控制；一輪收集得不夠，還可以反覆 bootstrap。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：七格依附錄 E.1 的簡化虛擬碼畫，分格與順序是整理者排的；實作還會在高溫下多次取樣，trace 以執行緒安全的方式記錄。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+    </defs>
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M1207 342L1195 350L1207 358Z" fill="#9AA3AE"></path>
+    <path d="M1478 210C1530 210 1530 350 1480 350" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M1057 262L1057 298" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c07)"></path>
+    <path d="M1057 400V452H1560V128H193V158" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="6 5" marker-end="url(#ag-c07)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>編譯一個 DSPy 程式，通常就是呼叫一個 teleprompter：一個最佳化器，收下程式、訓練集與 metric，回傳一個新的、最佳化過的程式。不同的 teleprompter 用不同的策略（第 7 章）。</p>
+    <p>DSPy 對訓練集的要求很低。它可以很小，小到只有幾筆，資料多當然能做更強的最佳化；它可以不完整，只有輸入值是必要的。管線中間步驟的標籤不需要，除非 metric 要用到；實務上作者通常最多只假設程式的最終輸出有標籤。作者認為這種標籤效率是模組化的關鍵：做一條新管線，只要重新編譯新程式的程式碼，不必為新管線的每一步另外標註資料。</p>
+    <p>metric 可以是完全相符（EM）或 F1 這類簡單的量尺，也可以是一整個兼顧多種考量的 DSPy 程式。第 3.3 節用上一章的 RAG 示範最基本的編譯：拿問答對當訓練集、用 EM 當 metric，目標是 bootstrap 出有效的 few-shot 示範。</p>
+
+    <div class="codeblock">
+      <span class="file">用 BootstrapFewShot 編譯 RAG · 教學用精簡版</span>
+<pre class="code"><span class="c"># 訓練集只有問題與最終答案：沒有推理過程，也沒有檢索結果</span>
+trainset = [dspy.Example(question=<span class="s">"《紅樓夢》的作者是誰？"</span>, answer=<span class="s">"曹雪芹"</span>), ...]
+
+<span class="c"># 缺的標籤（推理鏈、檢索脈絡）由 teleprompter 自己 bootstrap</span>
+teleprompter = dspy.BootstrapFewShot(metric=dspy.evaluate.answer_exact_match)
+compiled_rag = teleprompter.compile(RAG(), trainset=trainset)</pre>
+    </div>
+
+    <p>metric 也可以自己寫。例如希望編譯出來的程式只從檢索到的段落裡抽答案，就把「答案完全相符」和「答案出現在某一段檢索結果裡」兩個條件接起來。作者補充，這種行為用另一個檢查答案有沒有忠實依據來源的 DSPy 程式來判斷會更準，而 DSPy 完全支援、也鼓勵這種 metric。</p>
+
+    <div class="codeblock">
+      <span class="file">自訂 metric · 教學用精簡版</span>
+<pre class="code">def answer_and_context_match(example, pred, trace=None):
+    exact = dspy.evaluate.answer_exact_match(example, pred)
+    grounded = any(pred.answer.lower() in c for c in pred.context)   <span class="c"># 答案出現在某段檢索結果裡</span>
+    return exact and grounded</pre>
+    </div>
+
+    <p>BootstrapFewShot 內部做的事，寫在第 4 節的第 1 階段「產生候選」與附錄 E.1 的簡化虛擬碼。編譯器先遞迴地找出程式裡所有獨一無二的 Predict 模組（稱為 predictor），包括包在其他模組裡的。對每個 predictor，teleprompter 可以替它的參數產生候選值：指令、欄位描述，以及最重要的示範（輸入與輸出的配對）。這一版的 DSPy 專注在示範，作者發現類似拒絕取樣（rejection sampling）的簡單做法，就能 bootstrap 出很有效的多階段系統。BootstrapFewShot 是其中最簡單、但不陽春的一個：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>決定誰來跑</strong>teleprompter 模擬一個 teacher 程式；沒有指定 teacher 時，就用正在編譯的程式本身的零樣本版本。學生與老師的 Predict 模組依名稱一一對上。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>在訓練輸入上跑</strong>逐筆拿訓練例的輸入去跑 teacher，可以跑一次以上，也可以用較高的溫度取樣。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>記下多階段的 trace</strong>在編譯模式下，整個執行過程裡每一次 Predict 呼叫的輸入與輸出都被透明地記下來，而且是執行緒安全的。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>用 metric 篩</strong>拿程式的 metric 檢查這一次的最終預測（metric 也看得到 trace），只留下整條管線一起通過的那幾次。</div></div>
+      <div class="cascade-step"><div class="n">5</div><div class="t"><strong>存成示範</strong>留下的 trace 裡每一步，都變成對應 predictor 的一個候選示範；不好的例子丟掉。收集夠了就停。</div></div>
+    </div>
+
+    <p>作者說，丟掉壞例子、留下好例子當示範，這些設計決定都讓使用者控制。至於為什麼行得通，他們的解釋是：LM 本身很不可靠，但在多階段設計的解空間裡搜尋，效率反而不錯；一個拆得好的程式，通常找得到至少幾筆訓練例，讓 LM 能通過 signature 與 metric 的約束。需要的話，還可以反覆 bootstrap。</p>
+
+    <div class="story">
+      <div class="label">關鍵觀念 · 一</div>
+      <h4>示範是整條管線一起通過的</h4>
+      <p>BootstrapFewShot 篩的是「一起讓管線通過 metric」的多階段 trace，不是每一步各自打分。以 RAG 為例，留下來的那一次執行裡，檢索到的三段文字、寫出的推理、最後的答案是同一次跑出來的；存成示範之後，答案模組的示範裡放的就是那次真的檢索到的脈絡。</p>
+      <p>這也是訓練集只需要最終答案的原因：3.3 節程式的註解說得很直接，teleprompter 會替你補上缺的標籤，也就是推理鏈與檢索脈絡。中間步驟的「正確答案」沒有人標過，它們是那次成功執行的副產品。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="search" data-toc="搜尋、微調、整合">
+  <div class="container head">
+    <p class="chapter">Chapter 07 · Parameter &amp; Higher-Order Optimization · Compiling Strategies</p>
+    <h2>候選程式多編幾個，挑最好的，或讓前幾名投票</h2>
+    <p class="lede">第 1 階段產生候選示範之後，第 2 階段把挑示範當成超參數搜尋，或乾脆拿示範去微調權重；第 3 階段改控制流程，把好幾個編好的程式整合成一個。兩個案例用的編譯設定都從這裡來。</p>
+    
+  </div>
+  <div class="cardband" id="card-08"><div class="cardlabel"><span class="n">圖卡 08 / 13</span><span class="t">搜尋候選、投票整合</span><button type="button" class="zoom" data-card="08">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">多編幾個候選程式，挑最好的或讓它們投票</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4 節第 2、3 階段與附錄 E.2：把「挑哪些示範」當成超參數去搜尋；搜尋留下的前幾名，還能在第 3 階段合成一個平行投票的程式</div>
+
+  <div style="position:absolute; left:560px; top:150px; width:480px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">同一個程式、同一份訓練集與驗證集</div><div style="margin-top:3px; font-size:12.5px; color:rgba(255,255,255,0.75);">BootstrapFewShotWithRandomSearch(metric)</div></div></div>
+
+  <div style="position:absolute; left:80px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">候選 1 · 洗牌種子 1</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">隨機的示範數，跑一次 BootstrapFewShot</div></div>
+  <div style="position:absolute; left:460px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">候選 2 · 洗牌種子 2</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">同一個程式，挑到的示範組合不同</div></div>
+  <div style="position:absolute; left:840px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">候選 3 · 洗牌種子 3</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">各自在驗證集上算 metric 的平均</div></div>
+  <div style="position:absolute; left:1220px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">候選 n · 簡化版預設 16 次</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">第 6 節的實驗是 10 到 20 次試驗</div></div>
+
+  <div style="position:absolute; left:560px; top:440px; width:480px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">依驗證集分數排序</div><div style="margin-top:3px; font-size:12.5px; color:rgba(255,255,255,0.75);">第一名＝bootstrap 程式；前 7 名多數決＝ensemble 程式</div></div></div>
+
+  <div style="position:absolute; left:60px; top:530px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">兩個階段</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">第 2 階段挑參數：程式不變、示範組合不同，驗證集分數最高的勝出（Optuna 版改由 Optuna 替每個 predictor 挑示範）。第 3 階段改控制流程：把前幾名平行跑，再用多數決合成。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:620px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">bootstrap×2：拿編好的當老師</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">把上一輪編好的 bootstrap 程式當 teacher，再編一次；原文說，原本的零樣本程式表現很差時，這一步特別有用。</div>
+    <div style="font-size:13px; color:#8A93A0;">第 6、7 節的 bootstrap×2 就是這樣疊出來的。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:620px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">BootstrapFinetune：示範變權重</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">示範不放進 prompt，改拿去更新每個 predictor 背後 LM 的權重；昂貴的程式可以當便宜小模型的老師。</div>
+    <div style="font-size:13px; color:#8A93A0;">例：Llama2-13b-chat 的 RAG 教 Flan-T5-large，問題不帶標籤。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:620px; width:470px; height:200px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">代價：程式要跑幾千次</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">較貴的設定是 10 到 20 次試驗、每次跑 150 到 300 筆驗證例；通常幾分鐘到幾十分鐘，可以平行。</div>
+    <div style="font-size:13px; color:#8A93A0;">ensemble 推論時要把前幾名都跑一次（整理者補充）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：四個候選是示意，實際次數依設定；「前 7 名」是第 6 節 ensemble 用的數字，不是固定規則。實線框表示候選的數量在編譯前就定了。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c08" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M680 216L230 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M760 216L610 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M840 216L990 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M920 216L1370 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M230 386L680 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M610 386L760 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M990 386L840 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M1370 386L920 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 4 節說，典型的 teleprompter 會走三個階段，但 DSPy 不強制新的 teleprompter 一定要這樣寫。第 1 階段已在上一章。到了第 2 階段「參數最佳化」，每個參數都有了一組離散的候選：示範、指令等等。這時很多超參數調整演算法都能拿來挑，例如隨機搜尋，或 HyperOpt 與 Optuna 用的 Tree-structured Parzen Estimators。附錄 E.2、E.3 給了兩個 teleprompter 的簡化版：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>BootstrapFewShotWithRandomSearch</strong>跑好幾次試驗（簡化版預設 16 次）：每次用不同的種子把訓練集洗牌，用隨機的示範數量跑一次 BootstrapFewShot，得到一個候選程式；在驗證集上評分，最後回傳分數最高的那一個。沒給驗證集時，可以在訓練集上做交叉驗證。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>BootstrapFewShotWithOptuna</strong>先用 BootstrapFewShot 產生一大池候選示範；每次試驗由 Optuna 替每個 predictor 挑一個示範的編號，評分之後讓 Optuna 找出最高分的組合。</div></div>
+    </div>
+
+    <p>第 2 階段還有另一種最佳化：用 <code>BootstrapFinetune</code> 微調。示範不放進 prompt，而是拿來更新每個 predictor 背後 LM 的權重，模組的 LM 參數就換成新的權重。不論哪一種，通常是用 metric 在訓練集上交叉驗證，或在驗證集上最佳化平均品質；依 metric 的性質，甚至可以在所有階段都沒有標籤的情況下進行。</p>
+    <p>微調最常搭配的是 teacher。第 3.3 節說 teleprompter 可以指定一個 teacher 程式來組合：DSPy 會從這個程式取樣示範。昂貴的程式（例如用大型 LM 的複雜集成）因此可以監督便宜的程式（例如用小型 LM 的簡單管線）。論文的例子是先把 RAG 編譯成用 Llama2-13b-chat 的版本，再拿一大批沒有標籤的問題，把它蒸餾成一個微調過的 Flan-T5-large：</p>
+
+    <div class="codeblock">
+      <span class="file">用 teacher 微調小模型 · 教學用精簡版</span>
+<pre class="code"><span class="c"># 沒有答案標籤的問題集：每一步的標籤都由 teacher 跑出來</span>
+unlabeled = [dspy.Example(question=<span class="s">"..."</span>), ...]
+
+<span class="c"># 沒有答案可比，改用 answer_passage_match：答案要出現在檢索到的段落裡才算數</span>
+tp = BootstrapFinetune(metric=dspy.evaluate.answer_passage_match)
+small_rag = tp.compile(RAG(), teacher=compiled_rag, trainset=unlabeled,
+                       target=<span class="s">"google/flan-t5-large"</span>)</pre>
+    </div>
+
+    <p>第 3 階段是「高階的程式最佳化」：改的是程式的控制流程。最簡單的形式是 ensemble，也是兩個案例用到的：bootstrap 出同一個程式的好幾個副本，再把原程式換成一個平行跑完所有副本、再用自訂函式（例如多數決）把預測合成一個的新程式。作者說這個階段將來可以容納更動態的、在測試時才 bootstrap 的技巧，以及自動回溯這類邏輯。</p>
+    <p>第 6 節把這些策略落成五種編譯設定，第 7 節的 HotPotQA 沿用同一組。下表是每一種在做什麼：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>編譯設定</th><th>做法</th><th>需要什麼</th></tr></thead>
+        <tbody>
+          <tr><td>none</td><td>不編譯，零樣本：直接用 signature 展開的 prompt</td><td>不需要訓練資料</td></tr>
+          <tr><td>fewshot</td><td><code>LabeledFewShot(k=8)</code>：從訓練集隨機抽 8 筆當示範，只取訓練例與 signature 共有的欄位（question、answer，沒有推理）；報 3 到 5 次的平均</td><td>有標籤的訓練集</td></tr>
+          <tr><td>bootstrap</td><td><code>BootstrapFewShotWithRandomSearch</code>：bootstrap 示範鏈，再用隨機搜尋挑示範組合</td><td>訓練集、驗證集、metric</td></tr>
+          <tr><td>bootstrap×2</td><td>同上，但 teacher 換成上一輪編好的 bootstrap 程式；原本的零樣本程式表現很差時特別有用</td><td>上一輪的編譯結果</td></tr>
+          <tr><td>+ensemble</td><td>取 bootstrap（或 bootstrap×2）那一輪的前 7 個候選程式，用多數決合成</td><td>上一輪的候選程式</td></tr>
+          <tr><td>+human_CoT</td><td>GSM8K 附有人寫的推理鏈；把它加進訓練集再做 fewshot，當成人寫推理的對照組</td><td>人寫的推理</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>成本方面，第 6 節說編譯通常只要幾分鐘，最多幾十分鐘：即使是比較貴的設定，也只需要把程式跑幾千次（例如 10 到 20 次試驗，每次跑 150 到 300 筆驗證例），而且可以平行。</p>
+
+    <div class="thought">
+      <span class="label">思考題 · 02</span>
+      <h4>metric 只看最終答案，搜尋會不會挑到「答對了但過程怪」的示範？</h4>
+      <p>BootstrapFewShot 與隨機搜尋都只用 metric 決定哪些 trace、哪些程式留下來。</p>
+      <p class="hint">會，而且論文就有一個例子：第 10 章的 vanilla 程式，被挑中的示範把算式寫進了「答案」欄，因為 metric 只抽最後的數字。要限制過程，就把條件寫進 metric，例如上一章要求答案出現在檢索段落裡的 <code>answer_and_context_match</code>，或用另一個 DSPy 程式當 metric 去檢查依據。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="goals" data-toc="評估問什麼" class="nocard">
+  <div class="container">
+    <p class="chapter">Chapter 08 · Goals of Evaluation</p>
+    <h2>比較的單位是「程式加編譯策略」，不是單獨一個 LM</h2>
+    <p class="lede">框架可以比運算效率、開發效率、好不好懂；這篇只量一件事：手寫、任務專用的 prompt 對做出好系統到底有多必要。三個假設分別講品質、適應不同 LM、以及探索複雜管線。</p>
+
+    <p>第 5 節先承認，一個程式設計框架可以從很多面向評估：運算效率、開發者的效率、程式與概念是否直觀等等。這篇論文只挑作者認為當下 LM 管線最迫切的問題：要做出高效能的系統，手寫、任務專用的 prompt 到底有多必要。評估要檢驗三個假設：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">H1</div><div class="t"><strong>可以取代</strong>用 DSPy 簡潔、定義清楚的模組取代手寫的 prompt 字串，品質與表達力都不會下降。</div></div>
+      <div class="cascade-step"><div class="n">H2</div><div class="t"><strong>更能適應</strong>把模組參數化、把 prompting 當成最佳化問題，讓 DSPy 更能適應不同的 LM，而且可能勝過專家寫的 prompt。</div></div>
+      <div class="cascade-step"><div class="n">H3</div><div class="t"><strong>更好探索</strong>模組化讓人能更徹底地探索複雜的管線，找出有用的效能特性，或配合細緻的 metric。</div></div>
+    </div>
+
+    <p>作者希望這組評估能讓問題的問法轉個方向。「不同的 LM 在 GSM8K 上比起來如何」是一個沒有講清楚的問題；「用程式 P、以策略 S 編譯之後，它們在 GSM8K 上比起來如何」才是一次定義清楚、可以重現的執行。長遠的目標，是降低現代 AI 裡「精巧的 prompt 手藝」的份量，讓位給新的、模組化、可組合的程式與最佳化器。</p>
+    <p>所以接下來兩個案例的表格要這樣讀：每一列都是一條獨立的管線，由「程式」「編譯設定」「訓練資料」三者決定，再分別用兩個 LM 跑。作者在開發集上做大量比較，只把有代表性的組合拿到測試集上評估，避免對測試集過度擬合。第 5 節點名、但沒有量的面向也要記住：運算效率與開發者的效率都不是這篇系統性評估的對象，編譯要花多久只在第 6 節非正式地提了一句。</p>
+
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>Dev 與 Test</h4>
+      <p>開發集（Dev）是研究者反覆比較、調整設定時用的；測試集（Test）只在最後評估少數代表性的組合。表格裡很多格是「–」，代表那個組合沒有拿到測試集上跑，不是結果不好。</p>
+    </div>
+
+    <div class="pullquote">
+      同一個 LM，換一個程式、換一種編譯方式，就是另一個系統。
+      <cite>整理自第 5 節</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="gsm8k-programs" data-toc="GSM8K：三個程式">
+  <div class="container head">
+    <p class="chapter">Chapter 09 · Case Study: Math Word Problems</p>
+    <h2>反思程式讓五條推理鏈先各自作答，再比一次</h2>
+    <p class="lede">GSM8K 的三個程式只差幾行：vanilla 直接答，CoT 先推理再答，reflection 抽五條推理鏈，交給 MultiChainComparison 比較後重新作答。用到的模組都是通用的，沒有一個專門為數學或為某個 LM 寫。</p>
+    
+  </div>
+  <div class="cardband" id="card-09"><div class="cardlabel"><span class="n">圖卡 09 / 13</span><span class="t">GSM8K：五條推理鏈再比較</span><button type="button" class="zoom" data-card="09">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">五條推理鏈各自作答，再比一次</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 6 節的 reflection 程式：ChainOfThought 取樣五條推理鏈，MultiChainComparison 讀過五次嘗試的模式，寫出新答案；兩個模組都是通用的</div>
+
+  <div style="position:absolute; left:560px; top:150px; width:480px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">一道 GSM8K 數學應用題</div><div style="margin-top:3px; font-size:12.5px; color:rgba(255,255,255,0.75);">signature 和 vanilla、CoT 一樣：question -&gt; answer</div></div></div>
+
+  <div style="position:absolute; left:60px; top:300px; width:272px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">推理鏈 1 · 答案甲</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">先寫推理，再寫答案</div></div>
+  <div style="position:absolute; left:362px; top:300px; width:272px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">推理鏈 2 · 答案甲</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">同一題再取樣一次</div></div>
+  <div style="position:absolute; left:664px; top:300px; width:272px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">推理鏈 3 · 答案乙</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">五次嘗試的答案可能不同</div></div>
+  <div style="position:absolute; left:966px; top:300px; width:272px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">推理鏈 4 · 答案甲</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">各自獨立產生</div></div>
+  <div style="position:absolute; left:1268px; top:300px; width:272px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">推理鏈 5 · 答案丙</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">全部交給下一步比較</div></div>
+
+  <div style="position:absolute; left:560px; top:440px; width:480px; height:64px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">MultiChainComparison（M＝5）</div><div style="margin-top:3px; font-size:12.5px; color:rgba(255,255,255,0.8);">讀過五條推理與答案的模式，寫出一個新答案</div></div></div>
+
+  <div style="position:absolute; left:60px; top:530px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">不是數票</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">彙整的這一步本身也是 LM 模組：它讀完五條推理再作答，和第 8 卡 ensemble 用多數決函式數票不同（整理者的對照）。整個程式只比 CoT 多幾行，推廣自 Yoran 等人（2023）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:620px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">vanilla · 一步直接答</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">一個 Predict，不經推理直接給答案。零樣本時開發集只有 24.0（GPT-3.5）與 7.0（Llama2-13b-chat）。</div>
+    <div style="font-size:13px; color:#8A93A0;">卻最吃編譯：bootstrap×2 之後到 64.7 與 37.3。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:620px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">CoT · 兩步：先推理再答</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">同一個 signature 交給 ChainOfThought。零樣本開發集 50.0 與 26.7，已經比 vanilla 高。</div>
+    <div style="font-size:13px; color:#8A93A0;">GSM8K 附有人寫推理鏈，可以當對照組（+human_CoT）。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:620px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">reflection · 多階段</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">五條推理鏈加一次比較。零樣本開發集就有 65.0 與 36.7；bootstrap 再加 ensemble，到 86.7 與 49.0。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者強調：沒有一個模組是為數學或某個 LM 寫的。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：「答案甲、乙、丙」是整理者的示意，原文只說比較五次嘗試的模式後產生新答案。數字取自表 1 的開發集（GPT-3.5 與 Llama2-13b-chat）。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c09" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M640 216L196 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M720 216L498 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M800 216L800 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M880 216L1102 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M960 216L1404 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M196 386L640 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M498 386L720 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M800 386L800 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M1102 386L880 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M1404 386L960 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第一個案例是 GSM8K，一個常用的小學數學應用題資料集。作者從官方訓練集抽 200 對問答當訓練、300 對當開發集，最終評估用官方測試集的 1,300 題（原文寫 1.3k）；大量的比較都在開發集上做，避免對測試集過度擬合。評分照先前研究的慣例：只看 LM 輸出裡出現的最終數值對不對。</p>
+    <p>考慮的程式只有三個，都能用幾行 DSPy 完整寫出來：一步的 Predict（vanilla）、兩步的 ChainOfThought（CoT），以及多階段的 ComparerOfThoughts（ThoughtReflection，簡稱 reflection）。</p>
+
+    <div class="codeblock">
+      <span class="file">GSM8K 的三個程式 · 教學用精簡版</span>
+<pre class="code">vanilla = dspy.Predict(<span class="s">"question -&gt; answer"</span>)          <span class="c"># 一步：直接答</span>
+cot     = dspy.ChainOfThought(<span class="s">"question -&gt; answer"</span>)   <span class="c"># 兩步：先推理再答</span>
+
+class ThoughtReflection(dspy.Module):
+    def __init__(self, num_attempts=5):
+        self.predict = dspy.ChainOfThought(<span class="s">"question -&gt; answer"</span>, n=num_attempts)
+        self.compare = dspy.MultiChainComparison(<span class="s">"question -&gt; answer"</span>, M=num_attempts)
+
+    def forward(self, question):
+        attempts = self.predict(question=question).completions    <span class="c"># 五條推理鏈，各帶一個答案</span>
+        return self.compare(question=question, completions=attempts)
+
+reflection = ThoughtReflection(num_attempts=5)</pre>
+    </div>
+
+    <p>reflection 的做法是：從 LM 取樣五條推理鏈（連同各自的答案），交給內建的 MultiChainComparison 模組平行比較，它推廣自 Yoran 等人 2023 年的做法。這個模組看過五次嘗試裡的模式，再產生一個新的答案。作者特別強調，這裡用到的模組全是通用的，沒有任何一個是為數學題或為某個特定 LM 寫的。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>MultiChainComparison 和多數決不一樣</h4>
+      <p>第 7 章的 ensemble 用一個函式（<code>dspy.majority</code>）數票，選出現最多次的答案。MultiChainComparison 則是一個 LM 模組：它讀過五條推理與答案，再寫出新的答案，所以有機會發現「五條裡有兩條算錯同一步」這類模式。這個對照是整理者加的，原文只說它「考量五次嘗試的模式」產生新答案。</p>
+    </div>
+
+    <p>編譯設定用的是第 7 章那一組：none、fewshot、bootstrap、bootstrap×2、+ensemble。GSM8K 本身附有人寫的推理鏈，但預設的訓練集不含它們；作者另外做了一份把人寫推理加進去的 <code>trainset_human_CoT</code>，兩份訓練集可以互換傳給同一個 teleprompter。這給了一個很直接的對照組：自動 bootstrap 的示範，比不比得上人寫的推理鏈？</p>
+  </div>
+</section>
+
+
+<section id="gsm8k-results" data-toc="GSM8K：結果">
+  <div class="container head">
+    <p class="chapter">Chapter 10 · Case Study: Math Word Problems · Results</p>
+    <h2>組對模組再編譯，準確率從 4–20% 升到 49–88%</h2>
+    <p class="lede">表 1 的每一列是一條獨立的管線。bootstrap 對三個程式、兩個 LM 都帶來大幅提升；CoT 用 bootstrap 產生的示範，追上甚至超過用人寫推理鏈的版本；reflection 整體最好。</p>
+    
+  </div>
+  <div class="cardband" id="card-10"><div class="cardlabel"><span class="n">圖卡 10 / 13</span><span class="t">GSM8K：編譯後往右移</span><button type="button" class="zoom" data-card="10">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">每個程式、兩個模型，編譯後都往右移</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 1 的開發集準確率（%）。每條線左端是不編譯（none），右端是那個程式最好的一列；CoT 另外標出用人寫推理鏈的 +human_CoT</div>
+
+  <div style="position:absolute; left:60px; top:138px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#6B7380;"></div>none（不編譯）</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#C8501F;"></div>+human_CoT（人寫推理鏈）</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>最好的編譯列</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:26px; height:0px; border-top:4px solid #B4D5C0;"></div>同一個程式，從不編譯到編譯後</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:166px; font-size:16px; font-weight:700; color:#1C2431;">GPT-3.5 · 開發集</div>
+  <div style="position:absolute; left:180px; top:206px; width:1320px; height:0px; border-top:1px dashed #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:246px; width:1320px; height:0px; border-top:1px dashed #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:286px; width:1320px; height:0px; border-top:1px dashed #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:197px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">vanilla</div>
+  <div style="position:absolute; left:60px; top:237px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">CoT</div>
+  <div style="position:absolute; left:60px; top:277px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">reflection</div>
+
+  <div style="position:absolute; left:180px; top:306px; width:1320px; height:36px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:315px; width:14px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0</div>
+  <div style="position:absolute; left:434px; top:315px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">20</div>
+  <div style="position:absolute; left:698px; top:315px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">40</div>
+  <div style="position:absolute; left:962px; top:315px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">60</div>
+  <div style="position:absolute; left:1226px; top:315px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">80</div>
+  <div style="position:absolute; left:1462px; top:315px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">100</div>
+
+  <div style="position:absolute; left:60px; top:356px; font-size:16px; font-weight:700; color:#1C2431;">Llama2-13b-chat · 開發集</div>
+  <div style="position:absolute; left:180px; top:398px; width:1320px; height:0px; border-top:1px dashed #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:438px; width:1320px; height:0px; border-top:1px dashed #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:478px; width:1320px; height:0px; border-top:1px dashed #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:389px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">vanilla</div>
+  <div style="position:absolute; left:60px; top:429px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">CoT</div>
+  <div style="position:absolute; left:60px; top:469px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">reflection</div>
+
+  <div style="position:absolute; left:180px; top:498px; width:1320px; height:36px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:507px; width:14px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0</div>
+  <div style="position:absolute; left:434px; top:507px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">20</div>
+  <div style="position:absolute; left:698px; top:507px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">40</div>
+  <div style="position:absolute; left:962px; top:507px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">60</div>
+  <div style="position:absolute; left:1226px; top:507px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">80</div>
+  <div style="position:absolute; left:1462px; top:507px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">100</div>
+  <div style="position:absolute; left:1400px; top:538px; width:100px; text-align:right; font-size:12px; color:#8A93A0;">準確率 %</div>
+
+  <div style="position:absolute; left:60px; top:558px; width:1320px; font-size:13px; color:#8A93A0; line-height:1.6;">只用表 1 的開發集數字。「最好的一列」是整理者從每個程式的編譯列裡挑的最高分：vanilla 是 bootstrap×2，其餘是 +ensemble；fewshot 的點沒有畫。</div>
+
+  <div style="position:absolute; left:488px; top:197px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:423px; top:197px; width:60px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">24.0</div>
+  <div style="position:absolute; left:1025px; top:197px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1048px; top:197px; font-size:12.5px; color:#2B3340;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">64.7</span> bootstrap×2</div>
+
+  <div style="position:absolute; left:831px; top:237px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:766px; top:237px; width:60px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">50.0</div>
+  <div style="position:absolute; left:1208px; top:237px; width:18px; height:18px; border-radius:50%; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:1147px; top:216px; width:140px; text-align:center; font-size:12px; color:#C8501F;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">78.6</span> 人寫推理</div>
+  <div style="position:absolute; left:1337px; top:237px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1360px; top:237px; font-size:12.5px; color:#2B3340;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">88.3</span> +ensemble</div>
+
+  <div style="position:absolute; left:1029px; top:277px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:964px; top:277px; width:60px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">65.0</div>
+  <div style="position:absolute; left:1315px; top:277px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1338px; top:277px; font-size:12.5px; color:#2B3340;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">86.7</span> +ensemble</div>
+
+  <div style="position:absolute; left:263px; top:389px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:198px; top:389px; width:60px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">7.0</div>
+  <div style="position:absolute; left:686px; top:389px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:709px; top:389px; font-size:12.5px; color:#2B3340;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">39.0</span> +ensemble</div>
+
+  <div style="position:absolute; left:523px; top:429px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:458px; top:429px; width:60px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">26.7</div>
+  <div style="position:absolute; left:624px; top:429px; width:18px; height:18px; border-radius:50%; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:563px; top:408px; width:140px; text-align:center; font-size:12px; color:#C8501F;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">34.3</span> 人寫推理</div>
+  <div style="position:absolute; left:748px; top:429px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:771px; top:429px; font-size:12.5px; color:#2B3340;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">43.7</span> +ensemble</div>
+
+  <div style="position:absolute; left:655px; top:469px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:590px; top:469px; width:60px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">36.7</div>
+  <div style="position:absolute; left:818px; top:469px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:841px; top:469px; font-size:12.5px; color:#2B3340;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">49.0</span> +ensemble</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:200px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">人寫推理鏈，被 bootstrap 追過</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">CoT 加人寫推理：GPT-3.5 開發集 78.6；bootstrap 自己產生示範：80.3。測試集也是 72.9 對 72.4。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者：這支持「DSPy 能減少對手寫 prompt 的需要」。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">reflection 最好，CoT 靠 ensemble</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">reflection 只多幾行，是明顯的贏家：Llama2-13b-chat 的最高分 49.0（測試 46.9）就是它。GPT-3.5 開發集最高的 88.3 是 CoT 加 ensemble。</div>
+    <div style="font-size:13px; color:#8A93A0;">vanilla 的示範把算式寫進了答案欄（附錄 F）。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">從 4–20% 到 49–88%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">表 1 的圖說：所有程式都只由二到四個 DSPy 模組與 teleprompter 組成；組對模組再編譯，就把不同 LM 從 <span style="white-space:nowrap;">4–20%</span> 帶到 <span style="white-space:nowrap;">49–88%</span>。</div>
+    <div style="font-size:13px; color:#8A93A0;">區間是原文的寫法，整理者沒有重算。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：每一列都是獨立的管線；Llama2-13b-chat 的 vanilla 加上隨機示範（fewshot），開發集反而從 7.0 掉到 4.3。圖上只標表 1 寫出的數字。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M508 206H1023" stroke="#B4D5C0" stroke-width="4" stroke-linecap="round"></path>
+    <path d="M851 246H1206" stroke="#B4D5C0" stroke-width="4" stroke-linecap="round"></path>
+    <path d="M1229 246H1334" stroke="#B4D5C0" stroke-width="4" stroke-linecap="round"></path>
+    <path d="M1049 286H1313" stroke="#B4D5C0" stroke-width="4" stroke-linecap="round"></path>
+    <path d="M284 398H684" stroke="#B4D5C0" stroke-width="4" stroke-linecap="round"></path>
+    <path d="M544 438H621" stroke="#B4D5C0" stroke-width="4" stroke-linecap="round"></path>
+    <path d="M644 438H746" stroke="#B4D5C0" stroke-width="4" stroke-linecap="round"></path>
+    <path d="M676 478H816" stroke="#B4D5C0" stroke-width="4" stroke-linecap="round"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 1 · 程式</th><th>編譯</th><th>訓練資料</th><th>GPT-3.5 Dev</th><th>GPT-3.5 Test</th><th>Llama2-13b Dev</th><th>Llama2-13b Test</th></tr></thead>
+        <tbody>
+          <tr><td>vanilla</td><td>none</td><td>無</td><td>24.0</td><td>25.2</td><td>7.0</td><td>9.4</td></tr>
+          <tr><td>vanilla</td><td>fewshot</td><td>trainset</td><td>33.1</td><td>–</td><td>4.3</td><td>–</td></tr>
+          <tr><td>vanilla</td><td>bootstrap</td><td>trainset</td><td>44.0</td><td>–</td><td>28.0</td><td>–</td></tr>
+          <tr><td>vanilla</td><td>bootstrap×2</td><td>trainset</td><td>64.7</td><td>61.7</td><td>37.3</td><td>36.5</td></tr>
+          <tr><td>vanilla</td><td>+ensemble</td><td>trainset</td><td>62.7</td><td>61.9</td><td>39.0</td><td>34.6</td></tr>
+          <tr><td>CoT</td><td>none</td><td>無</td><td>50.0</td><td>–</td><td>26.7</td><td>–</td></tr>
+          <tr><td>CoT</td><td>fewshot</td><td>trainset</td><td>63.0</td><td>–</td><td>27.3</td><td>–</td></tr>
+          <tr><td>CoT</td><td>fewshot</td><td>+human_CoT</td><td>78.6</td><td>72.4</td><td>34.3</td><td>33.7</td></tr>
+          <tr><td>CoT</td><td>bootstrap</td><td>trainset</td><td>80.3</td><td>72.9</td><td>43.3</td><td>–</td></tr>
+          <tr><td>CoT</td><td>+ensemble</td><td>trainset</td><td><strong>88.3</strong></td><td>81.6</td><td>43.7</td><td>–</td></tr>
+          <tr><td>reflection</td><td>none</td><td>無</td><td>65.0</td><td>–</td><td>36.7</td><td>–</td></tr>
+          <tr><td>reflection</td><td>fewshot</td><td>trainset</td><td>71.7</td><td>–</td><td>36.3</td><td>–</td></tr>
+          <tr><td>reflection</td><td>bootstrap</td><td>trainset</td><td>83.0</td><td>76.0</td><td>44.3</td><td>40.2</td></tr>
+          <tr><td>reflection</td><td>+ensemble</td><td>trainset</td><td>86.7</td><td>–</td><td><strong>49.0</strong></td><td><strong>46.9</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>先看 vanilla。兩個 LM 都不擅長不經推理、直接預測答案，在 none（零樣本的指令）與 fewshot（隨機抽的問答對）兩種設定下尤其明顯；Llama2-13b-chat 加了隨機示範，開發集反而從 7.0 掉到 4.3。有意思的是，vanilla 被 bootstrap 大幅拉高，再把這個過程疊一層成 bootstrap×2 又更高：GPT-3.5 的開發集從 24.0 到 64.7，Llama2-13b-chat 從 7.0 到 37.3。作者檢查了 bootstrap 出來的 prompt（附錄 F），發現示範讓 LM 先在「答案」欄裡推理；因為 metric 只抽最後的數值來評分，這是被允許的。</p>
+    <p>再看 CoT。資料集有提供人寫的推理鏈（+human_CoT）時，它帶來很大的提升，GPT-3.5 的開發集到 78.6；但 bootstrap 就能追平甚至超過它，開發集 80.3、測試集 72.9 對 72.4。作者說這支持了「DSPy 能減少對手寫 prompt 的需要」的假設。reflection 只比其他兩個程式多幾行，卻是明顯的贏家；CoT 加上 ensemble 也很有效，GPT-3.5 開發集最高的 88.3 就是它。整體來說，bootstrap 這個編譯程序讓每個程式、在兩個 LM 上都大幅進步。</p>
+    <p>表 1 的圖說把結論壓成一句：表裡所有程式都只由二到四個 DSPy 模組與 teleprompter 組成；在 DSPy 的新範式裡，讓不同 LM 從 4–20% 的準確率升到 49–88% 的，是組合正確的通用模組，而不是操作 prompt 字串。</p>
+
+    <div class="story">
+      <div class="label">關鍵觀念 · 二</div>
+      <h4>vanilla 把推理寫進了答案欄</h4>
+      <p>附錄 F 的圖 9 是 Llama2-13b-chat 的 vanilla 程式經過 bootstrap×2 之後的 prompt。signature 仍是 <code>question -&gt; answer</code>，格式也只有 Question 與 Answer 兩欄；但被選中的示範，Answer 欄先寫出單價乘數量、折扣、相減的算式，最後才給數字。沒有人叫模型推理，是 bootstrap 留下了「答對的那幾次」，而答對的那幾次剛好把算式寫在答案欄裡。</p>
+      <p>整理者的讀法：編譯最佳化的是 metric 量到的東西。metric 只抽最後的數字，所以「在答案欄裡推理」完全合法；如果 metric 要求答案欄只能有數字，同樣的編譯就會挑出不一樣的示範。</p>
+    </div>
+
+    <p>作者也拿其他論文的數字做了非正式比較，條件各不相同，只能當參考。Zhang 等人（2022）報告 text-davinci-002 為 48%，和這裡 Llama2-13b-chat 的結果相近；codex 用人工 CoT 是 59.4%，用自動 CoT 是 62.8%。Wang 等人（2022b）用 PaLM 540B 做 CoT 是 57%，加上 self-consistency 變成 74%。Llama 2 的作者報告 llama2-13b 為 28.7%、34b 為 42.2%、70b 為 56.8%；作者指出，他們用 13b 的程式可以和 34b 的結果相比，而且沒有用人寫的推理鏈。Zhao 等人（2023b）報告 2023 年 4 月的 gpt-3.5-turbo 用 CoT 是 80.8%。GPT-4 的技術報告說 GPT-3.5 為 57.1%、GPT-4 為 92%，但也註明 GPT-4 的預訓練資料包含 GSM8K 訓練集的一部分。</p>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>摘要裡的百分比怎麼來的，論文沒有寫</h4>
+      <p>摘要說，編譯後的管線通常勝過標準 few-shot prompting 超過 25%（GPT-3.5）與 65%（llama2-13b-chat），勝過專家示範的管線最多 5–46% 與 16–40%。論文沒有給這些數字的算法（例如是相對還是絕對的差距），這一頁照抄，不自己從表裡重算。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="hotpotqa-programs" data-toc="HotPotQA：四個程式">
+  <div class="container head">
+    <p class="chapter">Chapter 11 · Case Study: Complex Question Answering</p>
+    <h2>多跳程式讓模型自己寫查詢，一跳一跳補脈絡</h2>
+    <p class="lede">HotPotQA 是多跳問答，答案要串起不只一份維基百科段落。只拿原題去檢索的 RAG 撈不齊證據，所以作者加測兩個多跳程式：內建的 ReAct 代理，以及自己寫的兩跳程式 multihop。</p>
+    
+  </div>
+  <div class="cardband" id="card-11"><div class="cardlabel"><span class="n">圖卡 11 / 13</span><span class="t">HotPotQA：兩跳檢索</span><button type="button" class="zoom" data-card="11">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">兩跳檢索：模型自己寫查詢，脈絡越疊越多</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 7 節的 BasicMultiHop：每一跳先依目前的脈絡寫查詢，再用 ColBERTv2 檢索三段；兩跳之後才回答。程式裡是 for 迴圈，這裡攤開成五步</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　寫第一個查詢</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">脈絡還是空的，只看題目</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">LM 寫的：編譯得到</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　檢索 3 段</div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#6B7380; line-height:1.55;">dspy.Retrieve(k=3)</div>
+    <div style="margin-top:2px; font-size:13px; color:#6B7380; line-height:1.55;">脈絡：3 段</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　寫第二個查詢</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">看過這 3 段，再決定查什麼</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">LM 寫的：編譯得到</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　再檢索 3 段</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">新的段落接在後面，<br>脈絡累積到 6 段</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　寫答案</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">generate_answer：<br>6 段脈絡＋題目</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:300px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">同一個模組</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">第一與第三格是同一個 generate_query 模組（ChainOfThought，context, question -&gt; search_query）；它的示範由 bootstrap 產生，附錄 F 的圖 11 就是第二跳寫查詢時的 prompt。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:420px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:444px; font-size:20px; font-weight:700; color:#1C2431;">另外三個程式，與一個微調</div>
+
+  <div style="position:absolute; left:60px; top:486px; width:470px; height:270px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">CoT_RAG：只用原題檢索</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">第 5 章的 RAG 程式：拿使用者的原題直接檢索 3 段，再先推理後作答。作者說它在 HotPotQA 上表現不突出，因為段落召回只能靠原題撈得到什麼。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">表 2：不管編不編譯，段落準確率都是 36.0；它檢索時直接用原題，這一步不經過 LM。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:486px; width:470px; height:270px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">ReAct：一行宣告的代理</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">內建模組，工具是一次檢索 1 段的 Retrieve，最多 5 輪；推理與行動交錯進行。人寫推理的對照組改寫自 Yao 等人（2022）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">編譯：從先前的一次 bootstrap 出發，再 bootstrap 一次（bootstrap×2）；GPT-3.5 開發集從不編譯的 20.3 到 39.0。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:486px; width:470px; height:270px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">multihop 蒸餾進 T5-Large</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">把 bootstrap 編好的 multihop 當 teacher，用 BootstrapFinetune 微調 7.7 億參數的 T5-Large，metric 是答案完全相符。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">實際跑的 teacher 是兩個 Llama2-13b-chat multihop 的聯集，用了 200 筆標註與 800 筆無標籤問題；結果見第 12 卡。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：攤開的五步與步驟名是整理者的，模組與參數照原文的程式。設定：HotPotQA fullwiki、2017 年維基百科摘要的索引、ColBERTv2 檢索器。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M193 262L193 296" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4"></path>
+    <path d="M769 262L769 296" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第二個案例是 HotPotQA 的開放領域「fullwiki」設定。檢索用的是 HotPotQA 官方提供的 2017 年維基百科「摘要」傾印檔建成的索引，檢索器是 ColBERTv2。官方測試集不公開，所以作者把官方驗證集保留當測試用，從中抽 1,000 題；訓練集再切成 70% 訓練、30% 驗證，只保留原資料集標為「hard」的題目，和官方驗證集與測試集的難度標示一致。訓練與開發集的結果各抽 200 與 300 題。</p>
+    <p>程式有四個。最簡單的基準是上一個案例的 vanilla：<code>"question -&gt; answer"</code> 這個 signature 夠通用，只要編譯得當，這個任務（和許多別的任務）都能用。RAG 基準是第 5 章那個帶 ChainOfThought 的 RAG 程式（表中叫 CoT_RAG）；作者說它在 HotPotQA 上表現並不突出，這促使他們評估兩個多跳程式。</p>
+    <p>第一個是 ReAct（Yao 等人，2022），一個會使用工具的多步代理，DSPy 內建成模組，一行就能宣告。第二個是作者自己寫的 BasicMultiHop，模擬 Baleen 與 IRRR 的資訊流，也和 IRCoT 有相似之處：每一跳先根據目前累積的脈絡寫一個搜尋查詢，檢索幾段加進脈絡，兩跳之後再回答。</p>
+
+    <div class="codeblock">
+      <span class="file">ReAct 與兩跳程式 · 教學用精簡版</span>
+<pre class="code">react = dspy.ReAct(<span class="s">"question -&gt; answer"</span>, tools=[dspy.Retrieve(k=1)], max_iters=5)
+
+class BasicMultiHop(dspy.Module):
+    def __init__(self, passages_per_hop=3):
+        self.retrieve = dspy.Retrieve(k=passages_per_hop)
+        self.generate_query = dspy.ChainOfThought(<span class="s">"context, question -&gt; search_query"</span>)
+        self.generate_answer = dspy.ChainOfThought(<span class="s">"context, question -&gt; answer"</span>)
+
+    def forward(self, question):
+        context = []
+        for hop in range(2):                               <span class="c"># 兩跳：每跳依目前的脈絡寫新查詢</span>
+            query = self.generate_query(context=context, question=question).search_query
+            context += self.retrieve(query).passages        <span class="c"># 脈絡越疊越多</span>
+        return self.generate_answer(context=context, question=question)
+
+multihop = BasicMultiHop(passages_per_hop=3)</pre>
+    </div>
+
+    <p>編譯器沿用 GSM8K 那一組，另外加兩個 teleprompter 的組合。ReAct 從先前的一次 bootstrap 出發，再用 BootstrapFewShotWithRandomSearch 編一次（表中的 bootstrap×2）。multihop 則從先前那次 bootstrap 出發，用 T5-Large 微調：把 bootstrap 編好的程式當 teacher，用 <code>BootstrapFinetune</code>、以答案完全相符為 metric，目標模型是 <code>t5-large</code>。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>表 2 的兩個指標與 ReAct 的人寫對照組</h4>
+      <p>表 2 報兩個數字：Ans 是答案的完全相符（EM），Psg 是原文所說的 pair-retrieval accuracy，看檢索有沒有找對題目需要的那一對段落（原文沒有另外定義細節）。vanilla 不檢索，所以 Psg 是 n/a。ReAct 的「+human_r」是人寫推理的對照組，作者把 Yao 等人（2022）的專家推理稍微改寫成適合這裡的檢索設定。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="hotpotqa-results" data-toc="HotPotQA：結果">
+  <div class="container head">
+    <p class="chapter">Chapter 12 · Case Study: Complex Question Answering · Results</p>
+    <h2>編譯之後，llama2-13b-chat 追上 GPT-3.5</h2>
+    <p class="lede">只拿原題檢索的 CoT_RAG 被段落召回卡住；會自己寫查詢的 multihop 表現最好。bootstrap 勝過隨機示範，也勝過人寫的 ReAct 推理；同一組程式編譯給 13B 的開源模型，分數和 GPT-3.5 相近，微調成 T5-Large 也有 39.3%。</p>
+    
+  </div>
+  <div class="cardband" id="card-12"><div class="cardlabel"><span class="n">圖卡 12 / 13</span><span class="t">HotPotQA：13B 追上 GPT-3.5</span><button type="button" class="zoom" data-card="12">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">編譯之後，13B 的開源模型追上 GPT-3.5</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 2 的開發集。每格寫「GPT-3.5 · Llama2-13b-chat」，前四欄是答案完全相符（EM，%），最後一欄是段落準確率；multihop 那一列最好</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:240px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">程式</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">起點：不編譯或隨機示範</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">bootstrap 系列</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">最好的一列</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">段落準確率（Psg）</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:17px; font-weight:600; color:#1C2431;">vanilla</div><div style="font-size:13px; color:#8A93A0;">不檢索，直接答</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:12px; color:#8A93A0;">fewshot</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#1C2431;">34.3 · 27.5</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; color:#8A93A0;">表 2 沒有這一列</div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:12px; color:#8A93A0;">fewshot（唯一的一列）</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#1C2431;">34.3 · 27.5</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; color:#8A93A0;">不檢索：n/a</div>
+  </div>
+  <div style="position:absolute; left:60px; top:306px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:17px; font-weight:600; color:#1C2431;">CoT_RAG</div><div style="font-size:13px; color:#8A93A0;">用原題檢索 3 段</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:12px; color:#8A93A0;">fewshot</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#1C2431;">36.4 · 34.5</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:12px; color:#8A93A0;">bootstrap</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#1C2431;">42.3 · 38.3</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:12px; color:#8A93A0;">bootstrap</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#1C2431;">42.3 · 38.3</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:12px; color:#C8501F;">fewshot → bootstrap，兩個 LM 都一樣</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#C8501F;">36.0 → 36.0</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:402px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:17px; font-weight:600; color:#1C2431;">react</div><div style="font-size:13px; color:#8A93A0;">代理，最多 5 輪</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; color:#1C2431;"><span style="font-family:'Noto Sans TC', sans-serif; font-size:12px; color:#8A93A0;">none</span> 20.3 · 20.0</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; color:#C8501F;"><span style="font-family:'Noto Sans TC', sans-serif; font-size:12px;">人寫推理</span> 33.0 · 28.3</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; color:#1C2431;"><span style="font-family:'Noto Sans TC', sans-serif; font-size:12px; color:#8A93A0;">bootstrap</span> 31.0 · 24.7</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; color:#2E7B4F;"><span style="font-family:'Noto Sans TC', sans-serif; font-size:12px;">bootstrap×2</span> 39.0 · 40.0</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:12px; color:#8A93A0;">bootstrap×2</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#1C2431;">39.0 · 40.0</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; color:#8A93A0;">表 2 沒有報</div>
+  </div>
+  <div style="position:absolute; left:60px; top:498px; width:1480px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:0px 0px 8px 8px; display:grid; grid-template-columns:240px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:17px; font-weight:600; color:#2E7B4F;">multihop</div><div style="font-size:13px; color:#8A93A0;">兩跳，自己寫查詢</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:12px; color:#8A93A0;">fewshot</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#1C2431;">36.9 · 34.7</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:12px; color:#8A93A0;">bootstrap</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; color:#2E7B4F;">48.7 · 42.0</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:12px; color:#8A93A0;">ensemble</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#2E7B4F;">54.7 · 50.0</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:12px; color:#8A93A0;">fewshot → bootstrap</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; color:#2E7B4F;">38.3 → 47.0 · 32.0 → 48.3</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">CoT_RAG 被召回卡住</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">它直接用原題檢索，這一步不經過 LM；編譯把 GPT-3.5 的答案 EM 從 36.4 拉到 42.3，段落準確率卻停在 36.0。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">react 與 multihop 讓 LM 替檢索器寫查詢，處理的正是這一點。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">bootstrap 勝過人寫推理</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">react 用人寫推理是 33.0 · 28.3，bootstrap×2 到 39.0 · 40.0；multihop 的 ensemble 讓 Llama2-13b-chat 到 50.0。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者：只要編譯程式，llama2-13b-chat 就能和 GPT-3.5 相比。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">蒸餾成 770M 的 T5-Large</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">multihop_t5 在開發集答案 EM 39.3%、段落準確率 46.0%，只用 200 筆標註輸入與 800 筆無標籤問題。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者：這麼小又能在本機跑，推論成本比 GPT-3.5 低好幾個數量級。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：只用表 2 的開發集；「起點、bootstrap 系列、最好的一列」的分欄是整理者的。測試集上 multihop 的 ensemble 是 45.6（只測一半）與 41.0。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 2 · 程式</th><th>編譯</th><th>GPT-3.5 Dev Ans／Psg</th><th>GPT-3.5 Test Ans／Psg</th><th>Llama2-13b Dev Ans／Psg</th><th>Llama2-13b Test Ans／Psg</th></tr></thead>
+        <tbody>
+          <tr><td>vanilla</td><td>fewshot</td><td>34.3／n/a</td><td>31.5／n/a</td><td>27.5／n/a</td><td>21.8／n/a</td></tr>
+          <tr><td>CoT_RAG</td><td>fewshot</td><td>36.4／36.0</td><td>29.8／34.4</td><td>34.5／36.0</td><td>28.0／34.4</td></tr>
+          <tr><td>CoT_RAG</td><td>bootstrap</td><td>42.3／36.0</td><td>–</td><td>38.3／36.0</td><td>32.9／34.4</td></tr>
+          <tr><td>react</td><td>none</td><td>20.3／–</td><td>–</td><td>20.0／–</td><td>–</td></tr>
+          <tr><td>react</td><td>+human_r</td><td>33.0／–</td><td>–</td><td>28.3／–</td><td>–</td></tr>
+          <tr><td>react</td><td>bootstrap</td><td>31.0／–</td><td>–</td><td>24.7／–</td><td>–</td></tr>
+          <tr><td>react</td><td>bootstrap×2</td><td>39.0／–</td><td>–</td><td>40.0／–</td><td>–</td></tr>
+          <tr><td>multihop</td><td>fewshot</td><td>36.9／38.3</td><td>31.2／40.8</td><td>34.7／32.0</td><td>31.3／30.8</td></tr>
+          <tr><td>multihop</td><td>bootstrap</td><td><strong>48.7／47.0</strong></td><td><strong>39.6／43.8</strong></td><td><strong>42.0／48.3</strong></td><td><strong>36.4／43.5</strong></td></tr>
+          <tr><td>multihop</td><td>ensemble</td><td><strong>54.7</strong>／–</td><td><strong>45.6*</strong>／–</td><td><strong>50.0</strong>／–</td><td><strong>41.0</strong>／–</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>表 2 的標注：交叉驗證直接用訓練集而不是開發集；打星號的 45.6 因為成本，只在一半的測試集上評估。</p>
+    <p>和 vanilla 的 few-shot prompting 比，CoT_RAG 能在 DSPy 裡自我 bootstrap，把答案 EM 明顯拉高（GPT-3.5 開發集 36.4 到 42.3）。但它完全依賴 ColBERTv2 直接用原始問題找到相關段落，段落的召回因此受限：Psg 在 fewshot 與 bootstrap 兩列都停在 36.0。react 與 multihop 會在好幾「跳」裡替檢索器產生查詢，處理的正是這一點。整體而言，簡單的 multihop 表現最好，bootstrap 也再一次在兩個 LM 上都比它的 fewshot 版本好得多：GPT-3.5 的開發集答案從 36.9 到 48.7、段落從 38.3 到 47.0；Llama2-13b-chat 從 34.7 到 42.0、段落從 32.0 到 48.3。</p>
+    <p>bootstrap（或 bootstrap×2）同時勝過兩種對照：multihop 的 fewshot prompting，以及 react 的人寫推理。react 加上人寫推理是 33.0 與 28.3，bootstrap×2 是 39.0 與 40.0。作者認為最重要的一點，是只要編譯程式，就能讓 llama2-13b-chat 和 GPT-3.5 並駕齊驅；例如 multihop 的 ensemble，開發集上 GPT-3.5 是 54.7、Llama2-13b-chat 是 50.0。</p>
+
+    <div class="stat-grid">
+      <div class="stat-card bronze"><div class="big">39.3<small>%</small></div><div class="label">T5-Large 的答案 EM（開發集）</div><div class="note">multihop 編譯成 7.7 億參數的 T5-Large</div></div>
+      <div class="stat-card bronze"><div class="big">46.0<small>%</small></div><div class="label">段落準確率（開發集）</div><div class="note">高於 CoT_RAG 的 36.0</div></div>
+      <div class="stat-card"><div class="big">200＋800</div><div class="label">標註的輸入＋無標註的問題</div><div class="note">teacher 是兩個 Llama2-13b-chat multihop 的聯集</div></div>
+    </div>
+
+    <p>為了評估 DSPy 的微調能力，作者也跑了前一章定義的 multihop_t5：它產生一個 T5-Large（7.7 億參數）模型，在開發集上答案 EM 39.3%、段落準確率 46.0%，只用了 200 筆有標籤的輸入與 800 筆沒有標籤的問題。編譯時的 teacher 是兩個用 Llama2-13b-chat 的 multihop 程式組成的 ensemble（取聯集）。作者說，這麼小、又能在本機執行的模型，推論成本會比 GPT-3.5 這類專有 LM 低好幾個數量級。</p>
+
+    <div class="story">
+      <div class="label">關鍵觀念 · 三</div>
+      <h4>編譯改得了模型寫的查詢，改不了原題</h4>
+      <p>整理者的讀法：CoT_RAG 的 Psg 不管怎麼編譯都是 36.0，因為它檢索用的是使用者的原始問題，這一步沒有 LM 參與，編譯只能改善「拿著同樣三段文字怎麼回答」。multihop 的查詢是 generate_query 模組寫出來的，是 LM 的輸出，也就是編譯碰得到的地方；bootstrap 之後，它的段落準確率從 fewshot 的 38.3 與 32.0 升到 47.0 與 48.3。</p>
+      <p>作者對 CoT_RAG 的診斷是「完全依賴檢索器直接用原題找段落」；把查詢交給一個模組，是他們的解法。</p>
+    </div>
+
+    <p>作者也列了幾篇近期論文在 HotPotQA 上的數字，同時提醒評估方法與測試樣本差異很大：Si 等人（2022）用 CoT prompting 是 25.2% EM；Sun 等人（2022）用 PaLM-62B 先「背誦」證據段落再回答，是 26.5%；Wang 等人（2022a）用 PaLM-540B 加 self-consistency，是 33.8% EM 與 44.6% F1；Yao 等人（2022）的 ReAct 用 PaLM-540B 是 27.4% EM，用 text-davinci-002 搭配維基百科 API 搜尋是 30.8，再加一步帶 self-consistency 的 CoT 推到 35.1%，作者說這有點像他們的 ensemble；Trivedi 等人（2022）用 code-davinci-002 的管線在 500 題樣本上報告 49%。</p>
+
+    <div class="thought">
+      <span class="label">思考題 · 03</span>
+      <h4>你的 RAG 管線裡，哪幾步是 LM 產生、編譯得到的？</h4>
+      <p>把管線畫出來，標出每一步的輸入是誰寫的：使用者、程式，還是 LM。</p>
+      <p class="hint">只有 LM 產生的那幾步（改寫查詢、挑段落、寫答案）有示範可以 bootstrap。如果召回卡住，先看檢索的查詢是不是還直接用原題；表 2 的 CoT_RAG 就是這種情況，換成讓模組寫查詢之後段落準確率才動。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="takeaways" data-toc="結論與代價">
+  <div class="container head">
+    <p class="chapter">Chapter 13 · Conclusion</p>
+    <h2>人寫程式與 metric，prompt 交給編譯器</h2>
+    <p class="lede">結論一節只有一段：三個新概念，兩個差很多的案例，都顯示能用相對小的 LM 快速做出很有效的系統。作者認為在 in-context learning 之後，真正的表現力在於由可組合的模組與最佳化器組成的文字轉換圖。</p>
+    
+  </div>
+  <div class="cardband" id="card-13"><div class="cardlabel"><span class="n">圖卡 13 / 13</span><span class="t">結論：人寫程式與 metric</span><button type="button" class="zoom" data-card="13">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">表現力在可組合的模組與最佳化器</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 8 節：三個新概念、兩個很不一樣的案例，都用相對小的 LM 快速做出有效的系統；作者維護開源版本將近一年，更多任務的受控實驗留給之後</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">01　把 prompt 當參數</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">手寫的字串，<br>就是手調的權重</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">指令、欄位前綴、示範都是參數；同一份程式換 LM、改管線，重新編譯就好，signature 不用動。就像深度學習不手調權重，而是交給最佳化器去找。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 在程式庫裡替每個資料庫寫死一段 prompt<br>✓ 宣告做什麼，prompt 交給編譯器產生</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">02　讓 metric 決定留下什麼</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">示範是跑出來、<br>再用 metric 篩過的</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">標籤最多只要最終輸出；整條管線一起通過 metric 的那幾次，每一步都變成示範。metric 量什麼，編譯就往哪裡走：vanilla 把算式寫進答案欄就是例子。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 為每個中間步驟另外標資料<br>✓ 把要求寫進 metric，連依據都能檢查</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">03　比的是程式加策略</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">「程式 P 用策略 S 編譯」<br>才是一次可重現的比較</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">同一個 LM，換成 reflection 或 multihop、換成 bootstrap 或 ensemble，就是另一個系統；<span style="white-space:nowrap;">Llama2-13b-chat</span> 編譯之後能和 GPT-3.5 相比。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">表 1、表 2 的每一列都是一條獨立的管線；<br>作者希望問題從「哪個 LM 比較強」改成這種問法。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; font-size:20px; font-weight:700; color:#1C2431;">作者點名、還沒做實驗的五個方向（不排順序）</div>
+  <div style="position:absolute; left:60px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">A</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">最佳化指令與欄位描述</div>
+  </div>
+  <div style="position:absolute; left:360px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">B</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">強化學習、貝氏最佳化</div>
+  </div>
+  <div style="position:absolute; left:660px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">C</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">測試時 bootstrap、回溯</div>
+  </div>
+  <div style="position:absolute; left:960px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">D</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">讓欄位宣告型別</div>
+  </div>
+  <div style="position:absolute; left:1260px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">E</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">更多任務的受控實驗</div>
+  </div>
+  <div style="position:absolute; left:60px; top:722px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">出處：A 第 4 節第 1 階段（這一版專注在示範）；B 第 2 節；C 第 4 節第 3 階段；D 第 3.1 節的註腳與附錄 A；E 第 8 節（資訊擷取、低資源的合成資料產生）。代價另見正文：編譯要跑程式幾千次，評估只量了手寫 prompt 的必要性這一個面向。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三條原則是整理者從論文歸納的，✗／✓ 的對照也是整理者寫的；五個方向都是原文點名過、但沒有做實驗的。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>作者的收尾是：這篇論文介紹了 DSPy，一個用預訓練 LM 與其他工具組成管線來設計 AI 系統的新程式模型；提出了三個新概念（signature、module、teleprompter），並在兩個很不一樣的案例裡顯示，它能快速做出很有效、而且用相對小的 LM 的系統。他們維護開源版本已經將近一年，這段時間看過、也做過許多被 DSPy 編譯成高品質系統的程式，任務從資訊擷取到低資源的合成資料產生；為了篇幅與範圍，這些任務留待之後在受控的實驗條件下報告。過去兩三年 in-context learning 改變了 LM 研究，而作者主張，這個新範式真正的表現力，在於建構精巧的文字轉換圖，讓可組合的模組與最佳化器（teleprompter）一起，更有系統、更可靠地運用 LM。</p>
+    <p>論文沒有獨立的限制一節。散在正文裡的代價放在一起看：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>編譯要跑程式好幾千次</strong>通常幾分鐘到幾十分鐘，例如 10 到 20 次試驗、每次 150 到 300 筆驗證例，可以平行（第 7 章）。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>一切取決於 metric</strong>留下哪些示範、選哪個候選，都由 metric 決定；vanilla 在答案欄裡推理，就是 metric 只看最終數字的結果（第 10 章）。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>這一版只最佳化示範</strong>指令與欄位描述也是參數，但論文的做法與實驗都集中在示範（第 6 章）。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>評估只量一個面向</strong>運算效率、開發者效率、直觀程度都不在範圍內（第 8 章）；跨論文的比較是非正式的，HotPotQA 有一格因成本只測一半（第 10、12 章）。</div></div>
+    </div>
+
+    <p>作者在正文點名、但沒有做實驗的方向有五個：最佳化指令與欄位描述，而不只是示範（第 4 節第 1 階段）；在 teleprompter 裡用強化學習、LM 回饋，或學習式、貝氏的超參數最佳化（第 2 節）；在第 3 階段加入測試時的動態 bootstrap 與自動回溯（第 4 節）；讓欄位宣告型別，例如 bool、int（第 3.1 節與附錄 A）；以及在受控條件下報告資訊擷取、合成資料產生等其他任務（第 8 節）。</p>
+
+    <div class="explain">
+      <span class="label">整理者的讀法</span>
+      <h4>放回這一講：框架抽象掉哪一層</h4>
+      <p>下面是整理者的連結，論文沒有這樣講。附錄 B 其實區分了兩種抽象：LangChain 與 LlamaIndex 抽象的是現成的流程與整合（鏈、代理、資料庫連線、記憶），DSPy 抽象的是 prompt、prompting 技巧與 prompt 工程這個過程本身。兩者不互斥，DSPy 自己也有接 ColBERTv2、Pyserini、Pinecone 的檢索模組。選抽象層級時，可以先問最常變動的是什麼：常換模型、常改管線步驟，把 prompt 交給編譯器的好處最大；主要工作是接資料源與工具，現成元件省的時間最多。LangGraph 這類管控流程與狀態的工具，論文沒有討論。</p>
+    </div>
+
+    <dl class="faq">
+      <div><dt>一定要準備大量標註資料嗎？</dt><dd>不用。第 3.3 節說訓練集可以只有幾筆，而且可以不完整，通常最多只需要最終輸出的標籤。HotPotQA 的 T5-Large 只用了 200 筆標註的輸入加 800 筆沒有標籤的問題；沒有答案時，可以改用 <code>answer_passage_match</code> 這類不需要標籤的 metric。</dd></div>
+      <div><dt>編譯一次要多久？</dt><dd>第 6 節說通常幾分鐘，最多幾十分鐘：即使比較貴的設定，也只要把程式跑幾千次（例如 10 到 20 次試驗、每次 150 到 300 筆驗證例），而且可以平行。</dd></div>
+      <div><dt>DSPy 只會產生 prompt 嗎？</dt><dd>不只。第 4 節說 prompting 與微調在 teleprompter 裡是統一的；BootstrapFinetune 用 bootstrap 出的示範更新每個 predictor 的 LM 權重，第 12 章的 T5-Large 就是這樣編出來的。</dd></div>
+    </dl>
+
+    <div class="pullquote bronze">
+      prompt 是編譯的產物：人寫的是程式與 metric，示範與措辭由最佳化器去找。
+      <cite>整理自第 1、4、8 節</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="glossary" class="nocard glossary" data-toc="名詞速查">
+  <div class="wide">
+    <p class="eyebrow">Reference · 名詞速查</p>
+    <h2>關鍵名詞與它們在論文裡的位置</h2>
+    <p class="lede">先列程式模型的三個抽象與它們的零件，再列編譯器與 teleprompter，最後是兩個案例的資料集與指標。</p>
+    <dl class="glossary-grid">
+      <div class="term"><dt>signature</dt><span class="zh-name">簽章</span><dd>用自然語言寫的函式型別：輸入欄位、輸出欄位、選填的指令；只說做什麼，不說怎麼 prompt（第 3.1 節）。</dd></div>
+      <div class="term"><dt>module</dt><span class="zh-name">模組</span><dd>帶著 signature、可以呼叫的元件；內建模組把 prompting 技巧包成支援任何 signature 的函式（第 3.2 節）。</dd></div>
+      <div class="term"><dt>teleprompter</dt><span class="zh-name">最佳化器</span><dd>拿程式、訓練集與 metric，回傳最佳化過的新程式；課程與後來的 DSPy 文件稱為 optimizer（第 3.3、4 節）。</dd></div>
+      <div class="term"><dt>compile</dt><span class="zh-name">編譯</span><dd>對一個 DSPy 程式呼叫 teleprompter，產生示範、挑選組合或微調權重的整個過程。</dd></div>
+      <div class="term"><dt>program</dt><span class="zh-name">程式</span><dd>繼承 dspy.Module 的類別：在 __init__ 宣告模組，在 forward 用任意 Python 控制流程呼叫它們。</dd></div>
+      <div class="term"><dt>define-by-run</dt><span class="zh-name">邊跑邊定義</span><dd>計算圖由實際執行的程式碼決定，借自 PyTorch 與 Chainer；所以可以用 if、for 與例外處理接模組。</dd></div>
+      <div class="term"><dt>text transformation graph</dt><span class="zh-name">文字轉換圖</span><dd>論文對 LM 管線的抽象：LM 透過宣告式模組被呼叫的命令式計算圖。</dd></div>
+      <div class="term"><dt>demonstration</dt><span class="zh-name">示範</span><dd>一筆輸入與輸出的配對；對凍結的 LM 是 few-shot prompt，對要微調的 LM 是訓練資料，是模組最重要的參數。</dd></div>
+      <div class="term"><dt>bootstrap</dt><span class="zh-name">自舉產生示範</span><dd>讓程式在訓練輸入上自己跑，把通過 metric 的那幾次執行裡每一步的輸入輸出留下來當示範。</dd></div>
+      <div class="term"><dt>trace</dt><span class="zh-name">執行軌跡</span><dd>編譯模式下記下的每一次 Predict 呼叫的輸入與輸出；metric 看得到它。</dd></div>
+      <div class="term"><dt>metric</dt><span class="zh-name">評分函式</span><dd>判斷一次預測好不好的函式，可以是 EM、F1，也可以是一整個 DSPy 程式。</dd></div>
+      <div class="term"><dt>teacher</dt><span class="zh-name">老師程式</span><dd>bootstrap 時實際拿來跑、產生示範的程式；沒指定時是被編譯程式的零樣本版本，也可以是已編譯的程式或大模型的 ensemble。</dd></div>
+      <div class="term"><dt>Predict</dt><span class="zh-name">核心模組</span><dd>存 signature、LM 與示範；組 prompt、呼叫 LM、解析欄位，編譯時記 trace。</dd></div>
+      <div class="term"><dt>ChainOfThought</dt><span class="zh-name">先推理再答</span><dd>在輸出欄位前插一個 rationale 欄位的模組，裡面是一個 Predict（附錄 D.2）。</dd></div>
+      <div class="term"><dt>MultiChainComparison</dt><span class="zh-name">多鏈比較</span><dd>讀過 M 條推理與答案，再產生新答案的模組；GSM8K 的 reflection 程式用 M＝5。</dd></div>
+      <div class="term"><dt>ReAct</dt><span class="zh-name">推理加行動的代理</span><dd>會使用工具的多步代理，DSPy 內建；HotPotQA 用檢索當工具、最多 5 輪。</dd></div>
+      <div class="term"><dt>dspy.Retrieve</dt><span class="zh-name">檢索工具</span><dd>接檢索模型的模組；當時內建 ColBERTv2、Pyserini、Pinecone。</dd></div>
+      <div class="term"><dt>LabeledFewShot</dt><span class="zh-name">隨機示範</span><dd>從有標籤的訓練集隨機抽 k 筆當示範；實驗裡的 fewshot 設定用 k＝8。</dd></div>
+      <div class="term"><dt>BootstrapFewShot</dt><span class="zh-name">基本的 bootstrap</span><dd>跑 teacher、記 trace、用 metric 篩，把通過的步驟存成各 predictor 的示範（附錄 E.1）。</dd></div>
+      <div class="term"><dt>BootstrapFewShotWithRandomSearch</dt><span class="zh-name">bootstrap 加隨機搜尋</span><dd>洗牌訓練集、多次 bootstrap 出候選程式，在驗證集上挑最高分（附錄 E.2）；實驗裡的 bootstrap 設定。</dd></div>
+      <div class="term"><dt>BootstrapFinetune</dt><span class="zh-name">bootstrap 後微調</span><dd>把 bootstrap 出的示範拿去更新 LM 權重；HotPotQA 用它編出 T5-Large 版本。</dd></div>
+      <div class="term"><dt>ensemble</dt><span class="zh-name">整合</span><dd>第 3 階段的最佳化：平行跑多個編好的程式，用多數決等函式合成；實驗取前 7 名。</dd></div>
+      <div class="term"><dt>GSM8K</dt><span class="zh-name">小學數學應用題</span><dd>第一個案例；200 題訓練、300 題開發、1,300 題官方測試，評最終數值的準確率。</dd></div>
+      <div class="term"><dt>HotPotQA</dt><span class="zh-name">多跳問答</span><dd>第二個案例；fullwiki 設定，檢索 2017 年維基百科摘要，報答案 EM 與段落準確率。</dd></div>
+      <div class="term"><dt>EM</dt><span class="zh-name">完全相符</span><dd>預測的答案與標準答案完全一樣才算對；HotPotQA 的 Ans 欄。</dd></div>
+      <div class="term"><dt>ColBERTv2</dt><span class="zh-name">檢索器</span><dd>HotPotQA 實驗用的檢索模型，也是 dspy.Retrieve 內建支援的一種。</dd></div>
+    </dl>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>資料來源：arXiv，〈DSPy: Compiling Declarative Language Model Calls into Self-Improving Pipelines〉，Omar Khattab、Arnav Singhvi、Paridhi Maheshwari、Zhiyuan Zhang、Keshav Santhanam、Sri Vardhamanan、Saiful Haq、Ashutosh Sharma、Thomas T. Joshi、Hanna Moazam、Heather Miller、Matei Zaharia、Christopher Potts（Stanford、UC Berkeley、Carnegie Mellon、Amazon Alexa AI、Dashworks、IIT Bombay、Calera Capital、Microsoft、Two Sigma），2023-10-05（v1；ICLR 2024）。頁面上的數字依 arXiv v1。<br><a href="https://arxiv.org/abs/2310.03714">arxiv.org/abs/2310.03714</a></p>
+    <p class="credit">整理於 2026-09-24</p>
+    <p class="disclaimer">本頁為學習用的重述與整理，不是原文逐句翻譯。觀點與著作權屬於原作者。程式片段為教學用精簡版，實際用法請以原文與官方文件為準。</p>
+  </div>
+</footer>
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="圖卡大圖"><button type="button" class="close">關閉（Esc）</button><div class="frame"></div></div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fitFrames() {
+    var frames = document.querySelectorAll('.cardband .frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  var KEY = 'rearranged-article-mode';
+  function setMode(m, save) {
+    document.body.classList.toggle('mode-cards', m === 'cards');
+    var btns = document.querySelectorAll('.modebar button[data-mode]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-mode') === m ? 'true' : 'false');
+    }
+    if (save) { try { localStorage.setItem(KEY, m); } catch (e) {} }
+    fitFrames();
+  }
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  setMode(saved === 'cards' ? 'cards' : 'full', false);
+
+  var box = document.getElementById('lightbox');
+  var boxFrame = box.querySelector('.frame');
+  function fitLightbox() {
+    if (!box.classList.contains('open')) return;
+    var root = boxFrame.firstElementChild;
+    if (!root) return;
+    var s = Math.min(1, (window.innerWidth - 48) / W, (window.innerHeight - 48) / H);
+    root.style.transform = 'scale(' + s + ')';
+    boxFrame.style.width = Math.round(W * s) + 'px';
+    boxFrame.style.height = Math.round(H * s) + 'px';
+  }
+  function openLightbox(num) {
+    var bandEl = document.getElementById('card-' + num);
+    if (!bandEl) return;
+    var root = bandEl.querySelector('.frame > div');
+    boxFrame.innerHTML = '';
+    var clone = root.cloneNode(true);
+    clone.style.transform = '';
+    boxFrame.appendChild(clone);
+    box.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    fitLightbox();
+  }
+  function closeLightbox() {
+    box.classList.remove('open');
+    boxFrame.innerHTML = '';
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var b = t.closest('.modebar button[data-mode]');
+    if (b) { setMode(b.getAttribute('data-mode'), true); return; }
+    var z = t.closest('.cardlabel .zoom');
+    if (z) { openLightbox(z.getAttribute('data-card')); return; }
+    if (t.closest('.lightbox') && !t.closest('.lightbox .frame')) { closeLightbox(); }
+  });
+  document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') closeLightbox(); });
+  window.addEventListener('resize', function () { fitFrames(); fitLightbox(); });
+  window.addEventListener('load', fitFrames);
+  fitFrames();
+})();
+</script>
+</body>
+</html>
