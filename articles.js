@@ -325,6 +325,42 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "llm-data-annotation",
+      "path": "articles/llm-data-annotation/index.html",
+      "title": "用 LLM 標註與合成資料：從產生、評估到使用的一份綜述",
+      "summary": "Arizona State University 等團隊在 EMNLP 2024 發表的綜述，把「讓 LLM 標註與合成資料」的研究分成三段：LLM 能產生哪幾種資料（指令與回應、標籤、推理過程、成對與文字回饋、各領域資料），怎麼評估與篩選這些產出，又怎麼拿去微調、對齊與推論；最後整理模型崩潰、幻覺、偏誤與算力這幾個代價。每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "ACL Anthology · Zhen Tan、Dawei Li、Song Wang、Alimohammad Beigi、Bohan Jiang、Amrita Bhattacharjee、Mansooreh Karami、Jundong Li、Lu Cheng、Huan Liu（Arizona State University、University of Virginia、University of Illinois Chicago）",
+        "url": "https://aclanthology.org/2024.emnlp-main.54/",
+        "date": "2024-11"
+      },
+      "date": "2026-09-24",
+      "tags": [
+        "data-annotation",
+        "synthetic-data",
+        "llm-as-annotator",
+        "survey",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 6,
+        "kind": "選讀",
+        "section": "Data for Agentic Systems",
+        "lecture": "What Data Do Agents Need?",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/llm-data-annotation/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "lima-less-is-more",
       "path": "articles/lima-less-is-more/index.html",
       "title": "LIMA 少即是多：1,000 筆精選範例就能對齊，對齊教的是回答的格式",
