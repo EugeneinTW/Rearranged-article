@@ -1,0 +1,2053 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ReAct（Yao et al. 2022）</title>
+<meta name="description" content="Princeton 與 Google Research 在 2022 年提出 ReAct：讓大型語言模型把推理（thought）和行動（action）交錯寫進同一條軌跡，推理決定下一步查什麼、做什麼，行動帶回的觀察再修正推理。在 HotpotQA 與 FEVER 上，它透過一個簡單的 Wikipedia API 減少 chain-of-thought 的幻覺，和 CoT-SC 互相當後援時表現最好；在 ALFWorld 與 WebShop 上只用一兩個示範，成功率就比模仿學習與強化學習方法高出 34% 與 10%。每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="react, llm-agents, reasoning, tool-use, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2210.03629">
+<meta name="date" content="2026-09-24">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Theme: tech-modern 變體「測試報告語意色」
+   藍 = 主色 / 綠 = pass / 琥珀 = 注意 / 紅 = fail
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --paper: #ffffff;
+  --paper-soft: #f3f5f8;
+  --paper-shadow: #dde2e8;
+  --ink: #121821;
+  --ink-soft: #3b4450;
+  --ink-mute: #6b7481;
+  --primary: #1e56a8;
+  --primary-deep: #143a72;
+  --primary-bg: #e6eef9;
+  --accent: #157a52;
+  --accent-deep: #0d5236;
+  --accent-bg: #e1f3e9;
+  --warm: #b8620e;
+  --warm-deep: #7d4108;
+  --warm-bg: #fbeddc;
+  --danger: #b83228;
+  --danger-bg: #f9e3e0;
+  --stone: #5a6370;
+  --stone-bg: #eceff3;
+  --code-bg: #0f1720;
+  --code-ink: #e6edf3;
+  --code-mute: #8b98a8;
+  --code-blue: #7cc4ff;
+  --code-green: #7ee2b8;
+  --code-amber: #ffc46b;
+
+  --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-cjk: 'Noto Sans TC', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --content-width: 780px;
+  --wide-width: 1100px;
+  --gutter: 24px;
+}
+
+/* ---------- reset & 排版 ---------- */
+* { box-sizing: border-box; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+body {
+  margin: 0; padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-cjk);
+  font-size: 18px;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: var(--content-width); margin: 0 auto; padding: 0 var(--gutter); }
+.wide { max-width: var(--wide-width); margin: 0 auto; padding: 0 var(--gutter); }
+section { padding-block: 64px; }
+section + section { border-top: 1px solid var(--paper-shadow); }
+
+h1, h2, h3, h4 { font-family: var(--font-cjk); font-weight: 700; text-wrap: balance; }
+h1 { font-size: 56px; line-height: 1.14; margin: 0 0 24px; font-weight: 800; }
+h2 { font-size: 36px; line-height: 1.25; margin: 0 0 18px; letter-spacing: -0.01em; }
+h3 { font-size: 25px; line-height: 1.35; margin: 44px 0 14px; }
+h4 { font-size: 20px; line-height: 1.4; margin: 26px 0 10px; }
+p { margin: 0 0 18px; }
+ul, ol { padding-left: 26px; margin: 0 0 18px; }
+li { margin-bottom: 8px; }
+em { font-style: normal; color: var(--primary-deep); font-weight: 600; }
+strong { font-weight: 700; }
+a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+code {
+  font-family: var(--font-mono); font-size: 0.86em;
+  background: var(--stone-bg); color: var(--primary-deep);
+  padding: 2px 6px; border-radius: 4px;
+}
+.mono { font-family: var(--font-mono); }
+
+/* ---------- Hero ---------- */
+.hero {
+  padding-block: 84px 60px;
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-soft) 100%);
+  border-bottom: 2px solid var(--primary-deep);
+  position: relative;
+}
+.hero::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: linear-gradient(90deg,
+    var(--primary) 0%, var(--primary) 25%,
+    var(--accent) 25%, var(--accent) 50%,
+    var(--warm) 50%, var(--warm) 75%,
+    var(--danger) 75%, var(--danger) 100%);
+}
+.hero-meta {
+  display: flex; flex-wrap: wrap; gap: 10px 22px;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  margin-bottom: 32px;
+}
+.hero-meta span::before { content: "—"; margin-right: 10px; color: var(--paper-shadow); }
+.hero-meta span:first-child::before { content: ""; margin: 0; }
+.hero h1 { font-size: 60px; font-weight: 800; word-break: keep-all; }
+.hero h1 .accent {
+  display: block; margin-top: 12px;
+  font-size: 0.55em; font-weight: 600; line-height: 1.3;
+  color: var(--primary-deep);
+}
+.hero .lede { font-size: 22px; max-width: 720px; }
+.hero-keystat {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 28px; margin: 44px 0 0; padding-top: 34px;
+  border-top: 1px dashed var(--paper-shadow);
+}
+.hero-keystat dt {
+  font-family: var(--font-sans);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--ink-mute); margin-bottom: 6px;
+}
+.hero-keystat dd {
+  margin: 0; font-family: var(--font-mono);
+  font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1;
+}
+.hero-keystat dd small { font-family: var(--font-cjk); font-size: 14px; color: var(--ink-mute); font-weight: 400; margin-left: 6px; }
+
+/* ---------- Chapter / lede / eyebrow ---------- */
+.chapter {
+  font-family: var(--font-mono);
+  font-size: 12.5px; color: var(--primary);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 0 0 10px;
+}
+.chapter::before { content: "§ "; color: var(--paper-shadow); margin-right: 4px; }
+.lede {
+  font-size: 22px; line-height: 1.6; color: var(--ink-soft);
+  margin: 0 0 28px; font-weight: 400;
+}
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--primary); margin: 0 0 14px;
+}
+
+/* ---------- Pull quote ---------- */
+.pullquote {
+  margin: 48px -16px; padding: 32px 40px;
+  font-family: var(--font-cjk);
+  font-size: 27px; line-height: 1.5; font-weight: 600;
+  color: var(--primary-deep);
+  border-left: 5px solid var(--primary);
+  background: linear-gradient(90deg, var(--primary-bg) 0%, transparent 100%);
+}
+.pullquote.bronze {
+  color: var(--accent-deep); border-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-bg) 0%, transparent 100%);
+}
+.pullquote.terra {
+  color: var(--warm-deep); border-color: var(--warm);
+  background: linear-gradient(90deg, var(--warm-bg) 0%, transparent 100%);
+}
+.pullquote cite {
+  display: block; margin-top: 16px; font-style: normal; font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  letter-spacing: 0.06em;
+}
+.pullquote cite::before { content: "— "; }
+
+/* ---------- English quote ---------- */
+.quote-en {
+  margin: 28px 0;
+  font-family: var(--font-sans); font-style: italic;
+  font-size: 21px; line-height: 1.5; color: var(--ink);
+  padding-left: 20px; border-left: 3px solid var(--accent);
+}
+.quote-en .zh {
+  display: block; margin-top: 10px;
+  font-family: var(--font-cjk); font-style: normal;
+  font-size: 15px; color: var(--ink-soft); line-height: 1.6;
+}
+
+/* ---------- Story ---------- */
+.story {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 14px;
+  padding: 38px 44px; margin: 48px 0;
+  position: relative;
+}
+.story::before {
+  content: "❝"; position: absolute; top: -6px; left: 24px;
+  font-size: 72px; color: var(--warm); line-height: 1;
+  font-family: var(--font-sans);
+}
+.story .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.18em;
+  color: var(--warm); margin-bottom: 10px; padding-left: 42px;
+}
+.story h4 { margin: 0 0 16px; font-size: 22px; color: var(--warm-deep); }
+.story p { margin-bottom: 14px; font-size: 17px; line-height: 1.7; }
+.story p:last-child { margin-bottom: 0; }
+
+/* ---------- Explain ---------- */
+.explain {
+  background: var(--primary-bg);
+  border-left: 4px solid var(--primary);
+  border-radius: 4px;
+  padding: 26px 30px; margin: 36px 0;
+  font-family: var(--font-cjk); position: relative;
+}
+.explain.bronze { background: var(--accent-bg); border-color: var(--accent); }
+.explain.terra { background: var(--warm-bg); border-color: var(--warm); }
+.explain.stone { background: var(--stone-bg); border-color: var(--stone); }
+.explain .label {
+  position: absolute; top: -12px; left: 16px;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.15em; padding: 4px 12px;
+  border-radius: 3px; text-transform: uppercase;
+}
+.explain.bronze .label { background: var(--accent); }
+.explain.terra .label { background: var(--warm); }
+.explain.stone .label { background: var(--stone); }
+.explain h4 { margin: 4px 0 12px; font-size: 19px; color: var(--primary-deep); }
+.explain.bronze h4 { color: var(--accent-deep); }
+.explain.terra h4 { color: var(--warm-deep); }
+.explain.stone h4 { color: var(--ink); }
+.explain p { font-size: 16.5px; }
+.explain p:last-child { margin-bottom: 0; }
+.explain ul, .explain ol { margin: 8px 0 0; padding-left: 22px; }
+.explain li { margin-bottom: 6px; font-size: 16px; }
+.explain code { background: rgba(255,255,255,0.75); }
+
+/* ---------- Stat grid ---------- */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.stat-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 28px 24px; text-align: center;
+  border-top: 4px solid var(--primary);
+}
+.stat-card.bronze { border-color: var(--accent); }
+.stat-card.terra { border-color: var(--warm); }
+.stat-card.danger { border-color: var(--danger); }
+.stat-card .big {
+  font-family: var(--font-mono);
+  font-size: 46px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1; margin-bottom: 10px;
+}
+.stat-card.bronze .big { color: var(--accent-deep); }
+.stat-card.terra .big { color: var(--warm-deep); }
+.stat-card.danger .big { color: var(--danger); }
+.stat-card .big small { font-family: var(--font-cjk); font-size: 16px; opacity: 0.75; margin-left: 4px; font-weight: 500; }
+.stat-card .label {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.stat-card .note { margin-top: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.55; }
+
+/* ---------- Compare table ---------- */
+.table-scroll { overflow-x: auto; margin: 36px 0; }
+.compare {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-cjk); font-size: 15.5px;
+  background: var(--paper-soft);
+  border-radius: 10px; overflow: hidden;
+  min-width: 560px;
+}
+.compare th, .compare td {
+  padding: 15px 18px; text-align: left;
+  border-bottom: 1px solid var(--paper-shadow);
+  vertical-align: top; line-height: 1.6;
+}
+.compare th {
+  background: var(--primary-deep); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+}
+.compare tr:last-child td { border-bottom: none; }
+.compare td:first-child { font-weight: 700; color: var(--primary-deep); width: 24%; }
+.compare .id { font-family: var(--font-mono); font-size: 13px; display: block; color: var(--ink-mute); font-weight: 500; margin-bottom: 2px; }
+.compare .yes { color: var(--accent-deep); font-weight: 700; }
+.compare .no { color: var(--danger); font-weight: 700; }
+
+/* ---------- Value cards ---------- */
+.values {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.value-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 26px 24px;
+  border-top: 5px solid var(--primary);
+}
+.value-card:nth-child(2) { border-top-color: var(--accent); }
+.value-card:nth-child(3) { border-top-color: var(--warm); }
+.value-card:nth-child(4) { border-top-color: var(--primary-deep); }
+.value-card:nth-child(5) { border-top-color: var(--stone); }
+.value-card .num {
+  font-family: var(--font-mono);
+  font-size: 38px; font-weight: 700;
+  color: var(--primary); line-height: 1; margin-bottom: 12px;
+}
+.value-card:nth-child(2) .num { color: var(--accent); }
+.value-card:nth-child(3) .num { color: var(--warm); }
+.value-card:nth-child(4) .num { color: var(--primary-deep); }
+.value-card:nth-child(5) .num { color: var(--stone); }
+.value-card .tag {
+  display: inline-block; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--primary); margin-bottom: 10px;
+}
+.value-card:nth-child(2) .tag { color: var(--accent); }
+.value-card:nth-child(3) .tag { color: var(--warm); }
+.value-card:nth-child(4) .tag { color: var(--primary-deep); }
+.value-card h4 { margin: 0 0 10px; font-size: 19px; line-height: 1.4; }
+.value-card p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin: 0; }
+
+/* ---------- 擴充檢查卡（附成本標籤） ---------- */
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px; margin: 40px 0;
+}
+.card {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 12px;
+  padding: 24px 24px 22px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.card .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card h4 { margin: 0; font-size: 18.5px; line-height: 1.4; }
+.card p { margin: 0; font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); }
+.card .signal { font-family: var(--font-mono); font-size: 12.5px; color: var(--primary-deep); background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 6px; padding: 6px 10px; margin-top: 4px; overflow-x: auto; white-space: nowrap; }
+.pill {
+  flex: none; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px;
+}
+.pill.fast { background: var(--accent-bg); color: var(--accent-deep); }
+.pill.mid { background: var(--warm-bg); color: var(--warm-deep); }
+.pill.slow { background: var(--danger-bg); color: var(--danger); }
+
+/* ---------- Thought ---------- */
+.thought {
+  background: var(--accent-bg);
+  border-left: 4px solid var(--accent);
+  padding: 26px 30px; margin: 40px 0;
+  border-radius: 4px; position: relative;
+}
+.thought .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--accent-deep); margin-bottom: 10px;
+}
+.thought h4 { font-size: 19px; margin: 0 0 14px; color: var(--accent-deep); line-height: 1.45; }
+.thought p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin-bottom: 8px; }
+.thought .hint {
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px dashed rgba(13, 82, 54, 0.3);
+  font-size: 14px; color: var(--accent-deep);
+}
+.thought .hint::before { content: "建議方向："; font-weight: 700; }
+
+/* ---------- Code block ---------- */
+.codeblock { margin: 30px 0; }
+.codeblock .file {
+  display: inline-block; font-family: var(--font-mono);
+  font-size: 12px; color: var(--ink-mute);
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow); border-bottom: none;
+  border-radius: 8px 8px 0 0; padding: 7px 14px;
+}
+pre.code {
+  margin: 0; background: var(--code-bg); color: var(--code-ink);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65;
+  padding: 22px 24px; border-radius: 0 10px 10px 10px;
+  overflow-x: auto; tab-size: 2; white-space: pre;
+}
+pre.code.solo { border-radius: 10px; }
+pre.code .c { color: var(--code-mute); }
+pre.code .k { color: var(--code-blue); }
+pre.code .s { color: var(--code-green); }
+pre.code .a { color: var(--code-amber); font-weight: 700; }
+
+/* ---------- Flow（eval 迴圈圖） ---------- */
+.flow { display: flex; align-items: stretch; margin: 40px 0; }
+.flow-step {
+  flex: 1 1 0; min-width: 0;
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow);
+  border-radius: 10px; padding: 18px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.flow-step .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--primary); letter-spacing: 0.1em; }
+.flow-step strong { font-size: 17px; line-height: 1.3; }
+.flow-step span.d { font-size: 14px; line-height: 1.55; color: var(--ink-soft); }
+.flow-step.score { border-color: var(--accent); background: var(--accent-bg); }
+.flow-step.score .k { color: var(--accent-deep); }
+.flow-arrow { flex: none; width: 30px; position: relative; }
+.flow-arrow::before {
+  content: ""; position: absolute; top: 50%; left: 2px; right: 2px; height: 2px;
+  background: var(--primary); transform: translateY(-50%);
+}
+.flow-arrow::after {
+  content: ""; position: absolute; top: 50%; right: 4px; width: 9px; height: 9px;
+  border-top: 2px solid var(--primary); border-right: 2px solid var(--primary);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+/* ---------- Cascade（編號步驟） ---------- */
+.cascade { display: flex; flex-direction: column; gap: 14px; margin: 32px 0; }
+.cascade-step {
+  display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px;
+}
+.cascade-step .n {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-mono); font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.cascade-step .t { font-size: 16.5px; line-height: 1.65; }
+.cascade-step .t strong { display: block; margin-bottom: 2px; }
+
+/* ---------- Checklist ---------- */
+.checklist { list-style: none; padding: 0; margin: 32px 0; display: flex; flex-direction: column; gap: 12px; }
+.checklist li {
+  display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px; margin: 0;
+  font-size: 16.5px; line-height: 1.65;
+}
+.checklist .box {
+  width: 24px; height: 24px; margin-top: 3px;
+  border: 2px solid var(--accent); border-radius: 6px; background: var(--paper);
+}
+.checklist strong { display: block; }
+.checklist small { display: block; color: var(--ink-soft); font-size: 15px; }
+
+/* ---------- Glossary ---------- */
+.glossary { background: var(--primary-deep); color: var(--paper); padding-block: 64px; }
+.glossary h2 { color: var(--paper); margin-top: 0; }
+.glossary .eyebrow { color: var(--accent-bg); }
+.glossary .lede { color: var(--paper); opacity: 0.8; }
+.glossary-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 26px; margin: 42px 0 0;
+}
+.term { border-top: 2px solid var(--accent); padding-top: 16px; }
+.term:nth-child(3n+2) { border-color: var(--warm); }
+.term:nth-child(3n+3) { border-color: var(--paper); }
+.term dt {
+  font-family: var(--font-mono);
+  font-size: 14px; font-weight: 700;
+  color: var(--accent-bg); letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+.term .zh-name { font-family: var(--font-cjk); font-size: 16px; font-weight: 600; color: var(--paper); margin-bottom: 8px; display: block; }
+.term dd { margin: 0; font-family: var(--font-cjk); font-size: 14.5px; line-height: 1.65; color: rgba(255, 255, 255, 0.8); }
+
+/* ---------- TOC ---------- */
+.toc {
+  position: fixed; right: 24px; top: 50%; transform: translateY(-50%); z-index: 10;
+  font-family: var(--font-sans); font-size: 12px;
+  background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 10px;
+  padding: 18px 20px; max-width: 236px;
+  box-shadow: 0 4px 18px rgba(18, 24, 33, 0.08);
+}
+.toc h5 { margin: 0 0 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-mute); }
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc -1; }
+.toc li { margin-bottom: 6px; counter-increment: toc; font-size: 12px; line-height: 1.45; display: flex; gap: 8px; }
+.toc li::before { content: counter(toc, decimal-leading-zero); font-family: var(--font-mono); color: var(--ink-mute); font-size: 10.5px; padding-top: 2px; }
+.toc a { color: var(--ink-soft); text-decoration: none; }
+.toc a:hover { color: var(--primary); }
+@media (max-width: 1340px) { .toc { display: none; } }
+
+/* ---------- Footer ---------- */
+footer {
+  padding-block: 48px 64px;
+  background: var(--paper-soft);
+  text-align: center;
+  font-family: var(--font-cjk);
+  font-size: 13.5px; color: var(--ink-mute);
+}
+footer p { margin: 0 0 8px; }
+footer .credit { font-family: var(--font-sans); }
+footer .disclaimer { margin-top: 14px; font-size: 12px; opacity: 0.75; max-width: 640px; margin-inline: auto; }
+
+/* ---------- 響應式 ---------- */
+@media (max-width: 768px) {
+  body { font-size: 17px; }
+  .hero { padding-block: 56px 42px; }
+  .hero h1 { font-size: 36px; }
+  .hero .lede { font-size: 18px; }
+  h2 { font-size: 27px; }
+  h3 { font-size: 22px; }
+  section { padding-block: 46px; }
+  .lede { font-size: 19px; }
+  .pullquote { font-size: 21px; margin: 34px 0; padding: 24px; }
+  .story { padding: 30px 24px; }
+  .stat-card .big { font-size: 36px; }
+  .flow { flex-direction: column; }
+  .flow-arrow { width: auto; height: 30px; }
+  .flow-arrow::before { top: 2px; bottom: 2px; left: 50%; right: auto; width: 2px; height: auto; transform: translateX(-50%); }
+  .flow-arrow::after { top: auto; bottom: 4px; left: 50%; right: auto; transform: translateX(-50%) rotate(135deg); }
+  .compare td:first-child { width: auto; }
+}
+
+/* ---------- 列印 ---------- */
+@media print {
+  .toc { display: none; }
+  body { font-size: 12pt; }
+  .hero, .glossary {
+    color: var(--ink) !important; background: white !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .glossary h2, .glossary .term dt, .glossary .lede, .glossary .term .zh-name { color: var(--ink) !important; }
+  .glossary .term dd { color: var(--ink-soft) !important; }
+  pre.code { background: #f3f5f8 !important; color: #121821 !important; border: 1px solid #ccd; white-space: pre-wrap; }
+  pre.code .c, pre.code .k, pre.code .s, pre.code .a { color: inherit !important; }
+  section { page-break-inside: avoid; }
+}
+
+/* ---------- 整合版：模式列、圖卡帶、燈箱 ---------- */
+.modebar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; padding: 10px var(--gutter); background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--paper-shadow); font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.modebar .brand { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.modebar .left { display: flex; align-items: center; gap: 14px; }
+.modebar .homelink { font-size: 12px; font-weight: 600; color: var(--ink-mute); text-decoration: none; }
+.modebar .homelink:hover { color: var(--primary); text-decoration: underline; }
+.modebar .switch { display: flex; gap: 6px; }
+.modebar button { font: inherit; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.modebar button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+.modebar button:focus-visible, .cardlabel .zoom:focus-visible, .lightbox .close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.modebar .canvaslink { font-size: 12px; color: var(--ink-mute); }
+.cardband { max-width: 1600px; margin: 4px auto 40px; padding: 0 var(--gutter); }
+.cardlabel { display: flex; align-items: baseline; gap: 14px; padding: 0 2px 8px; font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.cardlabel .n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--warm); }
+.cardlabel .zoom { margin-left: auto; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--paper-shadow); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; font-size: 16px; color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(18, 24, 33, 0.86); display: none; align-items: center; justify-content: center; padding: 24px; }
+.lightbox.open { display: flex; }
+.lightbox .frame { border: none; border-radius: 8px; max-width: none; width: auto; flex: none; }
+.lightbox .close { position: absolute; top: 14px; right: 18px; font: inherit; font-family: var(--font-sans); font-size: 13px; color: #FFFFFF; background: transparent; border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.faq { margin: 36px 0 8px; padding: 0; }
+.faq > div { padding: 18px 0; border-top: 1px solid var(--paper-shadow); }
+.faq > div:last-child { border-bottom: 1px solid var(--paper-shadow); }
+.faq dt { margin: 0 0 6px; font-weight: 700; font-size: 17px; color: var(--ink); }
+.faq dt::before { content: "問"; display: inline-block; margin-right: 10px; padding: 1px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; color: #FFFFFF; background: var(--primary); vertical-align: 2px; }
+.faq dd { margin: 0; font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+body.mode-cards section .prose { display: none; }
+body.mode-cards section.nocard { display: none; }
+body.mode-cards section { padding-block: 44px; }
+body.mode-cards .toc li.nocard { display: none; }
+@media (max-width: 768px) { .cardband { margin-bottom: 32px; } .modebar { font-size: 12px; } }
+@media print {
+  .modebar, .lightbox, .cardlabel .zoom { display: none !important; }
+  body.mode-cards section .prose { display: block !important; }
+  body.mode-cards section.nocard { display: block !important; }
+  section { page-break-inside: auto; }
+  .cardband, .story, .explain, .thought, .stat-grid, .values, .cards, .table-scroll { page-break-inside: avoid; }
+  .frame { height: auto !important; border: none; border-radius: 0; }
+  .frame > div { transform: none !important; zoom: 0.44; }
+}
+
+</style>
+</head>
+<body>
+<div class="modebar">
+  <div class="left"><a class="homelink" href="../../">← 首頁</a><span class="brand">ReAct 2022 · 圖卡 + 教材</span></div>
+  <div class="switch" role="group" aria-label="閱讀模式">
+    <button type="button" data-mode="full" aria-pressed="true">圖卡＋詳解</button>
+    <button type="button" data-mode="cards" aria-pressed="false">只看圖卡</button>
+  </div>
+  <a class="canvaslink" href="cards.html">圖卡連續閱讀版</a>
+</div>
+<nav class="toc" aria-label="目錄">
+  <h5>目錄</h5>
+  <ol>
+    <li class="nocard"><a href="#prologue">第 4 週為什麼讀它</a></li>
+    <li><a href="#separate">只推理或只行動</a></li>
+    <li><a href="#action-space">thought 也是行動</a></li>
+    <li><a href="#thoughts">thought 做哪些事</a></li>
+    <li><a href="#wiki-api">Wikipedia 的三個動作</a></li>
+    <li><a href="#baselines">對照組與表 1</a></li>
+    <li><a href="#failures">失敗分析</a></li>
+    <li><a href="#combine">ReAct 與 CoT-SC 互換</a></li>
+    <li><a href="#finetune">微調小模型</a></li>
+    <li><a href="#decision-tasks">ALFWorld 與 WebShop</a></li>
+    <li><a href="#decision-results">決策任務的結果</a></li>
+    <li><a href="#inner-monologue">內部推理 vs 外部回饋</a></li>
+    <li class="nocard"><a href="#related">相關工作</a></li>
+    <li><a href="#takeaways">結論與代價</a></li>
+    <li class="nocard"><a href="#glossary">名詞速查</a></li>
+  </ol>
+</nav>
+<header class="hero">
+  <div class="container">
+    <div class="hero-meta">
+      <span>arXiv · 2022-10-06（v3 2023-03-10；ICLR 2023）</span>
+      <span>研究論文（Princeton、Google Research，ICLR 2023）</span>
+      <span>作者 Shunyu Yao、Jeffrey Zhao、Dian Yu、Nan Du、Izhak Shafran、Karthik Narasimhan、Yuan Cao</span>
+    </div>
+    <p class="eyebrow">REACT · SYNERGIZING REASONING AND ACTING · 圖卡＋教材整合版</p>
+    <h1>讓模型邊想邊查， 推理與行動交錯<span class="accent">ReAct：thought 決定下一步做什麼， 行動帶回的觀察再修正推理</span></h1>
+    <p class="lede">大型語言模型能一步步推理（chain-of-thought），也能產生行動去操作環境，但在這篇論文之前，兩種能力多半被分開研究：只推理的模型會編造事實，只行動的模型查得到資料卻整理不出答案。這篇論文提出 ReAct，讓模型在同一條軌跡裡交錯寫出 thought 與行動：thought 規劃下一步、消化查到的東西，行動去 Wikipedia 查資料，或在文字遊戲、購物網站裡做事，觀察回來再接著想。作者在兩個知識任務與兩個決策任務上測試：它穩定勝過只行動的做法，和只推理的 CoT 各有勝負，兩者互相當後援時最好；在決策任務上，一兩個示範就勝過用成千上萬筆資料訓練的模仿學習與強化學習。每章開頭先放一張圖解卡講重點，往下是詳細作法；想速讀就切到「只看圖卡」。</p>
+    <dl class="hero-keystat">
+      <div><dt>ALFWorld 成功率</dt><dd>71<small>% · Act 45、BUTLER 37</small></dd></div>
+      <div><dt>WebShop 成功率</dt><dd>40.0<small>% · 先前的 IL 是 29.1</small></dd></div>
+      <div><dt>CoT 失敗裡的幻覺</dt><dd>56<small>% · ReAct 是 0%</small></dd></div>
+      <div><dt>HotpotQA 最好的 prompting</dt><dd>35.1<small>EM · ReAct → CoT-SC</small></dd></div>
+    </dl>
+  </div>
+</header>
+
+
+<section id="prologue" data-toc="第 4 週為什麼讀它" class="nocard">
+  <div class="container">
+    <p class="chapter">Prologue · 整理者的引言</p>
+    <h2>課堂上的 ReAct 模式，就是這篇論文的 thought、行動、觀察迴圈</h2>
+    <p class="lede">Stanford CS 329Z 第 4 週「Agent Design Patterns &amp; Scaffolds」那一講，談 workflows 與 agents 怎麼分、五種可以組合的 workflow、ReAct 與 plan-and-execute、reflection 這些 agent 模式，以及 scaffold 為什麼是一個設計決策。這篇 2022 年的論文是 ReAct 模式的出處，排在這一講的必讀。</p>
+
+    <p>做 agent 的人說「用 ReAct」，指的通常是一種迴圈：模型先寫一段想法，再決定呼叫哪個工具，工具的回傳接回 prompt，模型接著想下一步，直到給出答案。這個迴圈的原型就是這篇論文。論文裡的行動就是 prompt 文字裡的一行，例如 <code>Search[Apple Remote]</code>；作者用的是一個凍結的 PaLM-540B，加上幾條人寫的示範軌跡，想法、行動、環境的回傳都寫在同一段文字裡，一行一行標成 Thought、Act、Obs，由 prompt 教模型照樣寫下去。</p>
+    <p>放回這一講的分類，下面是整理者的讀法。依常見的分法，workflow 是由程式事先排好每一步的流程，agent 則讓模型依每一步看到的東西，自己決定下一個動作。ReAct 屬於後者：模型每一步都自己決定要查什麼、做什麼，論文在 ALFWorld 的實驗甚至讓模型自己決定什麼時候該停下來想。這一頁會一路標出論文裡哪些選擇其實是 scaffold 的設計決策：thought 寫得多密、示範怎麼寫、工具做得多強、答不出來時退回哪個方法。</p>
+    <p>第一作者 Shunyu Yao 當時在 Princeton，這項工作是他在 Google 實習期間做的；作者群來自 Princeton 電腦科學系與 Google Research 的 Brain 團隊。論文 2022 年 10 月貼上 arXiv，2023 年 3 月的 v3 是 ICLR 2023 的定稿版本，這一頁的數字都依 v3。實驗用的是 PaLM-540B 與 GPT-3（text-davinci-002）這些 2022 年的模型，數字只對它們成立；這一頁更在意迴圈怎麼設計，以及每一種設計各自失敗在哪裡。</p>
+    <p>讀論文和讀部落格文章不同，這一頁的處理方式也要先說清楚。章節跟著論文的論證走，不跟著節號走：第 1 到 3 章是問題與方法（論文第 1、2 節），第 4 到 8 章是知識任務（第 3 節），第 9 到 11 章是決策任務（第 4 節），第 12 章是相關工作，第 13 章是結論與代價。有幾處合併：切換策略與微調，各自把「方法」和「結果」併成一章；附錄 A.2（過時的標籤）併進失敗分析，附錄 A.3（人工編輯 thought）併進第 11 章，附錄 A.1（改用 GPT-3）併進決策任務的結果。數字只用正文與表 1 到表 5；圖 2、圖 3 的點與長條沒有標數字，這裡只轉述原文的趨勢，不替它們補數字。整理者算的差距會標出來。軌跡與 prompt 的例子都是教學用的精簡版，動作名稱照原文，想法的文字是整理者改寫的中文。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>論文的用語（2022）</th><th>今天常見的說法（整理者加的對照）</th><th>這一頁怎麼寫</th></tr></thead>
+        <tbody>
+          <tr><td>thought、reasoning trace</td><td>模型的「思考」、推理步驟、scratchpad</td><td>寫 thought 或「推理」</td></tr>
+          <tr><td>action</td><td>tool call、函式呼叫</td><td>寫「行動」，動作名照原文，例如 <code>search[…]</code></td></tr>
+          <tr><td>observation</td><td>tool result、工具的回傳</td><td>寫「觀察」</td></tr>
+          <tr><td>trajectory</td><td>agent 的執行軌跡、trace</td><td>寫「軌跡」</td></tr>
+          <tr><td>Act（acting-only）</td><td>只呼叫工具、不寫推理的 agent</td><td>保留 Act</td></tr>
+          <tr><td>in-context examples</td><td>few-shot 示範</td><td>寫「示範」</td></tr>
+          <tr><td>environment</td><td>工具、外部系統</td><td>寫「環境」</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>先把幾個名詞對齊</h4>
+      <ul>
+        <li><strong>chain-of-thought（CoT）</strong>：在 prompt 裡示範「先寫推理步驟、再寫答案」，讓模型照著一步步推理。</li>
+        <li><strong>few-shot prompting</strong>：不改模型的權重，只在 prompt 裡放幾個完整的示範，讓模型照樣做。</li>
+        <li><strong>代理（agent）與環境</strong>：代理每一步看到環境給的觀察，選一個行動；環境執行行動，再給下一個觀察。</li>
+        <li><strong>多跳問答（multi-hop QA）</strong>：答案要串起兩份以上的資料才找得到，例如先查出 A 是誰，再查 A 的某個屬性。</li>
+        <li><strong>幻覺（hallucination）</strong>：模型寫出聽起來合理、但和事實不符的內容。</li>
+      </ul>
+    </div>
+
+    <div class="pullquote">
+      想法決定下一步做什麼，做完看到的東西再改寫想法；ReAct 把這兩件事寫在同一條軌跡裡。
+      <cite>整理者的引言</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="separate" data-toc="只推理或只行動">
+  <div class="container head">
+    <p class="chapter">Chapter 01 · Introduction</p>
+    <h2>只推理會編造事實，只行動收不了尾</h2>
+    <p class="lede">同一題 HotpotQA，直接作答的 Standard 與只寫推理的 CoT 都答錯，只做搜尋的 Act 查到了該查的頁面，最後卻答不出來；把推理和行動交錯的 ReAct 才答對。</p>
+    
+  </div>
+  <div class="cardband" id="card-02"><div class="cardlabel"><span class="n">圖卡 02 / 13</span><span class="t">只推理會編造，只行動收不了尾</span><button type="button" class="zoom" data-card="02">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">只推理會編造事實，只行動收不了尾</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 1 (1)：同一題 HotpotQA，四種 prompting。縱軸是有沒有先寫推理，橫軸是有沒有對外行動 —— 只有兩件事都做的 ReAct 答對</div>
+
+  <div style="position:absolute; left:60px; top:160px; font-size:13px; font-weight:700; color:#6B7380;">先寫推理</div>
+  <div style="position:absolute; left:60px; top:520px; font-size:13px; font-weight:700; color:#6B7380;">不寫推理</div>
+  <div style="position:absolute; left:180px; top:578px; font-size:13px; font-weight:700; color:#6B7380;">不對外行動：只靠模型自己記得的</div>
+  <div style="position:absolute; left:596px; top:578px; font-size:13px; font-weight:700; color:#6B7380;">對外行動：呼叫 Wikipedia API</div>
+  <div style="position:absolute; left:180px; top:606px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.1em; color:#8A93A0;">Y = 有沒有先寫推理 &#183; X = 有沒有對外行動 &#183; 分法照圖 1</div>
+
+  <div style="position:absolute; left:180px; top:164px; width:400px; height:186px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:10px; padding:18px 22px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">寫推理 &#215; 不行動 &#183; (1b)</div>
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">CoT（只推理）</div>
+    <div style="font-size:14px; color:#2B3340; line-height:1.5;">先推「Apple Remote 原本搭配 Apple TV」，再推出 iPhone、iPad、iPod Touch；第一步的事實就編錯了。</div>
+    <div style="margin-top:auto; align-self:flex-start; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">答錯 ✗</div>
+  </div>
+  <div style="position:absolute; left:596px; top:164px; width:400px; height:186px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:18px 22px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">寫推理 &#215; 行動 &#183; (1d)</div>
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">ReAct（推理＋行動）</div>
+    <div style="font-size:14px; color:#2B3340; line-height:1.5;">查出它原本搭配 Front Row；條目不存在就改查 Front Row (software)，讀出它也能用鍵盤功能鍵控制。</div>
+    <div style="margin-top:auto; align-self:flex-start; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">答對 ✓ keyboard function keys</div>
+  </div>
+  <div style="position:absolute; left:180px; top:362px; width:400px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:10px; padding:18px 22px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">不寫推理 &#215; 不行動 &#183; (1a)</div>
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">Standard</div>
+    <div style="font-size:14px; color:#2B3340; line-height:1.5;">示範裡只有問題與答案，模型沒有推理、也沒有查證，直接吐出一個裝置名。</div>
+    <div style="margin-top:auto; align-self:flex-start; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">答 iPod ✗</div>
+  </div>
+  <div style="position:absolute; left:596px; top:362px; width:400px; height:186px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:10px; padding:18px 22px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">不寫推理 &#215; 行動 &#183; (1c)</div>
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">Act（只行動）</div>
+    <div style="font-size:14px; color:#2B3340; line-height:1.5;">依序搜尋 Apple Remote、Front Row、Front Row (software)，該查的頁面都查到了。</div>
+    <div style="margin-top:auto; align-self:flex-start; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">最後送出 finish[yes] ✗</div>
+  </div>
+
+  <div style="position:absolute; left:1080px; top:164px; width:460px; height:384px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:16px;">
+    <div style="font-size:18px; font-weight:700; color:#1C2431;">怎麼讀這張圖</div>
+    <div style="display:flex; gap:14px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F; margin-top:2px;">01</div><div style="font-size:15px; color:#2B3340; line-height:1.6;">上排會先寫推理，下排直接輸出答案或行動。</div></div>
+    <div style="display:flex; gap:14px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F; margin-top:2px;">02</div><div style="font-size:15px; color:#2B3340; line-height:1.6;">右欄會呼叫 Wikipedia API，左欄只靠模型自己記得的東西。</div></div>
+    <div style="display:flex; gap:14px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F; margin-top:2px;">03</div><div style="font-size:15px; color:#2B3340; line-height:1.6;">只有右上角兩件事都做，而且交錯做：推理決定查什麼，查到的再修正推理。</div></div>
+    <div style="display:flex; gap:14px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F; margin-top:2px;">04</div><div style="font-size:15px; color:#2B3340; line-height:1.6;">另外三格的示範，都是把 ReAct 的軌跡刪掉一部分做出來的（第 6 卡）。</div></div>
+    <div style="margin-top:auto; font-size:13px; color:#8A93A0; line-height:1.6;">題目：除了 Apple Remote，還有什麼裝置能控制它原本設計要搭配的那個程式？</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:640px; width:470px; height:180px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">只推理：靜態的黑盒子</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">CoT 只用模型內部的表示推理，沒有接地到外界；一個事實編錯，後面每一步都跟著錯。</div>
+    <div style="font-size:13px; color:#8A93A0;">第 1 節：事實幻覺與錯誤傳播。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:640px; width:470px; height:180px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">只行動：查得到，收不了尾</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">Act 搜到了 Front Row (software) 那一頁，卻沒有推理把線索接起來，最後送出 finish[yes]。</div>
+    <div style="font-size:13px; color:#8A93A0;">先前的行動型方法不對高層目標推理，也沒有工作記憶。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:640px; width:470px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">交錯：為行動而推理，為推理而行動</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">推理建立、維護、調整行動計畫；行動去 Wikipedia 取回資訊，再接回推理。</div>
+    <div style="font-size:13px; color:#8A93A0;">人做菜也是這樣：發現沒有鹽，就改用醬油和胡椒。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：四格的軸是圖 1 自己的分法（Reason Only、Act-only、Reason + Act）；例子是模型產生的軌跡，圖 1 省略了 prompt 裡的示範。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M150 560V160" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M160 566H1012" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>論文從人怎麼做事講起。人在兩個動作之間常常會用語言想一下：菜切好了，提醒自己該燒水；發現沒有鹽，改用醬油和胡椒；不會揉麵糰，想到該上網查一下。反過來，人也會為了想清楚而去做點什麼：翻開食譜、打開冰箱看看有什麼材料，好回答「現在能煮什麼」。作者引用 Vygotsky、Luria、Baddeley 等人的研究說，這種「內在語言」被認為能幫人自我調節、擬定策略，並維持工作記憶。行動與推理緊密配合，讓人能快速學會新的工作，在沒見過的情況或資訊不確定時，仍然能穩健地做決定與推理。</p>
+    <p>語言模型這邊，兩種能力當時各有一條研究線。一條是 chain-of-thought：適當 prompt 過的大模型能寫出好幾步推理，在算術、常識、符號推理題上從問題推出答案。作者對這條線的評語是：</p>
+
+    <div class="quote-en">
+      "this “chain-of-thought” reasoning is a static black box"
+      <span class="zh">「這種 chain-of-thought 推理是一個靜態的黑盒子」：第 1 節對只推理做法的評語。</span>
+    </div>
+
+    <p>靜態的意思是，模型只用自己內部的表示產生想法，沒有接地到外部世界，所以沒辦法邊看邊反應，也沒辦法更新自己的知識。後果是事實幻覺，以及錯誤沿著推理過程一路傳下去。另一條研究線讓預訓練語言模型在互動環境裡規劃與行動，例如 SayCan 與 WebGPT：把觀察轉成文字，用語言模型產生領域專用的行動或計畫，再交給控制器挑選或執行。這些做法不讓語言模型對高層目標做抽象推理，也不維持支援行動的工作記憶；唯一的例外是 Inner Monologue，它做了有限的語言推理，用來複述目前環境狀態的空間事實。作者說，在這些只需要操作幾塊積木的簡單具身任務之外，還沒有研究問過：推理與行動能不能為了一般的解題工作互相配合，合起來又會不會比單獨做任何一樣都好。</p>
+    <p>圖 1 用一個 HotpotQA 的題目把問題攤開：除了 Apple Remote 之外，還有什麼裝置能控制 Apple Remote 原本設計要搭配的那個程式？四種 prompting 的答法如下。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>圖 1 (1) · 做法</th><th>寫推理</th><th>查 Wikipedia</th><th>模型怎麼答</th><th>結果</th></tr></thead>
+        <tbody>
+          <tr><td>(a) Standard</td><td>否</td><td>否</td><td>直接答 iPod</td><td>錯</td></tr>
+          <tr><td>(b) CoT（只推理）</td><td>是</td><td>否</td><td>先推「Apple Remote 原本搭配 Apple TV」，再推「Apple TV 可以用 iPhone、iPad、iPod Touch 控制」；前提就錯了</td><td>錯</td></tr>
+          <tr><td>(c) Act（只行動）</td><td>否</td><td>是</td><td>依序搜尋 Apple Remote、Front Row、Front Row (software)，最後送出 <code>finish[yes]</code></td><td>錯</td></tr>
+          <tr><td>(d) ReAct</td><td>是</td><td>是</td><td>讀出它原本搭配 Front Row 媒體中心程式；查不到 Front Row 就改查 Front Row (software)，讀到它也能用鍵盤功能鍵控制</td><td>對</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>ReAct 的做法就在最後一列：讓模型交錯地產生推理軌跡與任務行動。作者把這種配合拆成兩個方向：為行動而推理（reason to act），用推理建立、維護、調整高層的行動計畫；為推理而行動（act to reason），用行動和外部環境（例如 Wikipedia）互動，把新的資訊帶回推理。他們在四個基準上評估：HotpotQA 問答、FEVER 事實查核、ALFWorld 文字遊戲、WebShop 網頁購物。引言預告的結果是：知識任務上，ReAct 勝過只產生行動的模型，和 CoT 不相上下，整體最好的是 ReAct 與 CoT 的組合；決策任務上，只用一兩個示範的 ReAct，就勝過用 10³ 到 10⁵ 個任務實例訓練的模仿學習或強化學習方法，成功率的絕對提升分別是 34% 與 10%。</p>
+    <p>作者列的貢獻有四項：提出 ReAct 這個以 prompt 為基礎的範式；在多個基準上和只推理或只行動的方法比較；用消融實驗分析行動對推理任務、推理對互動任務的重要性；分析 ReAct 在 prompting 設定下的限制，並做初步的微調實驗。另外有一個貫穿全篇的主張：推理寫在軌跡裡，人就能分辨哪些資訊來自模型內部、哪些來自外部環境，也能讀推理軌跡，了解模型為什麼採取某個行動。</p>
+  </div>
+</section>
+
+
+<section id="action-space" data-toc="thought 也是行動">
+  <div class="container head">
+    <p class="chapter">Chapter 02 · ReAct: Synergizing Reasoning + Acting</p>
+    <h2>ReAct 把想法也算成一種行動，只是它不碰環境</h2>
+    <p class="lede">代理每一步依目前的 context 選一個行動。ReAct 在原本的行動之外加上整個語言空間：寫一句 thought 不會改變環境，也拿不到觀察，只會把整理過的資訊接到 context 後面，讓下一個行動比較好選。</p>
+    
+  </div>
+  <div class="cardband" id="card-03"><div class="cardlabel"><span class="n">圖卡 03 / 13</span><span class="t">thought 也是一種行動</span><button type="button" class="zoom" data-card="03">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">thought 也是一種行動，只是不送進環境</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2 節：代理在時間 t 收到觀察、依 context 選行動。ReAct 把行動空間擴充成「原本的行動 ∪ 語言」，落在語言的那一種就是 thought</div>
+
+  <div style="position:absolute; left:60px; top:180px; width:220px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:700; color:#1C2431;">問題或任務</div>
+  <div style="position:absolute; left:60px; top:290px; width:220px; height:76px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:17px; font-weight:700; color:#FFFFFF;">凍結的 LLM</div><div style="margin-top:4px; font-size:12.5px; color:rgba(255,255,255,0.75);">PaLM-540B＋1 到 6 條示範</div></div></div>
+  <div style="position:absolute; left:60px; top:430px; width:220px; height:60px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#2E7B4F;">thought</div><div style="margin-top:2px; font-size:12.5px; color:#6B7380;">寫給自己看的一句話</div></div></div>
+  <div style="position:absolute; left:84px; top:388px; width:40px; text-align:right; font-size:12px; font-weight:700; color:#2E7B4F;">寫出</div>
+  <div style="position:absolute; left:218px; top:388px; font-size:12px; font-weight:700; color:#2E7B4F;">接回</div>
+  <div style="position:absolute; left:60px; top:502px; width:220px; font-size:13px; color:#8A93A0; line-height:1.55; text-align:center;">不送進環境、沒有觀察，<br>只接回 context</div>
+
+  <div style="position:absolute; left:470px; top:196px; font-size:13px; font-weight:700; color:#2B3340;">行動：search、lookup、go to、click…</div>
+  <div style="position:absolute; left:470px; top:486px; font-size:13px; font-weight:700; color:#2B3340;">觀察：環境回傳的一段文字</div>
+
+  <div style="position:absolute; left:840px; top:150px; width:700px; height:400px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #D5DAE1; border-radius:14px;"></div>
+  <div style="position:absolute; left:870px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">環境（論文用了三種）</div>
+  <div style="position:absolute; left:870px; top:214px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">HOTPOTQA &#183; FEVER：WIKIPEDIA API</div>
+  <div style="position:absolute; left:870px; top:236px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">search[entity]</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">lookup[string]</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">finish[answer]</div>
+  </div>
+  <div style="position:absolute; left:870px; top:296px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">ALFWORLD：文字版家務遊戲</div>
+  <div style="position:absolute; left:870px; top:318px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">go to cabinet 1</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">take … from …</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">clean … with …</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">put … in/on …</div>
+  </div>
+  <div style="position:absolute; left:870px; top:378px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">WEBSHOP：購物網站</div>
+  <div style="position:absolute; left:870px; top:400px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">search[查詢字]</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">click[商品]</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">click[選項]</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">click[Buy Now]</div>
+  </div>
+  <div style="position:absolute; left:870px; top:460px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">決策任務裡，THOUGHT 也寫成一個動作</div>
+  <div style="position:absolute; left:870px; top:482px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1.5px solid #B4D5C0; border-radius:999px; font-size:15px; color:#2E7B4F; background-color:#EEF6F0;">think: 先找胡椒罐，可能在櫃子或流理台</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">環境只回 OK</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; width:1480px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">context：問題＋到目前為止的每一個 thought、行動、觀察，一步接一步排下去；下一步由模型讀完整段 context 決定</div>
+
+  <div style="position:absolute; left:60px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#C8501F;">Act 得從 context 直接猜</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">對應很隱晦時，模型收不了尾（圖 1 的 1c），或一再做不可能的動作（2a）。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">例：水槽上根本沒有胡椒罐，它還是一直去拿。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#2E7B4F;">thought 先把 context 整理好</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">拆目標、抽重點、記進度、處理例外；它不改變環境，只把這一句接到 context 後面。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">下一個行動因此比較好選。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">語言空間無限大，要靠大模型</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">在「行動＋語言」裡學策略需要很強的語言先驗，所以用凍結的 PaLM-540B 加幾條示範。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">附錄 A.1：換成 GPT-3，效果更好。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：o_t、a_t、c_t 與「行動空間 ∪ 語言」照第 2 節；環境面板裡的動作是整理者從第 3、4 節與附錄 C 挑的例子。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+      <marker id="ad-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+    </defs>
+    <path d="M170 238L170 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M130 368L130 428" stroke="#2E7B4F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#an-c03)"></path>
+    <path d="M210 428L210 368" stroke="#2E7B4F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#an-c03)"></path>
+    <path d="M280 310C520 310 620 226 836 226" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c03)"></path>
+    <path d="M838 470C620 470 520 346 284 346" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c03)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 2 節先把問題寫成一般的代理設定。在時間 t，代理從環境收到一個觀察，依照某個策略選一個行動；策略看的是到目前為止的 context，也就是觀察、行動、觀察、行動一路排下來的紀錄。作者指出，當「從 context 到下一個行動」的對應很隱晦、需要大量計算時，這個策略很難學。圖 1 有兩個例子：(1c) 的 Act 查到了該查的頁面，卻產生不出正確的最後一步，因為那需要對整段軌跡做複雜的推理；(2a) 在 ALFWorld 裡的 Act 看不出水槽 1 上根本沒有胡椒罐，於是一再送出不可能成功的「拿起胡椒罐」。</p>
+    <p>ReAct 的想法很簡單：把代理的行動空間擴大成「原本的行動」加上「語言」。落在語言空間的行動，作者稱為 thought 或推理軌跡（reasoning trace）。它不影響外部環境，所以沒有觀察回來；它的作用是對目前的 context 做推理、把有用的資訊組合起來，再接到 context 後面，支援之後的推理或行動。下面用虛擬碼把這個迴圈寫出來：</p>
+
+    <div class="codeblock">
+      <span class="file">ReAct 迴圈 · 教學用虛擬碼（整理者寫的，不是論文的程式）</span>
+<pre class="code">context = 示範軌跡 + 問題                  <span class="c"># 示範是人寫的完整軌跡</span>
+for step in range(max_steps):
+    text = llm(context)                   <span class="c"># 模型自己決定這一步寫什麼</span>
+    if is_thought(text):
+        context += text                   <span class="c"># thought：不送進環境，沒有觀察</span>
+    elif is_finish(text):
+        return answer_of(text)            <span class="c"># finish[答案] 結束這一題</span>
+    else:
+        obs = env.step(text)              <span class="c"># search[...]、go to ...、click[...]</span>
+        context += text + obs             <span class="c"># 觀察接回 context</span></pre>
+    </div>
+
+    <p>作者也說明這個設計的難處：語言空間是無限的，在擴大後的行動空間裡學習很困難，需要很強的語言先驗。所以論文主要的設定是凍結的大型語言模型 PaLM-540B：不更新權重，只靠 prompt 裡幾個示範，讓它同時產生領域專用的行動和自由形式的 thought。每個示範都是一條人寫的解題軌跡，裡面有行動、thought 與環境的觀察（附錄 C 列了全部的 prompt）。註腳補充，附錄 A.1 用 GPT-3 跑的結果比 PaLM-540B 還好，第 10 章會看到數字。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>context、策略與行動空間</h4>
+      <p>策略是「從 context 挑下一個行動」的規則；在 ReAct 裡，策略就是被 prompt 過的語言模型本身。行動空間是所有可以選的行動：Wikipedia API 的三個動作、ALFWorld 的「去哪裡、拿什麼」、WebShop 的搜尋與點按鈕。ReAct 沒有改環境，也沒有新增工具；它改的是模型每一步可以寫的東西，多了一種只寫給自己看的行動。</p>
+    </div>
+
+    <div class="pullquote">
+      thought 不改變世界，只改變模型接下來看到的 context。
+      <cite>整理自第 2 節</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="thoughts" data-toc="thought 做哪些事">
+  <div class="container head">
+    <p class="chapter">Chapter 03 · ReAct: Synergizing Reasoning + Acting · ReAct Prompting</p>
+    <h2>thought 負責拆解目標、抽出重點、處理例外</h2>
+    <p class="lede">第 2 節對著圖 1 的軌跡列出幾種有用的 thought：拆目標與訂計畫、帶入常識、從觀察抽重點、追蹤進度、處理例外。知識任務每一步都寫 thought，決策任務只在關鍵處寫，何時寫由模型自己決定。</p>
+    
+  </div>
+  <div class="cardband" id="card-04"><div class="cardlabel"><span class="n">圖卡 04 / 13</span><span class="t">一條軌跡裡的四個 thought</span><button type="button" class="zoom" data-card="04">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">thought 拆目標、抽重點、處理例外、收尾</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 1 (1d) 的 ReAct 軌跡攤開成四步。第 2 節列 thought 的種類時，引用的就是這幾步；知識任務每一步都寫 thought</div>
+
+  <div style="position:absolute; left:60px; top:138px; width:1480px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:16px; padding:0px 20px;">
+    <div style="flex-shrink:0; padding:4px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">問題</div>
+    <div style="font-size:15px; color:#2B3340;">除了 Apple Remote，還有什麼裝置能控制 Apple Remote 原本設計要搭配的那個程式？</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:206px; width:352px; height:210px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:10px; padding:16px 18px; display:flex; flex-direction:column; gap:6px;">
+    <div style="display:flex; align-items:center; gap:10px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; letter-spacing:0.08em; color:#8A93A0;">THOUGHT 1</div><div style="padding:2px 9px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">拆解目標、訂計畫</div></div>
+    <div style="font-size:14.5px; color:#1C2431; line-height:1.55;">要先查 Apple Remote，找出它原本設計要搭配的是哪個程式。</div>
+    <div style="margin-top:4px; padding-top:8px; border-top:1px solid #E5E9EE; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#1F2A3A;">Act 1　search[Apple Remote]</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">Obs 1：Apple 的遙控器，原本設計用來控制 Front Row 媒體中心程式…</div>
+  </div>
+  <div style="position:absolute; left:432px; top:206px; width:352px; height:210px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:10px; padding:16px 18px; display:flex; flex-direction:column; gap:6px;">
+    <div style="display:flex; align-items:center; gap:10px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; letter-spacing:0.08em; color:#8A93A0;">THOUGHT 2</div><div style="padding:2px 9px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">從觀察抽重點</div></div>
+    <div style="font-size:14.5px; color:#1C2431; line-height:1.55;">它原本搭配 Front Row 媒體中心程式；下一步查 Front Row，看還有什麼能控制它。</div>
+    <div style="margin-top:4px; padding-top:8px; border-top:1px solid #E5E9EE; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#1F2A3A;">Act 2　search[Front Row]</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">Obs 2：找不到這個條目；相似的有 Front Row (software) 等幾個。</div>
+  </div>
+  <div style="position:absolute; left:804px; top:206px; width:352px; height:210px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:10px; padding:16px 18px; display:flex; flex-direction:column; gap:6px;">
+    <div style="display:flex; align-items:center; gap:10px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; letter-spacing:0.08em; color:#8A93A0;">THOUGHT 3</div><div style="padding:2px 9px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">處理例外、改計畫</div></div>
+    <div style="font-size:14.5px; color:#1C2431; line-height:1.55;">Front Row 這個條目不存在，改查相似清單裡的 Front Row (software)。</div>
+    <div style="margin-top:4px; padding-top:8px; border-top:1px solid #E6B49A; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#1F2A3A;">Act 3　search[Front Row (software)]</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">Obs 3：Front Row 是一個已經停產的媒體中心軟體…</div>
+  </div>
+  <div style="position:absolute; left:1176px; top:206px; width:352px; height:210px; box-sizing:border-box; background-color:#1F2A3A; border:1.5px solid #1F2A3A; border-radius:10px; padding:16px 18px; display:flex; flex-direction:column; gap:6px;">
+    <div style="display:flex; align-items:center; gap:10px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; letter-spacing:0.08em; color:rgba(255,255,255,0.6);">THOUGHT 4</div><div style="padding:2px 9px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">抽重點＋綜合答案</div></div>
+    <div style="font-size:14.5px; color:#FFFFFF; line-height:1.55;">它可以用 Apple Remote 或鍵盤功能鍵控制，所以答案是鍵盤功能鍵。</div>
+    <div style="margin-top:4px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.25); font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#FFFFFF;">Act 4　finish[keyboard function keys]</div>
+    <div style="font-size:13px; color:rgba(255,255,255,0.75); line-height:1.5;">答對 ✓　同一題的 Standard、CoT、Act 都答錯（第 2 卡）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:436px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">第 2 節列的五種</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">拆解目標、訂計畫 &#183; 帶入常識 &#183; 從觀察抽重點 &#183; 追蹤進度、切換計畫 &#183; 處理例外、調整計畫；上面四步用到三種，另外兩種見第 10 卡的 ALFWorld 例子</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:510px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:526px; font-size:20px; font-weight:700; color:#1C2431;">thought 放多密，依任務而定</div>
+
+  <div style="position:absolute; left:60px; top:566px; width:470px; height:224px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">知識任務：每一步都寫</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">HotpotQA、FEVER 的示範是密集的 thought：thought、行動、觀察輪流出現，就像上面這四步；每個 thought 都替下一個行動做準備。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">示範各 6 條與 3 條，都是人寫的軌跡；作者說再多也不會更好。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:566px; width:470px; height:224px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">決策任務：模型自己決定何時寫</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">ALFWorld、WebShop 一題可能要走幾十步，thought 只需要稀疏地出現在最相關的位置；什麼時候寫，由模型自己決定。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">例：拆目標、判斷東西在哪、換子目標的時候。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:566px; width:470px; height:224px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">示範：在行動上面打出想法</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">寫示範的人在自己做過的每個行動上面，用語言寫下當時的想法；論文沒有特別挑格式、設計 thought 或挑選示範。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者列的四個特點之一：直覺、好設計。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：thought 類型的標法照第 2 節對圖 1 的引用；thought 與觀察是整理者改寫的中文精簡版，動作名稱照原文。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M416 303L428 311L416 319Z" fill="#9AA3AE"></path>
+    <path d="M788 303L800 311L788 319Z" fill="#9AA3AE"></path>
+    <path d="M1160 303L1172 311L1160 319Z" fill="#9AA3AE"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>圖 1 (1d) 的 ReAct 軌跡可以一步一步讀。第一個 thought 先把題目拆開：要先查 Apple Remote，找出它原本設計要搭配的程式。查到之後，第二個 thought 從觀察裡抽出關鍵的一句（它原本是為了控制 Front Row 媒體中心程式），並決定下一步去查 Front Row。搜尋回報找不到這個條目，只給了幾個相似的條目名；第三個 thought 處理這個例外，改查 Front Row (software)。第四個 thought 從新的觀察讀出「可以用 Apple Remote 或鍵盤功能鍵控制」，把前面的線索接起來，給出答案。第 2 節列 thought 的種類時，引用的正是這幾步：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>第 2 節列的 thought</th><th>圖 1 的出處</th><th>在例子裡做什麼</th></tr></thead>
+        <tbody>
+          <tr><td>拆解任務目標、訂行動計畫</td><td>(1d) Thought 1；(2b) Act 1</td><td>先查 Apple Remote，再找它搭配的程式</td></tr>
+          <tr><td>帶入和解題有關的常識</td><td>(2b) Act 1</td><td>胡椒罐比較可能在櫃子 1 到 6、流理台 1 到 3</td></tr>
+          <tr><td>從觀察抽出重要的部分</td><td>(1d) Thought 2、4</td><td>在一段頁面文字裡找出和題目有關的那一句</td></tr>
+          <tr><td>追蹤進度、切換計畫</td><td>(2b) Act 8</td><td>找到胡椒罐了，下一步放進抽屜 1</td></tr>
+          <tr><td>處理例外、調整計畫</td><td>(1d) Thought 3</td><td>條目不存在，改查相似的 Front Row (software)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>在 HotpotQA 與 FEVER 的 prompt 裡，作者用的 thought 分得更細：拆解問題（我要查 x、找到 y、再找 z）、從 Wikipedia 的觀察抽資訊（x 在 1844 年創立、這一段沒有提到 x）、常識推理（x 不是 y，所以 z 一定是…）、算術（1844 &lt; 1989）、引導改寫搜尋（也許可以改查 x）、綜合出最後答案（…所以答案是 x）。</p>
+    <p>thought 要放多密，作者依任務決定。推理是重點的任務（圖 1 的上半），thought 與行動交替產生，解題軌跡由好幾個「thought、行動、觀察」的步驟組成，論文稱為密集的 thought。可能要走很多步的決策任務（圖 1 的下半），thought 只需要稀疏地出現在軌跡裡最相關的位置，所以作者讓語言模型自己決定 thought 與行動何時出現。第 2 節最後列了這種做法的四個特點：</p>
+
+    <div class="values">
+      <div class="value-card"><span class="tag">A · 好設計</span><h4>在自己的行動上面寫想法</h4><p>寫示範的人只要在自己做過的每個行動上面，用語言打出當時的想法。論文沒有特別挑格式、設計 thought 或挑選示範。</p></div>
+      <div class="value-card"><span class="tag">B · 通用</span><h4>一套做法，四種任務</h4><p>thought 的內容與出現方式都很自由，所以同一套做法能用在問答、事實查核、文字遊戲、網頁操作這些行動空間與推理需求都不同的任務。</p></div>
+      <div class="value-card"><span class="tag">C · 效果好</span><h4>一到六個示範就類推</h4><p>作者說它在不同領域都穩定勝過只推理或只行動的基線，對示範的挑選也不敏感；第 5 章會看到，HotpotQA 上單獨的 ReAct 其實略輸 CoT。</p></div>
+      <div class="value-card"><span class="tag">D · 可控制</span><h4>人讀得懂，也改得動</h4><p>人能檢查推理與事實是否正確，也能在執行途中編輯 thought 來修正代理的行為（附錄 A.3，第 11 章）。</p></div>
+    </div>
+
+    <div class="thought">
+      <span class="label">思考題 · 01</span>
+      <h4>你的 agent 該用密集還是稀疏的 thought？</h4>
+      <p>想一個你手上的 agent 任務：它一次要走幾步，每一步的觀察有多長，多少步驟只是移動或點擊。</p>
+      <p class="hint">步數少、每一步都得從觀察裡找線索的任務（查資料、查核），像 HotpotQA 那樣每一步都寫；步數多、多數步驟只是移動或點擊的任務，像 ALFWorld 那樣只在拆目標、換子目標、推測東西在哪時寫，其餘交給模型自己決定。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="wiki-api" data-toc="Wikipedia 的三個動作">
+  <div class="container head">
+    <p class="chapter">Chapter 04 · Knowledge-Intensive Reasoning Tasks · Setup</p>
+    <h2>Wikipedia API 刻意做得很弱，逼模型靠推理決定查什麼</h2>
+    <p class="lede">第一組實驗是 HotpotQA 多跳問答與 FEVER 事實查核，模型只拿到問題，沒有附上相關段落。它能用的只有三個動作：search、lookup、finish，每次只拿回一個頁面裡的一小段。</p>
+    
+  </div>
+  <div class="cardband" id="card-05"><div class="cardlabel"><span class="n">圖卡 05 / 13</span><span class="t">Wikipedia API 的三個動作</span><button type="button" class="zoom" data-card="05">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">三個動作的 Wikipedia API，刻意做得很弱</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.1 節：模型只拿到問題或宣稱，沒有附上支持段落；要知道什麼，就得自己決定去查什麼，每次只拿回一小段</div>
+
+  <div style="position:absolute; left:380px; top:150px; width:380px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">search[entity]</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">條目存在：回傳頁面的前 5 句；不存在：回傳搜尋引擎找到最相似的 5 個條目名</div></div>
+  <div style="position:absolute; left:840px; top:150px; width:380px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">lookup[string]</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">在目前的頁面裡，找下一句含有這個字串的句子，就像瀏覽器的 Ctrl+F</div></div>
+
+  <div style="position:absolute; left:566px; top:262px; width:110px; text-align:right; font-size:12.5px; color:#8A93A0;">條目名</div>
+  <div style="position:absolute; left:724px; top:262px; font-size:12.5px; color:#8A93A0;">前 5 句／相似條目</div>
+  <div style="position:absolute; left:766px; top:262px; width:110px; text-align:right; font-size:12.5px; color:#8A93A0;">字串</div>
+  <div style="position:absolute; left:924px; top:262px; font-size:12.5px; color:#8A93A0;">下一句符合的句子</div>
+
+  <div style="position:absolute; left:60px; top:316px; width:200px; height:58px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">問題或宣稱</div><div style="font-size:12px; color:#6B7380;">只給問題，不附段落</div></div></div>
+  <div style="position:absolute; left:640px; top:300px; width:320px; height:90px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:20px; font-weight:700; color:#FFFFFF;">LLM＋ReAct 示範</div><div style="margin-top:4px; font-size:12.5px; color:rgba(255,255,255,0.75);">PaLM-540B；HotpotQA 6 條、<br>FEVER 3 條人寫的軌跡</div></div></div>
+  <div style="position:absolute; left:1340px; top:313px; width:200px; height:64px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">評分</div><div style="font-size:12px; color:#6B7380; line-height:1.4;">HotpotQA 看 EM<br>FEVER 看準確率</div></div></div>
+
+  <div style="position:absolute; left:666px; top:406px; width:110px; text-align:right; font-size:12.5px; color:#8A93A0;">答案</div>
+  <div style="position:absolute; left:824px; top:406px; font-size:12.5px; color:#8A93A0;">這一題結束</div>
+
+  <div style="position:absolute; left:610px; top:444px; width:380px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">finish[answer]</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">送出答案、結束這一題：HotpotQA 是一段答案文字，FEVER 是三個標籤之一</div></div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:190px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">刻意做得很弱</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">多半只能靠確切的條目名，取回一段文字的一小部分，比當時最好的字面或神經檢索器弱得多。</div>
+    <div style="font-size:13px; color:#8A93A0;">目的：模擬人怎麼用 Wikipedia，逼模型用推理決定查什麼。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">示範只要 6 條與 3 條</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">HotpotQA、FEVER 各從訓練集隨機挑 6 題與 3 題，人工寫成 ReAct 軌跡；作者說再多放示範也不會更好。</div>
+    <div style="font-size:13px; color:#8A93A0;">每一步都有 thought、行動、觀察（密集的 thought）。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">兩個資料集，都只給問題</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">HotpotQA 要串起兩段以上的 Wikipedia 段落；FEVER 的宣稱標 SUPPORTS、REFUTES 或 NOT ENOUGH INFO。</div>
+    <div style="font-size:13px; color:#8A93A0;">模型只能靠自己記得的，或查回來的。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三個動作的定義照第 3.1 節；成對箭頭與輸入、評分兩端是整理者的畫法，Wikipedia 端的實作細節原文沒有再多說。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M262 345L638 345" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M962 345L1338 345" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+    <path d="M686 298L686 248" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M714 248L714 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M886 298L886 248" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M914 248L914 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M786 392L786 442" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M814 442L814 392" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 3 節從知識密集的推理任務開始。兩個資料集都同時考驗檢索與推理：HotpotQA 的題目要串起兩段以上的 Wikipedia 段落才答得出來；FEVER 的每一條宣稱都標了 SUPPORTS、REFUTES 或 NOT ENOUGH INFO，依據是有沒有 Wikipedia 段落能查證它。作者把兩個任務都設成只給問題（question-only）：模型收到的只有問題或宣稱，拿不到支持段落，只能靠自己記得的知識，或透過和外部環境互動去取回知識。</p>
+    <p>環境是作者自己設計的一個簡單的 Wikipedia 網頁 API，只有三種動作：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>動作</th><th>回傳什麼</th><th>像人的哪個動作</th></tr></thead>
+        <tbody>
+          <tr><td><code>search[entity]</code></td><td>這個條目的頁面存在，就回傳前 5 句；不存在，就回傳 Wikipedia 搜尋引擎找到最相似的 5 個條目名</td><td>在 Wikipedia 的搜尋框打一個名字</td></tr>
+          <tr><td><code>lookup[string]</code></td><td>在目前的頁面裡，找下一句含有這個字串的句子</td><td>瀏覽器的 Ctrl+F</td></tr>
+          <tr><td><code>finish[answer]</code></td><td>用這個答案結束這一題</td><td>交卷</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>作者直說，這個動作空間多半只能靠確切的條目名稱，取回一段文字裡的一小部分，比當時最好的字面檢索器或神經檢索器弱得多。這是刻意的：目的是模擬人怎麼使用 Wikipedia，並且逼模型用語言明確地推理，決定要檢索什麼。</p>
+    <p>prompt 的做法是從 HotpotQA 與 FEVER 的訓練集各隨機挑 6 題與 3 題，人工寫成 ReAct 格式的軌跡，當作 few-shot 示範；作者在註腳說，放更多示範並不會更好。每條示範軌跡都是密集的 thought，每一步都有 thought、行動與觀察。附錄 C.1 的第一個 HotpotQA 示範大致如下，其中第 3 步的搜尋撞上消歧義頁，第 4 個 thought 就改查更精確的條目：</p>
+
+    <div class="codeblock">
+      <span class="file">HotpotQA 的 ReAct 示範 · 依附錄 C.1 精簡改寫，問題與 thought 改成中文</span>
+<pre class="code">Question:  科羅拉多造山運動的東段延伸進的地區，海拔範圍是多少？
+Thought 1: 先查 Colorado orogeny，找出東段延伸到哪裡，再查那個地區的海拔。
+Action 1:  <span class="k">Search</span>[Colorado orogeny]
+Obs 1:     <span class="c">（頁面的前幾句，沒有提到東段）</span>
+Thought 2: 沒提到東段，用 lookup 找 eastern sector。
+Action 2:  <span class="k">Lookup</span>[eastern sector]
+Obs 2:     <span class="c">（東段延伸進 High Plains）</span>
+Thought 3: 東段延伸進 High Plains，接著查它的海拔範圍。
+Action 3:  <span class="k">Search</span>[High Plains]
+Obs 3:     <span class="c">（High Plains 指兩個不同的地區）</span>
+Thought 4: <span class="a">改查 High Plains (United States)。</span>
+Action 4:  <span class="k">Search</span>[High Plains (United States)]
+Obs 4:     <span class="c">（由東往西，海拔從約 1,800 英尺升到 7,000 英尺）</span>
+  ...
+Action 5:  <span class="k">Finish</span>[1,800 to 7,000 ft]</pre>
+    </div>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>EM 與準確率</h4>
+      <p>HotpotQA 用答案的完全相符（exact match，EM）評分：預測的答案字串要和標準答案一樣才算對，所以答案對但寫法不同也會被算錯（第 6 章的「標籤不一致」）。FEVER 是三選一的分類，看準確率。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="baselines" data-toc="對照組與表 1">
+  <div class="container head">
+    <p class="chapter">Chapter 05 · Methods: Baselines · Results: ReAct Outperforms Act Consistently</p>
+    <h2>加上推理之後，ReAct 在兩個任務都勝過只行動的 Act</h2>
+    <p class="lede">三種對照組都是把 ReAct 的示範軌跡刪掉一部分做出來的。表 1 裡，ReAct 在兩題都勝過 Act；和只推理的 CoT 比，FEVER 贏、HotpotQA 略輸。</p>
+    
+  </div>
+  <div class="cardband" id="card-06"><div class="cardlabel"><span class="n">圖卡 06 / 13</span><span class="t">表 1：ReAct 勝過 Act</span><button type="button" class="zoom" data-card="06">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">ReAct 兩題都勝過 Act，和 CoT 各贏一題</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 1：PaLM-540B 的 prompting 結果。上列 HotpotQA 的 EM、下列 FEVER 的準確率；點旁只標表上的數字，兩種切換方法見第 8 卡</div>
+
+  <div style="position:absolute; left:60px; top:134px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#6B7380;"></div>Standard</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>只推理：CoT、CoT-SC</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#C8501F;"></div>只行動：Act</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>ReAct</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>兩者切換</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:230px; font-size:18px; font-weight:700; color:#1C2431;">HotpotQA</div>
+  <div style="position:absolute; left:60px; top:256px; font-size:13px; color:#8A93A0;">EM</div>
+  <div style="position:absolute; left:180px; top:180px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:218px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:256px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+
+  <div style="position:absolute; left:358px; top:247px; width:18px; height:18px; border-radius:50%; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:383px; top:246px; font-size:13px; color:#2B3340;">Act <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">25.7</span></div>
+  <div style="position:absolute; left:545px; top:247px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:570px; top:246px; font-size:13px; color:#2B3340;">ReAct <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">27.4</span></div>
+  <div style="position:absolute; left:688px; top:247px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:713px; top:246px; font-size:13px; color:#2B3340;">Standard <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">28.7</span></div>
+  <div style="position:absolute; left:765px; top:209px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:790px; top:208px; font-size:13px; color:#2B3340;">CoT <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">29.4</span></div>
+  <div style="position:absolute; left:1205px; top:247px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:1230px; top:246px; font-size:13px; color:#2B3340;">CoT-SC <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">33.4</span></div>
+  <div style="position:absolute; left:1293px; top:209px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1318px; top:208px; font-size:13px; color:#2B3340;">CoT-SC → ReAct <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">34.2</span></div>
+  <div style="position:absolute; left:1392px; top:171px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1206px; top:170px; width:180px; text-align:right; font-size:13px; color:#2B3340;">ReAct → CoT-SC <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">35.1</span></div>
+
+  <div style="position:absolute; left:180px; top:276px; width:1320px; height:36px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:285px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">24</div>
+  <div style="position:absolute; left:390px; top:285px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">26</div>
+  <div style="position:absolute; left:610px; top:285px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">28</div>
+  <div style="position:absolute; left:830px; top:285px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">30</div>
+  <div style="position:absolute; left:1050px; top:285px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">32</div>
+  <div style="position:absolute; left:1270px; top:285px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">34</div>
+  <div style="position:absolute; left:1466px; top:285px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">36</div>
+  <div style="position:absolute; left:1340px; top:316px; width:160px; text-align:right; font-size:12px; color:#8A93A0;">HotpotQA EM（%）</div>
+
+  <div style="position:absolute; left:60px; top:352px; font-size:18px; font-weight:700; color:#1C2431;">FEVER</div>
+  <div style="position:absolute; left:60px; top:378px; font-size:13px; color:#8A93A0;">準確率</div>
+  <div style="position:absolute; left:180px; top:358px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:396px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+
+  <div style="position:absolute; left:424px; top:349px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:449px; top:348px; font-size:13px; color:#2B3340;">CoT <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">56.3</span></div>
+  <div style="position:absolute; left:512px; top:387px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:537px; top:386px; font-size:13px; color:#2B3340;">Standard <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">57.1</span></div>
+  <div style="position:absolute; left:710px; top:349px; width:18px; height:18px; border-radius:50%; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:735px; top:348px; font-size:13px; color:#2B3340;">Act <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">58.9</span></div>
+  <div style="position:absolute; left:875px; top:387px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:900px; top:386px; font-size:13px; color:#2B3340;">CoT-SC <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">60.4</span></div>
+  <div style="position:absolute; left:930px; top:349px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:955px; top:348px; font-size:13px; color:#2B3340;">ReAct <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">60.9</span></div>
+  <div style="position:absolute; left:1051px; top:387px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1076px; top:386px; font-size:13px; color:#2B3340;">ReAct → CoT-SC <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">62.0</span></div>
+  <div style="position:absolute; left:1337px; top:349px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1362px; top:348px; font-size:13px; color:#2B3340;">CoT-SC → ReAct <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">64.6</span></div>
+
+  <div style="position:absolute; left:180px; top:416px; width:1320px; height:36px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:425px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">54</div>
+  <div style="position:absolute; left:390px; top:425px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">56</div>
+  <div style="position:absolute; left:610px; top:425px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">58</div>
+  <div style="position:absolute; left:830px; top:425px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">60</div>
+  <div style="position:absolute; left:1050px; top:425px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">62</div>
+  <div style="position:absolute; left:1270px; top:425px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">64</div>
+  <div style="position:absolute; left:1466px; top:425px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">66</div>
+  <div style="position:absolute; left:1340px; top:456px; width:160px; text-align:right; font-size:12px; color:#8A93A0;">FEVER 準確率（%）</div>
+
+  <div style="position:absolute; left:60px; top:486px; width:1340px; font-size:13px; color:#8A93A0; line-height:1.6;">只用表 1 的數字，兩列各用自己的量尺。CoT-SC 是用溫度 0.7 抽 21 條 CoT、取多數答案，所以兩題都比單一條 CoT 高。表下的註：Wang 等人（2022b）報告的 Standard、CoT、CoT-SC 是 27.1、28.9、33.8（HotpotQA）；監督式 SoTA 是 67.5 與 89.5，遠在兩條量尺的右邊。</div>
+
+  <div style="position:absolute; left:60px; top:560px; width:470px; height:230px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">ReAct 兩題都勝過 Act</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">HotpotQA 27.4 對 25.7，FEVER 60.9 對 58.9。兩者用同一批示範，差別只在有沒有 thought：推理引導行動，尤其是最後綜合答案的那一步。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">圖 1 的 Act 查到頁面卻答 yes；第 9 卡的微調也支持這一點。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:560px; width:470px; height:230px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">和 CoT 各贏一題</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">FEVER 60.9 對 56.3：支持與反駁的宣稱之間可能只差一點點，去查準確、最新的知識很重要。HotpotQA 27.4 對 29.4，略輸給只推理的 CoT。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">為什麼會輸，下一張卡用 200 條人工標註的軌跡回答。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:560px; width:470px; height:230px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">切換最好，但離 SoTA 還遠</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">ReAct → CoT-SC 在 HotpotQA 拿到 35.1，CoT-SC → ReAct 在 FEVER 拿到 64.6，都是各自欄位的最高分；監督式 SoTA 是 67.5 與 89.5。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">切換規則見第 8 卡；再往上，作者認為要靠人寫資料微調。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩列各用自己的量尺（HotpotQA 24 到 36、FEVER 54 到 66），同一個水平位置在兩列代表不同分數；點的顏色是整理者依做法分的類。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>為了讓比較公平，作者沒有替對照組另外寫 prompt，而是有系統地刪減同一批 ReAct 軌跡，格式就是圖 1 的 (1a) 到 (1c)：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>Standard</strong>刪掉所有的 thought、行動與觀察，示範只剩問題與答案。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>CoT 與 CoT-SC</strong>刪掉行動與觀察，只留推理，當作只推理的基線。另外做一個 self-consistency 版本 CoT-SC：推論時用溫度 0.7 抽 21 條 CoT 軌跡，取多數的答案；作者說它一向比 CoT 好。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>Act</strong>刪掉 thought，只留行動與觀察。它有點像 WebGPT 上網回答問題的方式，但 WebGPT 的任務與動作空間不同，用的也是模仿學習與強化學習，不是 prompting。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>ReAct</strong>完整保留 thought、行動與觀察。</div></div>
+    </div>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 1 · prompting 方法</th><th>HotpotQA（EM）</th><th>FEVER（準確率）</th></tr></thead>
+        <tbody>
+          <tr><td>Standard</td><td>28.7</td><td>57.1</td></tr>
+          <tr><td>CoT</td><td>29.4</td><td>56.3</td></tr>
+          <tr><td>CoT-SC</td><td>33.4</td><td>60.4</td></tr>
+          <tr><td>Act</td><td>25.7</td><td>58.9</td></tr>
+          <tr><td>ReAct</td><td>27.4</td><td>60.9</td></tr>
+          <tr><td>CoT-SC → ReAct</td><td>34.2</td><td><strong>64.6</strong></td></tr>
+          <tr><td>ReAct → CoT-SC</td><td><strong>35.1</strong></td><td>62.0</td></tr>
+          <tr><td>監督式 SoTA</td><td>67.5</td><td>89.5</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>表 1 是用 PaLM-540B 做 prompting 的結果。先看 ReAct 和 Act：兩個任務上 ReAct 都比較好（HotpotQA 27.4 對 25.7，FEVER 60.9 對 58.9）。作者說這顯示推理能引導行動，尤其是綜合出最後答案那一步，圖 1 的 (1c) 與 (1d) 就是例子；第 8 章的微調結果也支持同一件事。</p>
+    <p>再看 ReAct 和 CoT：FEVER 上 ReAct 贏（60.9 對 56.3），HotpotQA 上略輸（27.4 對 29.4）。作者對 FEVER 的解釋是，標成 SUPPORTS 與 REFUTES 的宣稱之間可能只差一點點（附錄 D.1 有例子），所以去查準確、最新的知識特別重要。至於 HotpotQA 為什麼會輸，下一章用人工標註的失敗分析回答。</p>
+    <p>表 1 還有兩處要一起讀。一是表下的註：Wang 等人（2022b）報告的 Standard、CoT、CoT-SC 的 HotpotQA EM 是 27.1、28.9、33.8，和這裡的 28.7、29.4、33.4 接近。二是最後一列的監督式 SoTA（來自 Zhu 等人 2021、Lewis 等人 2020），67.5 與 89.5 都遠高於所有 prompting 方法；第 8 章的作者會說，拿更多人寫的資料去微調，也許才是發揮 ReAct 的方法。最後兩列的組合方法在第 7 章說明。</p>
+  </div>
+</section>
+
+
+<section id="failures" data-toc="失敗分析">
+  <div class="container head">
+    <p class="chapter">Chapter 06 · ReAct vs. CoT · Appendix A.2, E.1</p>
+    <h2>CoT 的失敗多半是幻覺，ReAct 的失敗出在推理與搜尋</h2>
+    <p class="lede">作者從 HotpotQA 各抽 ReAct 與 CoT 答對、答錯的軌跡各 50 條，共 200 條，人工標出成功與失敗的類型。CoT 答錯的一半以上是幻覺；ReAct 沒有幻覺，錯誤集中在推理卡住與搜尋落空。</p>
+    
+  </div>
+  <div class="cardband" id="card-07"><div class="cardlabel"><span class="n">圖卡 07 / 13</span><span class="t">表 2：CoT 敗在幻覺</span><button type="button" class="zoom" data-card="07">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">CoT 敗在幻覺，ReAct 敗在推理與搜尋</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 2：從 HotpotQA 各抽 ReAct 與 CoT 答對、答錯的軌跡各 50 條，共 200 條，人工標出類型；每一條橫條是一組 50 條軌跡的組成</div>
+
+  <div style="position:absolute; left:60px; top:136px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF6F0; border:1px solid #B4D5C0;"></div>真陽性：推理與事實都對</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FCF1EA; border:1px solid #E6B49A;"></div>假陽性、幻覺：推理或事實是編的</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#4B5866;"></div>推理錯誤（含重複的迴圈）</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1;"></div>搜尋結果錯誤</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FFFFFF; border:1px solid #D5DAE1;"></div>標籤不一致</div>
+  </div>
+
+  <div style="position:absolute; left:180px; top:170px; font-size:13px; font-weight:700; color:#6B7380;">答對的軌跡（各 50 條）</div>
+  <div style="position:absolute; left:60px; top:204px; font-size:16px; font-weight:700; color:#1C2431;">ReAct</div>
+  <div style="position:absolute; left:180px; top:194px; width:1241px; height:42px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">真陽性 94%</div>
+  <div style="position:absolute; left:1421px; top:194px; width:79px; height:42px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">6%</div>
+  <div style="position:absolute; left:60px; top:256px; font-size:16px; font-weight:700; color:#1C2431;">CoT</div>
+  <div style="position:absolute; left:180px; top:246px; width:1135px; height:42px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">真陽性 86%</div>
+  <div style="position:absolute; left:1315px; top:246px; width:185px; height:42px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">假陽性 14%</div>
+
+  <div style="position:absolute; left:180px; top:310px; font-size:13px; font-weight:700; color:#6B7380;">答錯的軌跡（各 50 條）</div>
+  <div style="position:absolute; left:60px; top:344px; font-size:16px; font-weight:700; color:#1C2431;">ReAct</div>
+  <div style="position:absolute; left:180px; top:334px; width:620px; height:42px; box-sizing:border-box; background-color:#4B5866; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#FFFFFF;">推理錯誤 47%</div>
+  <div style="position:absolute; left:800px; top:334px; width:304px; height:42px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">搜尋結果錯誤 23%</div>
+  <div style="position:absolute; left:1104px; top:334px; width:383px; height:42px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#6B7380;">標籤不一致 29%</div>
+  <div style="position:absolute; left:60px; top:396px; font-size:16px; font-weight:700; color:#1C2431;">CoT</div>
+  <div style="position:absolute; left:180px; top:386px; width:211px; height:42px; box-sizing:border-box; background-color:#4B5866; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#FFFFFF;">推理錯誤 16%</div>
+  <div style="position:absolute; left:391px; top:386px; width:739px; height:42px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">幻覺 56%</div>
+  <div style="position:absolute; left:1130px; top:386px; width:370px; height:42px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#6B7380;">標籤不一致 28%</div>
+  <div style="position:absolute; left:180px; top:440px; font-size:13px; color:#8A93A0;">ReAct 沒有幻覺段（0%）；搜尋結果錯誤只有 ReAct 有，CoT 不搜尋。ReAct 那一列加總 99%，照原表，右端留白。</div>
+
+  <div style="position:absolute; left:60px; top:476px; width:1480px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F; letter-spacing:0.08em;">ReAct 特有的錯</div>
+    <div style="font-size:15px; color:#2B3340;">一再重複前一步的 thought 與行動、跳不出迴圈，算在推理錯誤裡；作者懷疑和貪婪解碼有關，換成 beam search 這類解碼也許有幫助</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:560px; width:470px; height:204px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">CoT：幻覺是主要病因</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">答錯的軌跡裡 56% 是幻覺；答對的也有 14% 是靠編出來的推理或事實湊中，ReAct 是 6%。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">沒有外部知識可以核對，編錯的事實會一路傳下去；ReAct 能查知識庫，這一類是 0%。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:560px; width:470px; height:204px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#4B5866;">ReAct：結構換來推理錯誤</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">交錯的格式讓它有依據、比較可信，但組織推理步驟比較沒有彈性：推理錯誤 47%，CoT 只有 16%。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">推理錯誤含一再重複的迴圈；作者稱為事實性與彈性的取捨。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:560px; width:470px; height:204px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">搜尋落空，推理就被帶偏</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">沒有資訊量的搜尋佔錯誤的 23%：回傳空的或沒用的內容，模型很難回頭、重新組織想法；所以下一步是和 CoT-SC 結合。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">兩邊各有近三成其實是標籤不一致（29%、28%）；附錄 A.2 還找到已經過時的標籤。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：百分比是人工標註的樣本比例（每組 50 條），不是整個資料集的比例；類別與定義照表 2，顏色是整理者依語意配的。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>為了弄清楚 ReAct 和 CoT 在 HotpotQA 上的行為差在哪，作者用 EM 判定對錯，從兩個方法各隨機抽 50 條答對與 50 條答錯的軌跡，人工標出成功與失敗的模式（表 2）。成功分兩種：真陽性是推理軌跡與事實都正確；假陽性是答案對了，但推理或事實是編出來的。失敗分四種：推理錯誤（推理軌跡錯了，包括陷在重複的步驟裡出不來）、搜尋結果錯誤（搜尋回傳空的，或沒有有用的資訊）、幻覺（推理或事實是編的），以及標籤不一致（預測其實對，只是和標準答案的字面不完全相符）。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 2 · 類型</th><th>定義</th><th>ReAct</th><th>CoT</th></tr></thead>
+        <tbody>
+          <tr><td>成功 · 真陽性</td><td>推理軌跡與事實都正確</td><td>94%</td><td>86%</td></tr>
+          <tr><td>成功 · 假陽性</td><td>推理軌跡或事實是編的</td><td>6%</td><td>14%</td></tr>
+          <tr><td>失敗 · 推理錯誤</td><td>推理錯了，包括陷在重複的步驟出不來</td><td>47%</td><td>16%</td></tr>
+          <tr><td>失敗 · 搜尋結果錯誤</td><td>搜尋回傳空的，或沒有有用的資訊</td><td>23%</td><td>–</td></tr>
+          <tr><td>失敗 · 幻覺</td><td>推理軌跡或事實是編的</td><td>0%</td><td>56%</td></tr>
+          <tr><td>失敗 · 標籤不一致</td><td>預測對了，但和標籤的字面不完全相符</td><td>29%</td><td>28%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>作者從表 2 讀出三個觀察。第一，幻覺是 CoT 的嚴重問題：在成功的軌跡裡，CoT 的假陽性比 ReAct 高得多（14% 對 6%）；在失敗的軌跡裡，幻覺佔了 CoT 的 56%，是它最主要的失敗原因。ReAct 能取用外部知識庫，解題軌跡比較有依據、以事實為本，也比較可信。</p>
+    <p>第二，交錯的結構有兩面。推理、行動、觀察輪流出現，讓 ReAct 比較有依據、比較可信；同一個結構限制也讓它組織推理步驟時比較沒有彈性，推理錯誤率因此比 CoT 高（47% 對 16%）。其中有一種 ReAct 特有的常見錯誤：模型一再重複前面的 thought 與行動，因為它推不出下一步該做什麼、跳不出這個迴圈，作者把它算在推理錯誤裡。作者在註腳猜測，這可能和次佳的貪婪解碼有關，未來改用更好的解碼方式（例如 beam search）也許能緩解。</p>
+    <p>第三，對 ReAct 來說，透過搜尋取回有用的知識是關鍵。沒有資訊量的搜尋佔了錯誤的 23%：它會把模型的推理帶偏，讓模型很難回頭、重新組織想法。作者把這看成事實性與彈性之間可以預期的取捨，也是下一章要把兩種方法結合起來的動機。</p>
+
+    <div class="story">
+      <div class="label">關鍵觀念 · 一</div>
+      <h4>答對不等於做對</h4>
+      <p>表 2 的假陽性是一個容易被略過的類別：答案對了，推理卻是編的或錯的。附錄 E.1 有一個 CoT 的例子：模型寫出兩所大學各自的創立年份，比較時卻推出錯誤的先後，最後給的答案又和自己的推理對不上，偏偏這個答案是對的。只看最後答案的 EM，這種軌跡會被算成成功。</p>
+      <p>整理者的讀法：這正是論文主張的可解釋性派得上用場的地方。ReAct 的軌跡把「模型說它知道什麼」和「它查到什麼」分開寫，人工檢查時才分得出真陽性與假陽性；只推理的 CoT 把兩者混在同一段文字裡。</p>
+    </div>
+
+    <p>兩個方法都有接近三成的失敗其實是標籤不一致（29% 與 28%）：預測是對的，只是字面和標準答案不同。附錄 A.2 還有一種更極端的情況：資料集的標籤本身已經過時。圖 4 的題目問某間飯店有幾個房間，而房間數在 HotpotQA 建立之後增加了。Standard 與 CoT 因為幻覺答錯；Act 雖然能上網，卻因為缺少推理、不知道怎麼互動，沒有給出答案；只有 ReAct 查到最新的資訊，給出合理的答案。作者由此推測，把推理能力整合得更好，可能對當時新出現的一批能上網的語言模型有幫助。</p>
+  </div>
+</section>
+
+
+<section id="combine" data-toc="ReAct 與 CoT-SC 互換">
+  <div class="container head">
+    <p class="chapter">Chapter 07 · Combining Internal and External Knowledge · ReAct + CoT-SC Perform Best</p>
+    <h2>讓 ReAct 與 CoT-SC 互相當後援，兩題的最好成績都來自組合</h2>
+    <p class="lede">ReAct 有依據但彈性小，CoT 推理結構好卻會編。作者用兩條簡單的規則讓模型在兩者之間切換：ReAct 答不出來就退回 CoT-SC，CoT-SC 沒把握就改用 ReAct。</p>
+    
+  </div>
+  <div class="cardband" id="card-08"><div class="cardlabel"><span class="n">圖卡 08 / 13</span><span class="t">ReAct 與 CoT-SC 互當後援</span><button type="button" class="zoom" data-card="08">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">兩種後援方向：查不到就想，想不定就查</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.2 節：ReAct 有依據但彈性小，CoT 推理結構好卻會編。作者用兩條啟發式規則讓模型在兩者之間切換，兩題最好的成績都來自組合</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">REACT → COT-SC</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">先查；查不出答案，退回自己想</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">COT-SC → REACT</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">先想；想得沒把握，再去查</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:220px; top:222px; width:320px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">ReAct 開始解這一題</div>
+  <div style="position:absolute; left:170px; top:300px; width:420px; height:68px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">走到 7 步（HotpotQA）／5 步（FEVER）</div><div style="margin-top:2px; font-size:15px; font-weight:700; color:#1C2431;">之前 finish 了嗎？</div></div></div>
+  <div style="position:absolute; left:244px; top:372px; font-size:13px; font-weight:700; color:#6B7380;">是</div>
+  <div style="position:absolute; left:506px; top:372px; font-size:13px; font-weight:700; color:#6B7380;">否</div>
+  <div style="position:absolute; left:60px; top:420px; width:300px; height:58px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">採用 ReAct 的答案</div><div style="font-size:12.5px; color:#6B7380;">有查到依據的答案，照用</div></div></div>
+  <div style="position:absolute; left:400px; top:420px; width:360px; height:58px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">退回 CoT-SC</div><div style="font-size:12.5px; color:#6B7380;">抽 21 條 CoT，取多數的答案</div></div></div>
+  <div style="position:absolute; left:60px; top:500px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">為什麼是 7 與 5 步：答對的軌跡裡，走到第 7 步（HotpotQA）或第 5 步（FEVER）的只佔 0.84% 與 1.33%；作者也發現步數再多，ReAct 不會更好。</div>
+
+  <div style="position:absolute; left:1000px; top:222px; width:320px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">CoT-SC 抽 n 條推理鏈</div>
+  <div style="position:absolute; left:950px; top:300px; width:420px; height:68px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">n 個答案裡，多數答案</div><div style="margin-top:2px; font-size:15px; font-weight:700; color:#1C2431;">出現了 n/2 次以上嗎？</div></div></div>
+  <div style="position:absolute; left:1024px; top:372px; font-size:13px; font-weight:700; color:#6B7380;">是</div>
+  <div style="position:absolute; left:1286px; top:372px; font-size:13px; font-weight:700; color:#6B7380;">否</div>
+  <div style="position:absolute; left:840px; top:420px; width:300px; height:58px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">採用多數答案</div><div style="font-size:12.5px; color:#6B7380;">內部知識有把握，不必查</div></div></div>
+  <div style="position:absolute; left:1180px; top:420px; width:360px; height:58px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">改跑 ReAct</div><div style="font-size:12.5px; color:#6B7380;">用 Wikipedia API 一步步查</div></div></div>
+  <div style="position:absolute; left:840px; top:500px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">多數答案出現不到 n/2 次，代表內部知識可能不足以有把握地支撐這一題；圖 2 的橫軸就是抽的樣本數 n。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">HotpotQA 最好：35.1</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">ReAct 單獨 27.4、CoT-SC 單獨 33.4；ReAct 答不出來的題目交給 CoT-SC 接手，走到 7 步還沒答，多半已經卡住。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">同一個方法在 FEVER 是 62.0。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">FEVER 最好：64.6</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">ReAct 單獨 60.9、CoT-SC 單獨 60.4；多數答案過半的題目直接用 CoT-SC 的答案，沒把握的才改去查 Wikipedia。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">同一個方法在 HotpotQA 是 34.2。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩種組合各在一題最好，原文沒有說哪個方向較好；圖 2 顯示兩者只要抽 3 到 5 條 CoT-SC 樣本，就追上 CoT-SC 抽 21 條的表現（圖上沒有標數字）。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c08" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M380 272L380 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M300 368V392H210V418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M460 368V392H580V418" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c08)"></path>
+    <path d="M1160 272L1160 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M1080 368V392H990V418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M1240 368V392H1360V418" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c08)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>上一章的結論是，ReAct 的解題過程比較有事實根據，CoT 則比較擅長組織推理的結構，卻容易產生幻覺的事實或想法。作者因此把 ReAct 和 CoT-SC 結合起來，讓模型依下面兩條啟發式規則，決定什麼時候換到另一種方法：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">A</div><div class="t"><strong>ReAct → CoT-SC</strong>ReAct 在限定的步數內沒有給出答案，就退回 CoT-SC。HotpotQA 設 7 步、FEVER 設 5 步，作者發現再多給步數，ReAct 的表現也不會更好。</div></div>
+      <div class="cascade-step"><div class="n">B</div><div class="t"><strong>CoT-SC → ReAct</strong>在 n 個 CoT-SC 樣本裡，多數答案出現的次數少於 n/2，代表內部知識可能不足以有把握地支撐這一題，就退回 ReAct。</div></div>
+    </div>
+
+    <div class="codeblock">
+      <span class="file">兩條後援規則 · 教學用虛擬碼（整理者寫的）</span>
+<pre class="code">def react_then_cotsc(q, max_steps):        <span class="c"># HotpotQA 用 7 步，FEVER 用 5 步</span>
+    answer = run_react(q, max_steps)
+    if answer is None:                      <span class="c"># 步數用完還沒 finish</span>
+        answer = majority(sample_cot(q, n=21))
+    return answer
+
+def cotsc_then_react(q, n):
+    answers = sample_cot(q, n)              <span class="c"># 溫度 0.7 抽 n 條 CoT</span>
+    best, count = most_common(answers)
+    if count * 2 &lt; n:                       <span class="c"># 多數答案不到一半：內部知識沒把握</span>
+        return run_react(q)
+    return best</pre>
+    </div>
+
+    <p>7 與 5 這兩個數字有根據：作者在註腳說，所有答對的軌跡裡，走到 7 步（HotpotQA）或 5 步（FEVER）的只佔 0.84% 與 1.33%。換句話說，ReAct 走到這個步數還沒答出來，多半已經卡住了。</p>
+    <p>結果也在表 1。prompting 方法裡，HotpotQA 最好的是 ReAct → CoT-SC（35.1），FEVER 最好的是 CoT-SC → ReAct（64.6）。兩種組合各在一個任務上比較好；圖 2 則顯示，不論 CoT-SC 抽幾條樣本，兩種組合都顯著而穩定地勝過單獨的 CoT-SC，只抽 3 到 5 條樣本，就達到 CoT-SC 抽 21 條的表現。作者的結論是，推理任務要把模型的內部知識和外部取得的知識適當地結合起來。</p>
+
+    <div class="thought">
+      <span class="label">思考題 · 02</span>
+      <h4>你的 agent 什麼時候該放下工具，改用模型自己知道的？</h4>
+      <p>想一個你的 agent 會用檢索或工具的任務，再想它失敗時的樣子：是查不到東西，還是查到了卻亂推？</p>
+      <p class="hint">論文用了兩個便宜的訊號：「走了幾步還沒答」與「多數答案佔幾成」。兩個任務的最佳順序剛好相反：HotpotQA 是先 ReAct、答不出來再退回 CoT-SC；FEVER 是先 CoT-SC、沒把握再去查。與其先猜哪個順序好，不如兩個都接上，用自己的開發題比一次。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="finetune" data-toc="微調小模型">
+  <div class="container head">
+    <p class="chapter">Chapter 08 · Finetuning · ReAct Performs Best for Fine-tuning · Appendix B.1</p>
+    <h2>用 3,000 條答對的軌跡微調，小模型的 ReAct 反而最好</h2>
+    <p class="lede">人工大量標註推理與行動很難，作者改用 bootstrap：拿 ReAct 自己產生、答案正確的 3,000 條軌跡，微調 PaLM-8B 與 62B。只靠 prompt 時小模型的 ReAct 最差，微調之後變成四種方法裡最好的。</p>
+    
+  </div>
+  <div class="cardband" id="card-09"><div class="cardlabel"><span class="n">圖卡 09 / 13</span><span class="t">微調後小模型的 ReAct 最好</span><button type="button" class="zoom" data-card="09">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">答對的軌跡拿去微調，小模型的 ReAct 變最好</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.2、3.3 節：人工大量標註推理與行動太難，作者讓 ReAct 自己產生軌跡，只留答案正確的 3,000 條，拿去微調較小的 PaLM-8B 與 62B</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　540B 跑 ReAct</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">在訓練題上用 prompt<br>產生整條軌跡</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　只留答對的</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">只看最後的答案對不對</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">答錯就丟</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　3,000 條軌跡</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">thought、行動、觀察<br>全部留著</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　微調 8B／62B</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">用這些軌跡更新權重</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">bootstrap</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　小模型解碼</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">只看問題或宣稱，<br>直接寫出整條軌跡</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:300px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">對照組</div>
+    <div style="font-size:15px; color:#2B3340;">Standard、CoT、Act 也照同樣方式，各產生一份 3,000 條答對的軌跡去微調；做法類似 Zelikman 等人（2022）的 bootstrap</div>
+  </div>
+  <div style="position:absolute; left:60px; top:372px; width:1480px; height:56px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866; letter-spacing:0.08em;">微調設定</div>
+    <div style="font-size:15px; color:#2B3340;">附錄 B.1：batch size 64；PaLM-8B 上 ReAct、Act 4,000 步，Standard、CoT 2,000 步；PaLM-62B 上 ReAct、Act 4,000 步，Standard、CoT 1,000 步</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:450px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:470px; font-size:20px; font-weight:700; color:#1C2431;">圖 3 的排序（長條沒有標數字）</div>
+
+  <div style="position:absolute; left:60px; top:512px; width:470px; height:260px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">只靠 prompt：小模型的 ReAct 最差</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">PaLM-8B、62B 做 prompting 時，ReAct 是四種方法裡最差的：光從幾個 in-context 示範，很難同時學會推理與行動。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">這是作者的解釋；540B 的 prompting 結果見第 6 卡。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:512px; width:470px; height:260px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">微調之後：ReAct 變最好</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">微調過的 PaLM-8B ReAct，勝過所有 PaLM-62B 的 prompting 方法；微調過的 PaLM-62B ReAct，勝過所有 540B 的 prompting 方法。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">ReAct、Act 能從更多訓練步數與資料得到好處（附錄 B.1）。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:512px; width:470px; height:260px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">微調教的是怎麼查</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">微調 Standard、CoT，等於教模型背下（可能是幻覺的）知識事實；微調 ReAct、Act，教的是怎麼行動去 Wikipedia 取資訊，更能類推。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">Standard、CoT 微調後不久就開始退步。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：圖 3 的長條沒有標數字，這張只寫原文的排序說法；橘色虛線標的是閘：只憑最後答案篩選，中間的 thought 沒有人檢查。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M481 262L481 298" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="4 4"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>手寫推理軌跡與行動的成本很高，很難大規模標註。作者採用類似 Zelikman 等人（2022）的 bootstrap 做法：用 ReAct 產生軌跡，挑出答案正確的 3,000 條（其他對照組也照同樣方式各做一份），拿去微調比較小的 PaLM-8B 與 PaLM-62B，讓它們只看到問題或宣稱，就直接解碼出整條軌跡：全部的 thought、行動與觀察。</p>
+    <p>附錄 B.1 補了細節：微調的 batch size 都是 64。PaLM-8B 上，ReAct 與 Act 微調 4,000 步，Standard 與 CoT 微調 2,000 步；PaLM-62B 上，ReAct 與 Act 一樣是 4,000 步，Standard 與 CoT 只有 1,000 步。作者發現 ReAct 與 Act 通常能從更多訓練步數（與更多資料）得到好處，Standard 與 CoT 則在微調後不久就開始退步。</p>
+    <p>圖 3 畫的是四種方法在 HotpotQA 上隨模型大小的變化，分成 prompting 與微調兩半。圖上的長條沒有標數字，這裡只轉述原文的排序說法。用 PaLM-8B 或 62B 做 prompting 時，ReAct 是四種方法裡最差的，因為光從幾個 in-context 示範同時學會推理與行動很難。微調 3,000 條之後，ReAct 變成四種方法裡最好的：微調過的 PaLM-8B ReAct 勝過所有 PaLM-62B 的 prompting 方法，微調過的 PaLM-62B ReAct 勝過所有 540B 的 prompting 方法。</p>
+    <p>相反地，兩種模型大小上，微調 Standard 或 CoT 都顯著不如微調 ReAct 或 Act。作者的解釋是：微調 Standard 或 CoT，本質上是在教模型背下（可能是幻覺的）知識事實；微調 ReAct 或 Act，教的是怎麼（推理並）行動、去 Wikipedia 取得資訊，對知識推理來說是更能類推的技能。既然所有的 prompting 方法都離各領域最好的專用方法還很遠（表 1 的監督式 SoTA），作者認為用更多人寫的資料來微調，可能才是發揮 ReAct 潛力比較好的路。</p>
+
+    <div class="pullquote">
+      微調答案，模型學到的是事實；微調軌跡，模型學到的是怎麼去查。
+      <cite>整理自第 3.3 節</cite>
+    </div>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>微調的資料是模型自己產生的</h4>
+      <p>這 3,000 條軌跡來自模型自己的輸出，只用「最後答案對不對」篩選，沒有人檢查中間的 thought。第 6 章的表 2 顯示，答對的 ReAct 軌跡裡仍有 6% 是假陽性，推理或事實是編的，這種軌跡也可能混進訓練資料。這是整理者的提醒，論文沒有分析這一點。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="decision-tasks" data-toc="ALFWorld 與 WebShop">
+  <div class="container head">
+    <p class="chapter">Chapter 09 · Decision Making Tasks · ALFWorld · WebShop</p>
+    <h2>長程的決策任務裡，thought 只在關鍵處出現</h2>
+    <p class="lede">第二組實驗換成兩個要走很多步、獎勵又很稀疏的互動環境：文字版家務遊戲 ALFWorld 與購物網站 WebShop。thought 在這裡是稀疏的：拆目標、換子目標、推測東西在哪時才寫，其餘步驟只管行動。</p>
+    
+  </div>
+  <div class="cardband" id="card-10"><div class="cardlabel"><span class="n">圖卡 10 / 13</span><span class="t">ALFWorld 與 WebShop</span><button type="button" class="zoom" data-card="10">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">兩個決策環境：thought 只在關鍵處出現</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4 節：兩個環境都要走很多步、獎勵又稀疏。thought 只在拆目標、判斷東西在哪、決定下一步的地方出現，何時寫由模型自己決定</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">ALFWORLD</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">文字版家務遊戲：路很長，要用常識找東西</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">WEBSHOP</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">購物網站：文字雜訊多，要把指令對上商品</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:218px; width:700px; height:38px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; padding:0px 16px; font-size:14px; font-weight:700; color:#1C2431;">任務：把一個胡椒罐放進抽屜（圖 1 的 2b）</div>
+  <div style="position:absolute; left:60px; top:266px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">Act 1</div><div style="font-size:14px; color:#1C2431;">think：先找胡椒罐；它比較可能在櫃子 1–6、流理台 1–3…</div></div>
+  <div style="position:absolute; left:60px; top:304px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">Act 2</div><div style="font-size:14px; color:#2B3340;">go to cabinet 1 → 只看到一個花瓶</div></div>
+  <div style="position:absolute; left:60px; top:342px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">Act 3–5</div><div style="font-size:14px; color:#6B7380;">接著一個一個找其他櫃子與流理台</div></div>
+  <div style="position:absolute; left:60px; top:380px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">Act 6–7</div><div style="font-size:14px; color:#2B3340;">go to countertop 3 → take pepper shaker 1</div></div>
+  <div style="position:absolute; left:60px; top:418px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">Act 8</div><div style="font-size:14px; color:#1C2431;">think：找到胡椒罐了，下一步放進抽屜 1</div></div>
+  <div style="position:absolute; left:60px; top:456px; width:700px; height:32px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:rgba(255,255,255,0.6);">Act 9–11</div><div style="font-size:14px; color:#FFFFFF;">go to drawer 1 → open drawer 1 → put … in/on drawer 1　✓</div></div>
+  <div style="position:absolute; left:60px; top:504px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">6 類任務；一題可能有超過 50 個地點，專家要走 50 多步。這一條軌跡裡只有 Act 1 與 Act 8 是 thought，其餘都是行動。</div>
+
+  <div style="position:absolute; left:840px; top:218px; width:700px; height:38px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; padding:0px 16px; font-size:14px; font-weight:700; color:#1C2431;">指令：3 盎司、柑橘香、敏感肌用的體香劑，50 美元以下（表 6）</div>
+  <div style="position:absolute; left:840px; top:266px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">search</div><div style="font-size:14px; color:#2B3340;">search[3 ounce bright citrus deodorant …] → 50 筆結果</div></div>
+  <div style="position:absolute; left:840px; top:304px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">think</div><div style="font-size:14px; color:#1C2431;">前兩筆都在 50 美元以下，先看第一筆</div></div>
+  <div style="position:absolute; left:840px; top:342px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">click</div><div style="font-size:14px; color:#2B3340;">click[第一筆商品] → 頁面列出香味與尺寸的選項</div></div>
+  <div style="position:absolute; left:840px; top:380px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">think</div><div style="font-size:14px; color:#1C2431;">有 bright citrus 與 3 ounce (pack of 1) 兩個選項，可以買</div></div>
+  <div style="position:absolute; left:840px; top:418px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">click</div><div style="font-size:14px; color:#2B3340;">click[bright citrus] → click[3 ounce (pack of 1)]</div></div>
+  <div style="position:absolute; left:840px; top:456px; width:700px; height:32px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:rgba(255,255,255,0.6);">buy</div><div style="font-size:14px; color:#FFFFFF;">click[Buy Now]　✓</div></div>
+  <div style="position:absolute; left:840px; top:504px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">118 萬件真實商品、1.2 萬條人寫指令；用 500 條測試指令評平均分數與成功率。ReAct 只用一條示範。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">控制對照：刪掉 thought 就是 Act</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">每類任務標 3 條軌跡、取 2 條排成 6 組 prompt；Act 用同樣的軌跡，只拿掉 thought，對兩邊都公平。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">對手 BUTLER：每類任務用 10⁵ 條專家軌跡做模仿學習。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">thought 決定看哪件、何時買</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">Act 只有搜尋、點商品、選選項、購買；ReAct 另外推理要探索什麼、哪些選項和指令有關、什麼時候買。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">對手：IL 用 1,012 條人工軌跡；IL+RL 再加 10,587 條訓練指令。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩個環境裡的 thought 都寫成一個動作（think），環境只回 OK；兩條軌跡依圖 1 (2b) 與表 6 精簡改寫，中間的步驟有刪減。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>ALFWorld 是一個合成的文字遊戲，設計成和具身任務基準 ALFRED 對齊。它有 6 類任務，代理要在模擬的家裡用文字行動（例如去咖啡桌 1、拿起紙 2、使用檯燈 1）完成一個高層目標（例如在檯燈下檢查一張紙）。一個任務可能有超過 50 個地點，專家策略也要超過 50 步，所以代理得規劃並追蹤子目標，還要有系統地探索（例如把書桌一張一張找過去找檯燈）。遊戲裡內建一個難點：要判斷常見的家用品可能放在哪裡（檯燈多半在書桌、架子或梳妝台上），這正好讓語言模型運用預訓練學到的常識。</p>
+    <p>作者從訓練集替每類任務隨機標註 3 條軌跡，軌跡裡有稀疏的 thought，做四件事：拆解目標、追蹤子目標是否完成、決定下一個子目標，以及用常識推理東西在哪裡、拿到之後要做什麼。評估照 ALFWorld 原作者的設定，在 134 場沒看過的遊戲上依任務類別進行。為了測穩定性，每類任務從 3 條標註軌跡取 2 條排列，做出 6 組 prompt；Act 的 prompt 用同樣的軌跡，只拿掉 thought。這些軌跡是從訓練集隨機挑的，對 ReAct 與 Act 都沒有偏袒，是一個公平、受控的比較，專門測稀疏 thought 的價值。基線是 BUTLER，一個每類任務用 10⁵ 條專家軌跡訓練的模仿學習代理。</p>
+    <p>WebShop 要回答的是：ReAct 能不能在有雜訊的真實語言環境裡做實際的事？它是一個線上購物網站環境，有 118 萬件真實商品與 1.2 萬條人寫的購物指令，商品標題、描述與選項都是從 Amazon 抓來的，結構化與非結構化的文字混雜。代理要依使用者的指令（例如要一個有抽屜、鎳色表面、140 美元以下的床頭櫃），透過搜尋與點選「顏色：現代鎳白」「回到搜尋」這類按鈕，買到符合的商品。評分用 500 條測試指令，看兩個數字：平均分數（選中的商品涵蓋了幾成指定的屬性，對所有回合取平均）與成功率（選中的商品滿足全部要求的回合比例）。</p>
+    <p>Act 的 prompt 只有搜尋、選商品、選選項、購買這些動作；ReAct 的 prompt 另外會推理要探索什麼、什麼時候買、哪些商品選項和指令有關。對照的基線有兩個：用 1,012 條人工標註軌跡訓練的模仿學習（IL），以及再加上 10,587 條訓練指令做強化學習的 IL+RL。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>面向</th><th>ALFWorld</th><th>WebShop</th></tr></thead>
+        <tbody>
+          <tr><td>環境</td><td>合成的文字版家務遊戲，6 類任務</td><td>118 萬件真實商品的購物網站</td></tr>
+          <tr><td>難在哪</td><td>超過 50 個地點、專家要 50 多步；得用常識找東西</td><td>文字雜訊多；要把指令對到商品與選項</td></tr>
+          <tr><td>ReAct 的示範</td><td>每類任務 3 條裡取 2 條，排列成 6 組 prompt</td><td>一條示範</td></tr>
+          <tr><td>thought 做什麼</td><td>拆目標、追蹤子目標、決定下一步、推測東西在哪</td><td>決定探索什麼、何時買、哪些選項相關</td></tr>
+          <tr><td>評估</td><td>134 場沒看過的遊戲，看成功率</td><td>500 條測試指令，看平均分數與成功率</td></tr>
+          <tr><td>基線</td><td>BUTLER：每類任務 10⁵ 條專家軌跡的模仿學習</td><td>IL：1,012 條人工軌跡；IL+RL：再加 10,587 條指令</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>thought 在這裡也寫成一個動作</h4>
+      <p>在兩個決策環境的 prompt 裡，thought 以一個動作的樣子出現：ALFWorld 寫成 <code>think: …</code>，WebShop 寫成 <code>think[…]</code>，環境一律只回一句 OK。這和第 2 章的定義一致：thought 不改變環境，也拿不到有意義的觀察。它什麼時候出現，由模型依示範的樣子自己決定。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="decision-results" data-toc="決策任務的結果">
+  <div class="container head">
+    <p class="chapter">Chapter 10 · Decision Making Tasks: Results · Appendix A.1</p>
+    <h2>一兩個示範的 ReAct，勝過用成千上萬筆資料訓練的方法</h2>
+    <p class="lede">ALFWorld 上最好的一組 ReAct 成功率 71%，Act 45%、BUTLER 37%，最差的一組 ReAct 也有 48%。WebShop 上 ReAct 的成功率 40.0%，比先前最好的方法高 10%（絕對值），但離人類專家的 59.6% 還很遠。</p>
+    
+  </div>
+  <div class="cardband" id="card-11"><div class="cardlabel"><span class="n">圖卡 11 / 13</span><span class="t">決策任務：一兩個示範就夠</span><button type="button" class="zoom" data-card="11">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">一兩個示範，勝過上萬條資料的模仿學習</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 3 的 All 欄與表 4 的成功率（%），同一條量尺。ALFWorld 的 ReAct 標出 6 組 prompt 的最好、平均與最差；BUTLER 每類任務用 10⁵ 條專家軌跡訓練</div>
+
+  <div style="position:absolute; left:60px; top:134px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#6B7380;"></div>模仿學習（或加強化學習）的基線</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#C8501F;"></div>Act（只行動）</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>ReAct</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>人類專家</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:230px; font-size:18px; font-weight:700; color:#1C2431;">ALFWorld</div>
+  <div style="position:absolute; left:60px; top:256px; font-size:13px; color:#8A93A0;">All 成功率</div>
+  <div style="position:absolute; left:180px; top:180px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:218px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:256px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+
+  <div style="position:absolute; left:461px; top:247px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:486px; top:246px; font-size:13px; color:#2B3340;">BUTLER<sub>g</sub> <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">22</span></div>
+  <div style="position:absolute; left:659px; top:247px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:684px; top:246px; font-size:13px; color:#2B3340;">BUTLER <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">37</span></div>
+  <div style="position:absolute; left:765px; top:209px; width:18px; height:18px; border-radius:50%; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:790px; top:208px; font-size:13px; color:#2B3340;">Act 最好的一組 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">45</span></div>
+  <div style="position:absolute; left:805px; top:171px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:830px; top:170px; font-size:13px; color:#2B3340;">ReAct 最差的一組 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">48</span></div>
+  <div style="position:absolute; left:923px; top:247px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:948px; top:246px; font-size:13px; color:#2B3340;">ReAct 平均 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">57</span></div>
+  <div style="position:absolute; left:1108px; top:247px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1133px; top:246px; font-size:13px; color:#2B3340;">ReAct 最好的一組 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; color:#2E7B4F;">71</span></div>
+
+  <div style="position:absolute; left:180px; top:276px; width:1320px; height:36px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:285px; width:14px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0</div>
+  <div style="position:absolute; left:434px; top:285px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">20</div>
+  <div style="position:absolute; left:698px; top:285px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">40</div>
+  <div style="position:absolute; left:962px; top:285px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">60</div>
+  <div style="position:absolute; left:1226px; top:285px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">80</div>
+  <div style="position:absolute; left:1462px; top:285px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">100</div>
+  <div style="position:absolute; left:1340px; top:318px; width:160px; text-align:right; font-size:12px; color:#8A93A0;">成功率 %</div>
+
+  <div style="position:absolute; left:60px; top:340px; font-size:18px; font-weight:700; color:#1C2431;">WebShop</div>
+  <div style="position:absolute; left:60px; top:366px; font-size:13px; color:#8A93A0;">成功率</div>
+  <div style="position:absolute; left:180px; top:346px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:384px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:422px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+
+  <div style="position:absolute; left:568px; top:337px; width:18px; height:18px; border-radius:50%; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:442px; top:336px; width:120px; text-align:right; font-size:13px; color:#2B3340;">Act <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">30.1</span></div>
+  <div style="position:absolute; left:555px; top:375px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:429px; top:374px; width:120px; text-align:right; font-size:13px; color:#2B3340;">IL <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">29.1</span></div>
+  <div style="position:absolute; left:550px; top:413px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:424px; top:412px; width:120px; text-align:right; font-size:13px; color:#2B3340;">IL+RL <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">28.7</span></div>
+  <div style="position:absolute; left:699px; top:337px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:724px; top:336px; font-size:13px; color:#2B3340;">ReAct <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; color:#2E7B4F;">40.0</span></div>
+  <div style="position:absolute; left:958px; top:337px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:983px; top:336px; font-size:13px; color:#2B3340;">人類專家 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">59.6</span></div>
+
+  <div style="position:absolute; left:60px; top:456px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">只標表 3 的 All 欄、表 4 的成功率與正文的數字：最差的一組 48% 來自正文，不在表裡。ALFWorld 的 ReAct 與 Act 各跑 6 組 prompt；BUTLER 跑 8 次取最好。WebShop 的 Act 與 ReAct 都只有一條示範。</div>
+
+  <div style="position:absolute; left:60px; top:540px; width:470px; height:214px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">ALFWorld：最好 71%，最差也有 48%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">最好的 ReAct 組 71%，Act 最好 45%、BUTLER 37%；最差的一組 ReAct 也勝過兩者各自最好的一組。沒有 thought 的 Act 常拆不好子目標，或搞丟環境的狀態。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">六組對照裡 ReAct 都勝過 Act，相對提升 33% 到 90%，平均 62%。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:540px; width:470px; height:214px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">WebShop：成功率高出 10%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">一條示範的 Act 已經和 IL、IL+RL 差不多（30.1、29.1、28.7），而 IL 用了 1,012 條人工軌跡，IL+RL 再加 10,587 條指令；ReAct 到 40.0，平均分數 66.6。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者說的是絕對值的 10%；推理把雜訊很多的觀察和行動接了起來。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:540px; width:470px; height:214px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">離人類專家還很遠</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">專家的平均分數 82.1、成功率 59.6%：他們會探索更多商品、更多次改寫搜尋，這對 prompting 方法仍然很難。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">換成 GPT-3，ALFWorld 從 70.9 到 78.4（附錄 A.1）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：量尺是 0 到 100 的成功率；BUTLER 的數字取自 ALFWorld 原作者的論文，它用 beam search，其他方法都是貪婪解碼。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 3 · ALFWorld 成功率（%）</th><th>Pick</th><th>Clean</th><th>Heat</th><th>Cool</th><th>Look</th><th>Pick 2</th><th>All</th></tr></thead>
+        <tbody>
+          <tr><td>Act（6 組取最好）</td><td>88</td><td>42</td><td>74</td><td>67</td><td>72</td><td><strong>41</strong></td><td>45</td></tr>
+          <tr><td>ReAct（6 組平均）</td><td>65</td><td>39</td><td>83</td><td>76</td><td>55</td><td>24</td><td>57</td></tr>
+          <tr><td>ReAct（6 組取最好）</td><td><strong>92</strong></td><td>58</td><td><strong>96</strong></td><td>86</td><td><strong>78</strong></td><td><strong>41</strong></td><td><strong>71</strong></td></tr>
+          <tr><td>ReAct-IM（6 組平均）</td><td>55</td><td>59</td><td>60</td><td>55</td><td>23</td><td>24</td><td>48</td></tr>
+          <tr><td>ReAct-IM（6 組取最好）</td><td>62</td><td><strong>68</strong></td><td>87</td><td>57</td><td>39</td><td>33</td><td>53</td></tr>
+          <tr><td>BUTLER<sub>g</sub>（8 次取最好）</td><td>33</td><td>26</td><td>70</td><td>76</td><td>17</td><td>12</td><td>22</td></tr>
+          <tr><td>BUTLER（8 次取最好）</td><td>46</td><td>39</td><td>74</td><td><strong>100</strong></td><td>22</td><td>24</td><td>37</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>表 3 的註：BUTLER 與 BUTLER<sub>g</sub> 的數字取自 ALFWorld 原作者論文的表 4；除了 BUTLER 用 beam search，其他方法都用貪婪解碼。「6 組」指的是上一章用標註軌跡排列出來的 6 組 prompt。</p>
+    <p>ALFWorld 上，最好的一組 ReAct 平均成功率 71%，明顯勝過最好的 Act（45%）與 BUTLER（37%）；就連最差的一組 ReAct（48%），也勝過兩者各自最好的一組。在 6 組受控的比較裡，ReAct 每一組都勝過 Act，相對提升從 33% 到 90%，平均 62%。質性上，作者看到完全沒有 thought 的 Act 沒辦法正確地把目標拆成子目標，或是搞丟環境目前的狀態；附錄 D.2.1、D.2.2 有兩者對照的軌跡。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 4 · WebShop</th><th>平均分數</th><th>成功率（%）</th></tr></thead>
+        <tbody>
+          <tr><td>Act</td><td>62.3</td><td>30.1</td></tr>
+          <tr><td>ReAct</td><td><strong>66.6</strong></td><td><strong>40.0</strong></td></tr>
+          <tr><td>IL</td><td>59.9</td><td>29.1</td></tr>
+          <tr><td>IL+RL</td><td>62.4</td><td>28.7</td></tr>
+          <tr><td>人類專家</td><td>82.1</td><td>59.6</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>WebShop 上，一條示範的 Act 就已經和 IL、IL+RL 差不多。加上稀疏的推理之後，ReAct 的表現明顯更好，作者說成功率比先前最好的高出 10%（絕對值）。檢查例子時，作者發現 ReAct 比較能透過推理把有雜訊的觀察和要做的行動接起來，找出和指令相關的商品與選項；例如它會寫下「這件收納凳有 39x18x18 吋和藍色的選項，看起來可以買」這類判斷。不過所有方法都還遠不如人類專家：專家會探索更多商品、更多次改寫搜尋，這對 prompting 方法仍然很難。</p>
+    <p>附錄 A.1 用 GPT-3（text-davinci-002，貪婪解碼）重跑 ReAct 的 prompting，確認這套做法不綁定某一個模型。GPT-3 在兩個任務上都比 PaLM-540B 好：HotpotQA 隨機抽 500 題驗證題，EM 30.8 對 29.4；ALFWorld 用全部 134 場沒看過的遊戲，沿用 PaLM-540B 表現最好的那組 prompt，成功率 78.4 對 70.9。作者推測，原因可能是 GPT-3 針對遵循人類指令做過微調。</p>
+  </div>
+</section>
+
+
+<section id="inner-monologue" data-toc="內部推理 vs 外部回饋">
+  <div class="container head">
+    <p class="chapter">Chapter 11 · On the Value of Internal Reasoning vs. External Feedback · Appendix A.3, B.2</p>
+    <h2>有用的是內部推理，光是複述環境的回饋還不夠</h2>
+    <p class="lede">和 ReAct 最接近的前作是 Inner Monologue，它的「內心獨白」只描述環境狀態與還差什麼。作者把 ReAct 的 thought 改寫成這種風格做消融，成功率從 71% 掉到 53%；另外，人只要改掉兩句 thought，就能救回一局失敗的遊戲。</p>
+    
+  </div>
+  <div class="cardband" id="card-12"><div class="cardlabel"><span class="n">圖卡 12 / 13</span><span class="t">內部推理勝過複述回饋</span><button type="button" class="zoom" data-card="12">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">有用的是內部推理，不是複述環境回饋</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4 節：Inner Monologue（IM）的獨白只描述環境狀態與還差什麼。作者用同一批 ALFWorld 專家軌跡，把 thought 改寫成這種風格做消融（ReAct-IM）</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ ReAct-IM：只複述目標與目前的子目標</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ ReAct：拆目標、記進度、選下一步、用常識找</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:196px; width:700px; height:38px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; padding:0px 16px; font-size:14px; font-weight:700; color:#1C2431;">任務：把一把乾淨的刀放到流理台（附錄 D.2.3）</div>
+  <div style="position:absolute; left:60px; top:244px; width:700px; height:32px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:56px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">think</div><div style="font-size:14px; color:#1C2431;">要完成任務，得找到並拿起一把乾淨的刀，再放到流理台</div></div>
+  <div style="position:absolute; left:60px; top:282px; width:700px; height:32px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:56px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">think</div><div style="font-size:14px; color:#1C2431;">我要找一把乾淨的刀</div></div>
+  <div style="position:absolute; left:60px; top:320px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:56px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">go to</div><div style="font-size:14px; color:#2B3340;">go to countertop 1 → 沒有刀</div></div>
+  <div style="position:absolute; left:60px; top:358px; width:700px; height:32px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:56px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">think</div><div style="font-size:14px; color:#1C2431;">我要找一把乾淨的刀（同一句又寫一次）</div></div>
+  <div style="position:absolute; left:60px; top:396px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:56px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">take</div><div style="font-size:14px; color:#2B3340;">go to countertop 2 → take knife 1</div></div>
+  <div style="position:absolute; left:60px; top:434px; width:700px; height:32px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #C8501F; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:56px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">think</div><div style="font-size:14px; color:#1C2431;">把這把刀放到流理台 1 → 刀從沒洗過，卡在這一步</div></div>
+  <div style="position:absolute; left:60px; top:486px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">IM 風格的 thought 只描述目前的目標與子目標，缺少「完成了沒、下一步是什麼、東西可能在哪」三種。作者認為「找一把乾淨的刀」這句，讓模型以為刀已經洗好了。</div>
+
+  <div style="position:absolute; left:840px; top:196px; width:700px; height:38px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; padding:0px 16px; font-size:14px; font-weight:700; color:#1C2431;">任務：把一顆洗乾淨的萵苣放到餐桌（表 8 的示範）</div>
+  <div style="position:absolute; left:840px; top:244px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:56px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">think</div><div style="font-size:14px; color:#1C2431;">拆目標：找到萵苣、拿起來、用水槽洗，再放到餐桌</div></div>
+  <div style="position:absolute; left:840px; top:282px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:56px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">think</div><div style="font-size:14px; color:#1C2431;">常識：萵苣比較可能在冰箱、餐桌、水槽、爐子、櫃子；先看冰箱</div></div>
+  <div style="position:absolute; left:840px; top:320px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:56px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">go to</div><div style="font-size:14px; color:#2B3340;">冰箱裡沒有 → go to diningtable 1 → 看到萵苣</div></div>
+  <div style="position:absolute; left:840px; top:358px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:56px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">think</div><div style="font-size:14px; color:#1C2431;">記進度：找到萵苣了，下一步把它拿起來</div></div>
+  <div style="position:absolute; left:840px; top:396px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:56px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">think</div><div style="font-size:14px; color:#1C2431;">選下一步：拿到萵苣了，接著去水槽 1 清洗</div></div>
+  <div style="position:absolute; left:840px; top:434px; width:700px; height:32px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:56px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:rgba(255,255,255,0.6);">…</div><div style="font-size:14px; color:#FFFFFF;">clean lettuce 1 → put lettuce 1 in/on diningtable 1　✓</div></div>
+  <div style="position:absolute; left:840px; top:486px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">ReAct 的 thought 說出完成了什麼、下一個子目標是什麼、東西可能在哪。ReAct-IM 用的是同一批專家軌跡，只把 thought 改寫成回饋式的密集 thought。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#C8501F;">53%（6 組取最好）</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">缺三種 thought：判斷子目標完成了沒、決定下一個子目標、用預訓練的常識推測東西在哪。</div>
+    <div style="font-size:13px; color:#8A93A0;">6 組平均 48%；只有 Clean 這一類勝過 ReAct。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#2E7B4F;">71%，六類任務贏五類</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">差距來自內部推理，而不是對外部回饋的反應；作者說 IM 風格的兩種缺點，在 ReAct 的做法裡都能補上。</div>
+    <div style="font-size:13px; color:#8A93A0;">6 組平均 57%（表 3）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：ReAct-IM 是作者自己做的消融（附錄 B.2）；兩段軌跡依附錄 D.2.3 與表 8 精簡改寫，左右是不同的任務，只用來對照 thought 的寫法。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>作者說，就他們所知，ReAct 是第一個在互動環境的閉迴路系統裡，用大型語言模型結合推理與行動的例子。最接近的前作是 Huang 等人（2022b）的 Inner Monologue（IM）：具身代理的行動由一段同名的內心獨白驅動。但 IM 的獨白只限於觀察到的環境狀態，以及代理為了達成目標還需要完成什麼。相較之下，ReAct 在決策任務裡的推理軌跡既有彈性又稀疏，能針對不同任務引出第 2 節列的各種推理。論文的相關工作一節也說，IM 是第一個展示這種閉迴路系統的研究，ReAct 建立在它之上。整理者的讀法：兩句話並不衝突，IM 先做出了閉迴路，ReAct 主張的「第一」在於迴圈裡加上了推理。</p>
+    <p>為了說明兩者的差異，也為了說明內部推理和單純對外部回饋做出反應有什麼不同，作者做了一個消融：用同一批專家軌跡，重新標註成 IM 風格、密集的外部回饋式 thought，稱為 ReAct-IM。依附錄 B.2，ReAct-IM 的 thought 只想兩件事：拆解目前的目標，以及目前需要完成的子目標。它缺少三種 thought：判斷一個子目標什麼時候完成、決定下一個子目標是什麼，以及引導模型用預訓練學到的知識推測東西可能在哪裡。</p>
+    <p>結果在表 3：ReAct 大幅勝過 ReAct-IM，整體成功率 71 對 53，六類任務裡有五類比較好，唯一的例外是 Clean。質性上，ReAct-IM 常常判斷錯子目標是否完成、下一個子目標是什麼，因為它缺少高層的目標拆解；很多 ReAct-IM 的軌跡也推不出東西可能放在 ALFWorld 環境的哪裡，因為缺少常識推理。附錄 D.2.3 有一個例子：ReAct-IM 找到了刀，卻沒有去洗，接著一直想把這把刀放到流理台上；作者認為問題可能出在一句「我需要找一把乾淨的刀」，它似乎讓模型以為刀已經洗好了。作者說，這兩種缺點在 ReAct 的做法裡都能補上。</p>
+
+    <div class="story">
+      <div class="label">關鍵觀念 · 二</div>
+      <h4>改兩句 thought，救回一局遊戲</h4>
+      <p>附錄 A.3 做了一個人機協作的實驗：讓人檢查並編輯 ReAct 的推理軌跡。圖 5 的任務是把兩個鑰匙圈放進保險箱。原本的軌跡在第 17 步寫了一句幻覺的 thought，最後失敗；人只刪掉第 17 步那句幻覺，再在第 23 步補一點提示，ReAct 的行為就大幅改變，順著編輯過的想法完成任務。</p>
+      <p>作者指出這對人很省力：從打出幾十個行動，變成只改幾句 thought。這種執行途中的修正，Act 與先前的強化學習方法很難做到，因為人改不了模型的參數，改掉幾個行動也未必改得動模型其餘的行為。它也超出用對話更新目標或子目標的做法：編輯 thought 可以改模型的內在信念、推理風格，或任何 thought 空間支援的東西。作者把更系統的研究留給未來。</p>
+    </div>
+
+    <div class="thought">
+      <span class="label">思考題 · 03</span>
+      <h4>你的 agent 寫的 thought，是在推理還是在複述？</h4>
+      <p>打開你的 agent 最近一次失敗的軌跡，把每一句 thought 分成兩類：只是描述剛剛看到什麼、目標還差什麼；或是判斷完成了沒、下一步做什麼、東西可能在哪。</p>
+      <p class="hint">如果幾乎都是第一類，情況就像 ReAct-IM。可以從示範下手：在示範軌跡裡補上「完成了哪個子目標、接下來做什麼、為什麼先找這裡」這幾種 thought，再用同一組題目比較成功率。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="related" data-toc="相關工作" class="nocard">
+  <div class="container">
+    <p class="chapter">Chapter 12 · Related Work</p>
+    <h2>推理與行動原本是兩條研究線，ReAct 把它們接進同一個輸入流</h2>
+    <p class="lede">用語言模型推理的一脈，從 chain-of-thought 延伸出很多變形，但推理都是孤立、固定的；用語言模型做決策的一脈，讓模型操作瀏覽器、API 或機器人，卻沒有明確地建模推理過程。</p>
+
+    <p>推理這一條，最有名的是 chain-of-thought（Wei 等人 2022），它顯示大型語言模型能為解題寫出自己的「思考程序」。之後的延伸包括：把複雜問題由簡到繁拆解的 least-to-most prompting、不用示範的 zero-shot-CoT，以及取多數答案的 self-consistency。Madaan 與 Yazdanbakhsh（2022）有系統地研究 CoT 的形式與結構，發現符號、模式與文字的存在，對 CoT 的效果很關鍵。也有工作把推理做成比 prompting 更複雜的架構：Selection-Inference 把推理分成「選擇」與「推論」兩步；STaR 用模型自己產生的正確理由微調模型，來 bootstrap 推理過程；Faithful reasoning 把多步推理拆成三步，每一步由一個專門的語言模型負責；Scratchpad 在中間的計算步驟上微調語言模型，也在多步計算問題上看到進步。作者的定位是：ReAct 做的不只是孤立、固定的推理，它把模型的行動與對應的觀察整合成一條連貫的輸入流，讓模型推理得更準，也能處理推理以外的任務，例如互動式決策。</p>
+    <p>決策這一條，語言模型越來越常被當成互動環境裡的策略模型。WebGPT 用語言模型操作瀏覽器、瀏覽網頁，回答 ELI5 裡的複雜問題；和 ReAct 相比，它沒有明確建模思考與推理的過程，而是仰賴昂貴的人類回饋做強化學習。對話系統方面，BlenderBot、Sparrow 這類聊天機器人，以及 SimpleTOD 這類任務導向的對話系統，也訓練語言模型決定何時呼叫 API；它們同樣沒有明確考慮推理過程，也仰賴昂貴的資料與人類回饋來學策略。相較之下，ReAct 學策略的方式便宜得多，因為決策過程只需要用語言描述推理；作者在註腳說，人類回饋也可以互補地加進來，留待未來。</p>
+    <p>在互動與具身環境裡，最相關的是 SayCan 與 Inner Monologue。SayCan 讓語言模型直接預測機器人可能採取的行動，再用一個以視覺環境為基礎的可行性（affordance）模型重新排序，做出最後的預測。Inner Monologue 加入同名的內心獨白，實作方式是把環境的回饋注入 prompt；作者說它是第一個展示這種閉迴路系統的研究，ReAct 也建立在它之上，但他們主張 IM 並沒有真正的內在想法（第 11 章）。最後，作者提到在其他設定下，把語言當作語意豐富的輸入來做互動決策也很成功，而大型語言模型的進展也催生了 Reed 等人（2022）那種多才多藝的通才代理。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>研究線</th><th>代表工作</th><th>和 ReAct 的差別（依第 5 節）</th></tr></thead>
+        <tbody>
+          <tr><td>用語言模型推理</td><td>CoT、least-to-most、zero-shot-CoT、self-consistency、Selection-Inference、STaR、Faithful reasoning、Scratchpad</td><td>推理是孤立、固定的，沒有行動與觀察</td></tr>
+          <tr><td>用語言模型操作網頁與 API</td><td>WebGPT、BlenderBot、Sparrow、SimpleTOD</td><td>沒有明確建模推理，靠昂貴的資料與人類回饋學策略</td></tr>
+          <tr><td>具身環境的規劃</td><td>SayCan、Inner Monologue</td><td>SayCan 直接預測行動再重排；IM 的獨白是注入的環境回饋</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+
+<section id="takeaways" data-toc="結論與代價">
+  <div class="container head">
+    <p class="chapter">Chapter 13 · Conclusion · Reproducibility &amp; Ethics Statements</p>
+    <h2>把推理和行動寫在同一條軌跡，模型才查得到、人也看得懂</h2>
+    <p class="lede">結論一節很短：ReAct 是一個簡單但有效的方法，在多跳問答、事實查核與互動決策上都有更好的表現，軌跡也能被解釋。代價也寫在裡面：複雜任務需要的示範會超出 in-context 的長度，把語言模型接上行動空間也有風險。</p>
+    
+  </div>
+  <div class="cardband" id="card-13"><div class="cardlabel"><span class="n">圖卡 13 / 13</span><span class="t">結論：想和做寫在同一條軌跡</span><button type="button" class="zoom" data-card="13">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">想和做寫在同一條軌跡：看得見、查得到、改得動</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 6 節：一個簡單的方法，在多跳問答、事實查核與互動決策上都有更好的表現，軌跡也能被解釋；代價是示範的長度、推理錯誤與接上行動空間的風險</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:350px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">01　想和做寫在同一條軌跡</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">推理要接地，<br>行動要有理由</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">thought 決定下一個行動，行動帶回的觀察再改寫 thought。CoT 少了編造事實的空間（幻覺 56% 對 0%），Act 也收得了尾（ALFWorld 45% 對 71%）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 只推理：靜態的黑盒子<br>✓ 交錯：為行動而推理，為推理而行動</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:350px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">02　內外知識互相當後援</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">有依據與有彈性，<br>用規則切換</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">ReAct 有依據但推理較僵，CoT 結構好但會編。用步數上限與多數答案的比例決定何時換邊；只抽 3 到 5 條，就追上 CoT-SC 抽 21 條。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 只押一種方法<br>✓ HotpotQA 35.1、FEVER 64.6 都來自組合</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:350px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">03　thought 的內容是設計決策</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">寫什麼、寫多密，<br>直接改變成功率</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">只複述回饋的 thought 讓 ALFWorld 從 71% 掉到 53%，密集或稀疏也依任務而定。thought 寫在軌跡裡，人也能中途改一句，救回一局。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">寫哪幾種、寫多密、要不要微調，<br>都是 scaffold 的選擇（整理者的讀法）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:540px; font-size:20px; font-weight:700; color:#1C2431;">作者點名、還沒做的五個方向</div>
+  <div style="position:absolute; left:60px; top:580px; width:260px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">01 &#183; 第 6 節</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">用更多人工標註微調</div>
+    <div style="font-size:12.5px; color:#6B7380;">HotpotQA 的微調初步有希望</div>
+  </div>
+  <div style="position:absolute; left:360px; top:580px; width:260px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">02 &#183; 第 6 節</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">多任務訓練、擴大規模</div>
+    <div style="font-size:12.5px; color:#6B7380;">讓 ReAct 在更多任務上訓練</div>
+  </div>
+  <div style="position:absolute; left:660px; top:580px; width:260px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">03 &#183; 第 6 節</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">結合強化學習</div>
+    <div style="font-size:12.5px; color:#6B7380;">和互補的範式結合成更強的代理</div>
+  </div>
+  <div style="position:absolute; left:960px; top:580px; width:260px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">04 &#183; 第 3.3 節註腳</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">更好的解碼方式</div>
+    <div style="font-size:12.5px; color:#6B7380;">例如 beam search，減少重複迴圈</div>
+  </div>
+  <div style="position:absolute; left:1260px; top:580px; width:260px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">05 &#183; 附錄 A.3</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">系統研究編輯 thought</div>
+    <div style="font-size:12.5px; color:#6B7380;">人機協作與人類對齊</div>
+  </div>
+  <div style="position:absolute; left:60px; top:694px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">五個方向沒有先後順序，所以不畫箭頭。第 6 節也寫了限制：動作空間大的任務需要更多示範，容易超過 in-context 的長度上限；倫理聲明提醒，把語言模型接上行動空間，可能查到不當或私密的資訊、做出有害的行動。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三條原則是整理者歸納的，✗／✓ 也是整理者的標法；數字取自表 1、表 2 與表 3。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>作者的收尾是：ReAct 是一個讓大型語言模型的推理與行動互相配合的方法，簡單卻有效；在多跳問答、事實查核與互動式決策任務上的一系列實驗顯示，它的表現更好，決策軌跡也可以解釋。雖然方法簡單，動作空間大的複雜任務需要更多示範才學得好，而這很容易超過 in-context learning 的輸入長度上限。他們在 HotpotQA 上試了微調，結果有希望，但要再進步，需要更多高品質的人工標註。把 ReAct 用多任務訓練擴大規模，並和強化學習這類互補的範式結合，可能得到更強的代理，讓大型語言模型用在更多應用上。</p>
+    <p>論文沒有獨立的限制一節。散在正文與聲明裡的代價放在一起看：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>示範會撐爆 context</strong>動作空間大的任務需要更多示範，很容易超過 in-context 的輸入長度（第 6 節）。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>結構換來推理錯誤</strong>交錯的格式讓推理比較沒有彈性，推理錯誤佔 ReAct 失敗的 47%，還包括重複同一步、跳不出來的迴圈（第 6 章）。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>搜尋落空會帶偏推理</strong>沒有資訊量的搜尋結果佔錯誤的 23%，模型很難回頭；所以才要讓 CoT-SC 當後援（第 6、7 章）。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>小模型只靠 prompt 學不會</strong>PaLM-8B、62B 做 prompting 時 ReAct 最差，要微調才翻身（第 8 章）。</div></div>
+      <div class="cascade-step"><div class="n">5</div><div class="t"><strong>重現性與風險</strong>主要實驗用的 PaLM 當時不公開，作者附上全部 prompt 與 GPT-3 版本的程式碼；把語言模型接上行動空間，可能查到不當或私密的資訊、做出有害的行動（倫理聲明）。</div></div>
+    </div>
+
+    <p>倫理聲明寫得很具體：作者把互動限制在 Wikipedia 與 WebShop 這兩個沒有私人資訊的網站，動作空間裡也沒有危險的行動，模型在 WebShop 這個研究用基準上不能真的買東西，也不能編輯 Wikipedia。他們提醒研究者，設計範圍更大的實驗之前，要先意識到這些風險。</p>
+
+    <div class="explain">
+      <span class="label">整理者的讀法</span>
+      <h4>放回這一講：scaffold 裡的設計決策</h4>
+      <p>下面是整理者的連結，論文沒有用 scaffold 這個詞。把 ReAct 當成一個 scaffold 來看，論文其實回答了好幾個設計決策：thought 要多密（知識任務每步都寫，決策任務讓模型自己決定）、thought 要寫哪幾種（第 11 章的消融顯示，只複述回饋的 thought 成功率低很多）、工具要多強（Wikipedia API 刻意做弱，逼模型用推理決定查什麼）、失敗時退回哪裡（ReAct 與 CoT-SC 互相當後援），以及要不要把軌跡拿去微調。這一講談的 plan-and-execute、reflection 等其他模式，可以用同一組問題去比較。</p>
+    </div>
+
+    <dl class="faq">
+      <div><dt>ReAct 一定比 CoT 好嗎？</dt><dd>不一定。表 1 裡單獨的 ReAct 在 FEVER 勝過 CoT（60.9 對 56.3），在 HotpotQA 略輸（27.4 對 29.4）；兩題最好的成績都來自 ReAct 與 CoT-SC 互相當後援的組合（35.1 與 64.6）。</dd></div>
+      <div><dt>需要訓練模型嗎？</dt><dd>主要實驗不用：凍結的 PaLM-540B 加一到六個人寫的示範就能跑。微調是另一個選項：用 3,000 條答對的軌跡微調 PaLM-8B 與 62B 之後，ReAct 是四種方法裡最好的。</dd></div>
+      <div><dt>thought 會不會自己亂想？</dt><dd>會。表 2 裡 ReAct 失敗的 47% 是推理錯誤，包括一再重複前一步；附錄 A.3 也有一局遊戲因為一句幻覺的 thought 而失敗。因為 thought 寫在軌跡裡，人讀得到，也能直接改掉那一句。</dd></div>
+    </dl>
+
+    <div class="pullquote bronze">
+      理由寫在行動旁邊：模型查得到該查的，人也看得出它為什麼這樣查。
+      <cite>整理自第 1、2、3.3 節</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="glossary" class="nocard glossary" data-toc="名詞速查">
+  <div class="wide">
+    <p class="eyebrow">Reference · 名詞速查</p>
+    <h2>關鍵名詞與它們在論文裡的位置</h2>
+    <p class="lede">先列 ReAct 本身的零件，再列對照組與組合方法，最後是四個基準、指標與決策任務的基線。</p>
+    <dl class="glossary-grid">
+      <div class="term"><dt>ReAct</dt><span class="zh-name">推理加行動</span><dd>讓語言模型交錯產生 thought 與任務行動的 prompting 範式；名字來自 Reason + Act（第 2 節）。</dd></div>
+      <div class="term"><dt>thought／reasoning trace</dt><span class="zh-name">推理軌跡</span><dd>語言空間裡的行動：不影響環境、沒有觀察，只把推理接到 context 後面。</dd></div>
+      <div class="term"><dt>action</dt><span class="zh-name">行動</span><dd>送進環境的動作，例如 search[entity] 或去櫃子 1。</dd></div>
+      <div class="term"><dt>observation</dt><span class="zh-name">觀察</span><dd>環境對行動的回傳，接回 context。</dd></div>
+      <div class="term"><dt>context</dt><span class="zh-name">脈絡</span><dd>到目前為止的觀察、行動與 thought 的完整紀錄；策略依它選下一個行動。</dd></div>
+      <div class="term"><dt>trajectory</dt><span class="zh-name">軌跡</span><dd>一題從開始到結束的 thought、行動、觀察序列；示範就是人寫的軌跡。</dd></div>
+      <div class="term"><dt>dense／sparse thought</dt><span class="zh-name">密集／稀疏的 thought</span><dd>知識任務每一步都寫 thought；決策任務只在關鍵位置寫，何時寫由模型決定。</dd></div>
+      <div class="term"><dt>Standard</dt><span class="zh-name">標準 prompting</span><dd>示範只剩問題與答案，刪掉所有 thought、行動、觀察的基線。</dd></div>
+      <div class="term"><dt>CoT</dt><span class="zh-name">思維鏈</span><dd>只留推理的基線：刪掉行動與觀察。</dd></div>
+      <div class="term"><dt>CoT-SC</dt><span class="zh-name">自洽性取多數</span><dd>推論時用溫度 0.7 抽 21 條 CoT，取多數的答案。</dd></div>
+      <div class="term"><dt>Act</dt><span class="zh-name">只行動</span><dd>刪掉 thought、只留行動與觀察的基線。</dd></div>
+      <div class="term"><dt>ReAct → CoT-SC</dt><span class="zh-name">先查再想</span><dd>ReAct 在 7 步（HotpotQA）或 5 步（FEVER）內沒答，就退回 CoT-SC；HotpotQA 最好的 35.1。</dd></div>
+      <div class="term"><dt>CoT-SC → ReAct</dt><span class="zh-name">先想再查</span><dd>多數答案出現不到 n/2 次，就改用 ReAct；FEVER 最好的 64.6。</dd></div>
+      <div class="term"><dt>Wikipedia API</dt><span class="zh-name">維基百科 API</span><dd>作者設計的三個動作：search、lookup、finish；刻意比當時的檢索器弱。</dd></div>
+      <div class="term"><dt>HotpotQA</dt><span class="zh-name">多跳問答</span><dd>要串起兩段以上 Wikipedia 段落的問答；用 EM 評分。</dd></div>
+      <div class="term"><dt>FEVER</dt><span class="zh-name">事實查核</span><dd>宣稱標為 SUPPORTS、REFUTES 或 NOT ENOUGH INFO；看準確率。</dd></div>
+      <div class="term"><dt>EM</dt><span class="zh-name">完全相符</span><dd>預測的答案和標準答案一字不差才算對。</dd></div>
+      <div class="term"><dt>hallucination</dt><span class="zh-name">幻覺</span><dd>推理軌跡或事實是編出來的；佔 CoT 失敗的 56%，ReAct 是 0%。</dd></div>
+      <div class="term"><dt>ALFWorld</dt><span class="zh-name">文字版家務遊戲</span><dd>和 ALFRED 對齊的合成文字遊戲，6 類任務，評 134 場沒看過的遊戲。</dd></div>
+      <div class="term"><dt>WebShop</dt><span class="zh-name">購物網站環境</span><dd>118 萬件商品、1.2 萬條指令；用 500 條測試指令評平均分數與成功率。</dd></div>
+      <div class="term"><dt>BUTLER</dt><span class="zh-name">模仿學習代理</span><dd>ALFWorld 的基線，每類任務用 10⁵ 條專家軌跡訓練，解碼用 beam search。</dd></div>
+      <div class="term"><dt>IL／IL+RL</dt><span class="zh-name">模仿學習／加強化學習</span><dd>WebShop 的基線：IL 用 1,012 條人工軌跡，IL+RL 再加 10,587 條訓練指令。</dd></div>
+      <div class="term"><dt>Inner Monologue（IM）</dt><span class="zh-name">內心獨白</span><dd>把環境回饋注入 prompt 的閉迴路系統；ReAct-IM 是作者模仿它做的消融。</dd></div>
+      <div class="term"><dt>bootstrap finetuning</dt><span class="zh-name">自舉微調</span><dd>用模型自己產生、答案正確的軌跡（3,000 條）微調較小的模型。</dd></div>
+      <div class="term"><dt>PaLM-540B</dt><span class="zh-name">主要模型</span><dd>論文用的凍結大型語言模型；附錄 A.1 另外用 GPT-3（text-davinci-002）。</dd></div>
+      <div class="term"><dt>greedy decoding</dt><span class="zh-name">貪婪解碼</span><dd>每一步都取機率最高的字；作者懷疑 ReAct 重複同一步的迴圈和它有關。</dd></div>
+      <div class="term"><dt>human-in-the-loop</dt><span class="zh-name">人機協作</span><dd>人在執行途中編輯 thought，改變代理的行為（附錄 A.3）。</dd></div>
+    </dl>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>資料來源：arXiv，〈ReAct: Synergizing Reasoning and Acting in Language Models〉，Shunyu Yao、Jeffrey Zhao、Dian Yu、Nan Du、Izhak Shafran、Karthik Narasimhan、Yuan Cao（Princeton、Google Research），2022-10-06（v3 2023-03-10；ICLR 2023）。頁面上的數字依 arXiv v3。<br><a href="https://arxiv.org/abs/2210.03629">arxiv.org/abs/2210.03629</a></p>
+    <p class="credit">整理於 2026-09-24</p>
+    <p class="disclaimer">本頁為學習用的重述與整理，不是原文逐句翻譯。觀點與著作權屬於原作者。程式片段為教學用精簡版，實際用法請以原文與官方文件為準。</p>
+  </div>
+</footer>
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="圖卡大圖"><button type="button" class="close">關閉（Esc）</button><div class="frame"></div></div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fitFrames() {
+    var frames = document.querySelectorAll('.cardband .frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  var KEY = 'rearranged-article-mode';
+  function setMode(m, save) {
+    document.body.classList.toggle('mode-cards', m === 'cards');
+    var btns = document.querySelectorAll('.modebar button[data-mode]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-mode') === m ? 'true' : 'false');
+    }
+    if (save) { try { localStorage.setItem(KEY, m); } catch (e) {} }
+    fitFrames();
+  }
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  setMode(saved === 'cards' ? 'cards' : 'full', false);
+
+  var box = document.getElementById('lightbox');
+  var boxFrame = box.querySelector('.frame');
+  function fitLightbox() {
+    if (!box.classList.contains('open')) return;
+    var root = boxFrame.firstElementChild;
+    if (!root) return;
+    var s = Math.min(1, (window.innerWidth - 48) / W, (window.innerHeight - 48) / H);
+    root.style.transform = 'scale(' + s + ')';
+    boxFrame.style.width = Math.round(W * s) + 'px';
+    boxFrame.style.height = Math.round(H * s) + 'px';
+  }
+  function openLightbox(num) {
+    var bandEl = document.getElementById('card-' + num);
+    if (!bandEl) return;
+    var root = bandEl.querySelector('.frame > div');
+    boxFrame.innerHTML = '';
+    var clone = root.cloneNode(true);
+    clone.style.transform = '';
+    boxFrame.appendChild(clone);
+    box.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    fitLightbox();
+  }
+  function closeLightbox() {
+    box.classList.remove('open');
+    boxFrame.innerHTML = '';
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var b = t.closest('.modebar button[data-mode]');
+    if (b) { setMode(b.getAttribute('data-mode'), true); return; }
+    var z = t.closest('.cardlabel .zoom');
+    if (z) { openLightbox(z.getAttribute('data-card')); return; }
+    if (t.closest('.lightbox') && !t.closest('.lightbox .frame')) { closeLightbox(); }
+  });
+  document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') closeLightbox(); });
+  window.addEventListener('resize', function () { fitFrames(); fitLightbox(); });
+  window.addEventListener('load', fitFrames);
+  fitFrames();
+})();
+</script>
+</body>
+</html>
