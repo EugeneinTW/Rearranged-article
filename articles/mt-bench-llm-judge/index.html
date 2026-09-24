@@ -1,0 +1,2102 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM-as-a-Judge（Zheng et al. 2023）</title>
+<meta name="description" content="以 UC Berkeley 為主的研究團隊（也是 Vicuna 的作者）在 2023 年系統性地研究「讓強的 LLM 當評審」：他們建了兩個以人的偏好為準的基準，80 題多輪問題的 MT-bench 與群眾匿名對戰的 Chatbot Arena，比較 GPT-4 等評審和人的判斷，也逐一檢查位置、冗長、自我偏好與數學題評不準這些限制和緩解做法。結果是 GPT-4 和人的一致程度超過 80%，和人與人之間相當。這份整理逐章重述三種評審方式、偏誤的測法、一致程度的算法與結果，每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="llm-as-a-judge, llm-evaluation, benchmarks, human-preference, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2306.05685">
+<meta name="date" content="2026-09-24">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Theme: tech-modern 變體「測試報告語意色」
+   藍 = 主色 / 綠 = pass / 琥珀 = 注意 / 紅 = fail
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --paper: #ffffff;
+  --paper-soft: #f3f5f8;
+  --paper-shadow: #dde2e8;
+  --ink: #121821;
+  --ink-soft: #3b4450;
+  --ink-mute: #6b7481;
+  --primary: #1e56a8;
+  --primary-deep: #143a72;
+  --primary-bg: #e6eef9;
+  --accent: #157a52;
+  --accent-deep: #0d5236;
+  --accent-bg: #e1f3e9;
+  --warm: #b8620e;
+  --warm-deep: #7d4108;
+  --warm-bg: #fbeddc;
+  --danger: #b83228;
+  --danger-bg: #f9e3e0;
+  --stone: #5a6370;
+  --stone-bg: #eceff3;
+  --code-bg: #0f1720;
+  --code-ink: #e6edf3;
+  --code-mute: #8b98a8;
+  --code-blue: #7cc4ff;
+  --code-green: #7ee2b8;
+  --code-amber: #ffc46b;
+
+  --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-cjk: 'Noto Sans TC', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --content-width: 780px;
+  --wide-width: 1100px;
+  --gutter: 24px;
+}
+
+/* ---------- reset & 排版 ---------- */
+* { box-sizing: border-box; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+body {
+  margin: 0; padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-cjk);
+  font-size: 18px;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: var(--content-width); margin: 0 auto; padding: 0 var(--gutter); }
+.wide { max-width: var(--wide-width); margin: 0 auto; padding: 0 var(--gutter); }
+section { padding-block: 64px; }
+section + section { border-top: 1px solid var(--paper-shadow); }
+
+h1, h2, h3, h4 { font-family: var(--font-cjk); font-weight: 700; text-wrap: balance; }
+h1 { font-size: 56px; line-height: 1.14; margin: 0 0 24px; font-weight: 800; }
+h2 { font-size: 36px; line-height: 1.25; margin: 0 0 18px; letter-spacing: -0.01em; }
+h2 .seg { display: inline-block; }
+h3 { font-size: 25px; line-height: 1.35; margin: 44px 0 14px; }
+h4 { font-size: 20px; line-height: 1.4; margin: 26px 0 10px; }
+p { margin: 0 0 18px; }
+ul, ol { padding-left: 26px; margin: 0 0 18px; }
+li { margin-bottom: 8px; }
+em { font-style: normal; color: var(--primary-deep); font-weight: 600; }
+strong { font-weight: 700; }
+a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+code {
+  font-family: var(--font-mono); font-size: 0.86em;
+  background: var(--stone-bg); color: var(--primary-deep);
+  padding: 2px 6px; border-radius: 4px;
+}
+.mono { font-family: var(--font-mono); }
+
+/* ---------- Hero ---------- */
+.hero {
+  padding-block: 84px 60px;
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-soft) 100%);
+  border-bottom: 2px solid var(--primary-deep);
+  position: relative;
+}
+.hero::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: linear-gradient(90deg,
+    var(--primary) 0%, var(--primary) 25%,
+    var(--accent) 25%, var(--accent) 50%,
+    var(--warm) 50%, var(--warm) 75%,
+    var(--danger) 75%, var(--danger) 100%);
+}
+.hero-meta {
+  display: flex; flex-wrap: wrap; gap: 10px 22px;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  margin-bottom: 32px;
+}
+.hero-meta span::before { content: "—"; margin-right: 10px; color: var(--paper-shadow); }
+.hero-meta span:first-child::before { content: ""; margin: 0; }
+.hero h1 { font-size: 60px; font-weight: 800; word-break: keep-all; }
+.hero h1 .accent {
+  display: block; margin-top: 12px;
+  font-size: 0.55em; font-weight: 600; line-height: 1.3;
+  color: var(--primary-deep);
+}
+.hero .lede { font-size: 22px; max-width: 720px; }
+.hero-keystat {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 28px; margin: 44px 0 0; padding-top: 34px;
+  border-top: 1px dashed var(--paper-shadow);
+}
+.hero-keystat dt {
+  font-family: var(--font-sans);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--ink-mute); margin-bottom: 6px;
+}
+.hero-keystat dd {
+  margin: 0; font-family: var(--font-mono);
+  font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1;
+}
+.hero-keystat dd small { font-family: var(--font-cjk); font-size: 14px; color: var(--ink-mute); font-weight: 400; margin-left: 6px; }
+
+/* ---------- Chapter / lede / eyebrow ---------- */
+.chapter {
+  font-family: var(--font-mono);
+  font-size: 12.5px; color: var(--primary);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 0 0 10px;
+}
+.chapter::before { content: "§ "; color: var(--paper-shadow); margin-right: 4px; }
+.lede {
+  font-size: 22px; line-height: 1.6; color: var(--ink-soft);
+  margin: 0 0 28px; font-weight: 400;
+}
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--primary); margin: 0 0 14px;
+}
+
+/* ---------- Pull quote ---------- */
+.pullquote {
+  margin: 48px -16px; padding: 32px 40px;
+  font-family: var(--font-cjk);
+  font-size: 27px; line-height: 1.5; font-weight: 600;
+  color: var(--primary-deep);
+  border-left: 5px solid var(--primary);
+  background: linear-gradient(90deg, var(--primary-bg) 0%, transparent 100%);
+}
+.pullquote.bronze {
+  color: var(--accent-deep); border-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-bg) 0%, transparent 100%);
+}
+.pullquote.terra {
+  color: var(--warm-deep); border-color: var(--warm);
+  background: linear-gradient(90deg, var(--warm-bg) 0%, transparent 100%);
+}
+.pullquote cite {
+  display: block; margin-top: 16px; font-style: normal; font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  letter-spacing: 0.06em;
+}
+.pullquote cite::before { content: "— "; }
+
+/* ---------- English quote ---------- */
+.quote-en {
+  margin: 28px 0;
+  font-family: var(--font-sans); font-style: italic;
+  font-size: 21px; line-height: 1.5; color: var(--ink);
+  padding-left: 20px; border-left: 3px solid var(--accent);
+}
+.quote-en .zh {
+  display: block; margin-top: 10px;
+  font-family: var(--font-cjk); font-style: normal;
+  font-size: 15px; color: var(--ink-soft); line-height: 1.6;
+}
+
+/* ---------- Story ---------- */
+.story {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 14px;
+  padding: 38px 44px; margin: 48px 0;
+  position: relative;
+}
+.story::before {
+  content: "❝"; position: absolute; top: -6px; left: 24px;
+  font-size: 72px; color: var(--warm); line-height: 1;
+  font-family: var(--font-sans);
+}
+.story .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.18em;
+  color: var(--warm); margin-bottom: 10px; padding-left: 42px;
+}
+.story h4 { margin: 0 0 16px; font-size: 22px; color: var(--warm-deep); }
+.story p { margin-bottom: 14px; font-size: 17px; line-height: 1.7; }
+.story p:last-child { margin-bottom: 0; }
+
+/* ---------- Explain ---------- */
+.explain {
+  background: var(--primary-bg);
+  border-left: 4px solid var(--primary);
+  border-radius: 4px;
+  padding: 26px 30px; margin: 36px 0;
+  font-family: var(--font-cjk); position: relative;
+}
+.explain.bronze { background: var(--accent-bg); border-color: var(--accent); }
+.explain.terra { background: var(--warm-bg); border-color: var(--warm); }
+.explain.stone { background: var(--stone-bg); border-color: var(--stone); }
+.explain .label {
+  position: absolute; top: -12px; left: 16px;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.15em; padding: 4px 12px;
+  border-radius: 3px; text-transform: uppercase;
+}
+.explain.bronze .label { background: var(--accent); }
+.explain.terra .label { background: var(--warm); }
+.explain.stone .label { background: var(--stone); }
+.explain h4 { margin: 4px 0 12px; font-size: 19px; color: var(--primary-deep); }
+.explain.bronze h4 { color: var(--accent-deep); }
+.explain.terra h4 { color: var(--warm-deep); }
+.explain.stone h4 { color: var(--ink); }
+.explain p { font-size: 16.5px; }
+.explain p:last-child { margin-bottom: 0; }
+.explain ul, .explain ol { margin: 8px 0 0; padding-left: 22px; }
+.explain li { margin-bottom: 6px; font-size: 16px; }
+.explain code { background: rgba(255,255,255,0.75); }
+
+/* ---------- Stat grid ---------- */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.stat-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 28px 24px; text-align: center;
+  border-top: 4px solid var(--primary);
+}
+.stat-card.bronze { border-color: var(--accent); }
+.stat-card.terra { border-color: var(--warm); }
+.stat-card.danger { border-color: var(--danger); }
+.stat-card .big {
+  font-family: var(--font-mono);
+  font-size: 46px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1; margin-bottom: 10px;
+}
+.stat-card.bronze .big { color: var(--accent-deep); }
+.stat-card.terra .big { color: var(--warm-deep); }
+.stat-card.danger .big { color: var(--danger); }
+.stat-card .big small { font-family: var(--font-cjk); font-size: 16px; opacity: 0.75; margin-left: 4px; font-weight: 500; }
+.stat-card .label {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.stat-card .note { margin-top: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.55; }
+
+/* ---------- Compare table ---------- */
+.table-scroll { overflow-x: auto; margin: 36px 0; }
+.compare {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-cjk); font-size: 15.5px;
+  background: var(--paper-soft);
+  border-radius: 10px; overflow: hidden;
+  min-width: 560px;
+}
+.compare th, .compare td {
+  padding: 15px 18px; text-align: left;
+  border-bottom: 1px solid var(--paper-shadow);
+  vertical-align: top; line-height: 1.6;
+}
+.compare th {
+  background: var(--primary-deep); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+}
+.compare tr:last-child td { border-bottom: none; }
+.compare td:first-child { font-weight: 700; color: var(--primary-deep); width: 24%; }
+.compare .id { font-family: var(--font-mono); font-size: 13px; display: block; color: var(--ink-mute); font-weight: 500; margin-bottom: 2px; }
+.compare .yes { color: var(--accent-deep); font-weight: 700; }
+.compare .no { color: var(--danger); font-weight: 700; }
+
+/* ---------- Value cards ---------- */
+.values {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.value-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 26px 24px;
+  border-top: 5px solid var(--primary);
+}
+.value-card:nth-child(2) { border-top-color: var(--accent); }
+.value-card:nth-child(3) { border-top-color: var(--warm); }
+.value-card:nth-child(4) { border-top-color: var(--primary-deep); }
+.value-card:nth-child(5) { border-top-color: var(--stone); }
+.value-card .num {
+  font-family: var(--font-mono);
+  font-size: 38px; font-weight: 700;
+  color: var(--primary); line-height: 1; margin-bottom: 12px;
+}
+.value-card:nth-child(2) .num { color: var(--accent); }
+.value-card:nth-child(3) .num { color: var(--warm); }
+.value-card:nth-child(4) .num { color: var(--primary-deep); }
+.value-card:nth-child(5) .num { color: var(--stone); }
+.value-card .tag {
+  display: inline-block; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--primary); margin-bottom: 10px;
+}
+.value-card:nth-child(2) .tag { color: var(--accent); }
+.value-card:nth-child(3) .tag { color: var(--warm); }
+.value-card:nth-child(4) .tag { color: var(--primary-deep); }
+.value-card h4 { margin: 0 0 10px; font-size: 19px; line-height: 1.4; }
+.value-card p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin: 0; }
+
+/* ---------- 擴充檢查卡（附成本標籤） ---------- */
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px; margin: 40px 0;
+}
+.card {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 12px;
+  padding: 24px 24px 22px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.card .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card h4 { margin: 0; font-size: 18.5px; line-height: 1.4; }
+.card p { margin: 0; font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); }
+.card .signal { font-family: var(--font-mono); font-size: 12.5px; color: var(--primary-deep); background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 6px; padding: 6px 10px; margin-top: 4px; overflow-x: auto; white-space: nowrap; }
+.pill {
+  flex: none; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px;
+}
+.pill.fast { background: var(--accent-bg); color: var(--accent-deep); }
+.pill.mid { background: var(--warm-bg); color: var(--warm-deep); }
+.pill.slow { background: var(--danger-bg); color: var(--danger); }
+
+/* ---------- Thought ---------- */
+.thought {
+  background: var(--accent-bg);
+  border-left: 4px solid var(--accent);
+  padding: 26px 30px; margin: 40px 0;
+  border-radius: 4px; position: relative;
+}
+.thought .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--accent-deep); margin-bottom: 10px;
+}
+.thought h4 { font-size: 19px; margin: 0 0 14px; color: var(--accent-deep); line-height: 1.45; }
+.thought p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin-bottom: 8px; }
+.thought .hint {
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px dashed rgba(13, 82, 54, 0.3);
+  font-size: 14px; color: var(--accent-deep);
+}
+.thought .hint::before { content: "建議方向："; font-weight: 700; }
+
+/* ---------- Code block ---------- */
+.codeblock { margin: 30px 0; }
+.codeblock .file {
+  display: inline-block; font-family: var(--font-mono);
+  font-size: 12px; color: var(--ink-mute);
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow); border-bottom: none;
+  border-radius: 8px 8px 0 0; padding: 7px 14px;
+}
+pre.code {
+  margin: 0; background: var(--code-bg); color: var(--code-ink);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65;
+  padding: 22px 24px; border-radius: 0 10px 10px 10px;
+  overflow-x: auto; tab-size: 2; white-space: pre;
+}
+pre.code.solo { border-radius: 10px; }
+pre.code .c { color: var(--code-mute); }
+pre.code .k { color: var(--code-blue); }
+pre.code .s { color: var(--code-green); }
+pre.code .a { color: var(--code-amber); font-weight: 700; }
+
+/* ---------- Flow（eval 迴圈圖） ---------- */
+.flow { display: flex; align-items: stretch; margin: 40px 0; }
+.flow-step {
+  flex: 1 1 0; min-width: 0;
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow);
+  border-radius: 10px; padding: 18px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.flow-step .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--primary); letter-spacing: 0.1em; }
+.flow-step strong { font-size: 17px; line-height: 1.3; }
+.flow-step span.d { font-size: 14px; line-height: 1.55; color: var(--ink-soft); }
+.flow-step.score { border-color: var(--accent); background: var(--accent-bg); }
+.flow-step.score .k { color: var(--accent-deep); }
+.flow-arrow { flex: none; width: 30px; position: relative; }
+.flow-arrow::before {
+  content: ""; position: absolute; top: 50%; left: 2px; right: 2px; height: 2px;
+  background: var(--primary); transform: translateY(-50%);
+}
+.flow-arrow::after {
+  content: ""; position: absolute; top: 50%; right: 4px; width: 9px; height: 9px;
+  border-top: 2px solid var(--primary); border-right: 2px solid var(--primary);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+/* ---------- Cascade（編號步驟） ---------- */
+.cascade { display: flex; flex-direction: column; gap: 14px; margin: 32px 0; }
+.cascade-step {
+  display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px;
+}
+.cascade-step .n {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-mono); font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.cascade-step .t { font-size: 16.5px; line-height: 1.65; }
+.cascade-step .t strong { display: block; margin-bottom: 2px; }
+
+/* ---------- Checklist ---------- */
+.checklist { list-style: none; padding: 0; margin: 32px 0; display: flex; flex-direction: column; gap: 12px; }
+.checklist li {
+  display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px; margin: 0;
+  font-size: 16.5px; line-height: 1.65;
+}
+.checklist .box {
+  width: 24px; height: 24px; margin-top: 3px;
+  border: 2px solid var(--accent); border-radius: 6px; background: var(--paper);
+}
+.checklist strong { display: block; }
+.checklist small { display: block; color: var(--ink-soft); font-size: 15px; }
+
+/* ---------- Glossary ---------- */
+.glossary { background: var(--primary-deep); color: var(--paper); padding-block: 64px; }
+.glossary h2 { color: var(--paper); margin-top: 0; }
+.glossary .eyebrow { color: var(--accent-bg); }
+.glossary .lede { color: var(--paper); opacity: 0.8; }
+.glossary-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 26px; margin: 42px 0 0;
+}
+.term { border-top: 2px solid var(--accent); padding-top: 16px; }
+.term:nth-child(3n+2) { border-color: var(--warm); }
+.term:nth-child(3n+3) { border-color: var(--paper); }
+.term dt {
+  font-family: var(--font-mono);
+  font-size: 14px; font-weight: 700;
+  color: var(--accent-bg); letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+.term .zh-name { font-family: var(--font-cjk); font-size: 16px; font-weight: 600; color: var(--paper); margin-bottom: 8px; display: block; }
+.term dd { margin: 0; font-family: var(--font-cjk); font-size: 14.5px; line-height: 1.65; color: rgba(255, 255, 255, 0.8); }
+
+/* ---------- TOC ---------- */
+.toc {
+  position: fixed; right: 24px; top: 50%; transform: translateY(-50%); z-index: 10;
+  font-family: var(--font-sans); font-size: 12px;
+  background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 10px;
+  padding: 18px 20px; max-width: 236px;
+  box-shadow: 0 4px 18px rgba(18, 24, 33, 0.08);
+}
+.toc h5 { margin: 0 0 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-mute); }
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc -1; }
+.toc li { margin-bottom: 6px; counter-increment: toc; font-size: 12px; line-height: 1.45; display: flex; gap: 8px; }
+.toc li::before { content: counter(toc, decimal-leading-zero); font-family: var(--font-mono); color: var(--ink-mute); font-size: 10.5px; padding-top: 2px; }
+.toc a { color: var(--ink-soft); text-decoration: none; }
+.toc a:hover { color: var(--primary); }
+@media (max-width: 1340px) { .toc { display: none; } }
+
+/* ---------- Footer ---------- */
+footer {
+  padding-block: 48px 64px;
+  background: var(--paper-soft);
+  text-align: center;
+  font-family: var(--font-cjk);
+  font-size: 13.5px; color: var(--ink-mute);
+}
+footer p { margin: 0 0 8px; }
+footer .credit { font-family: var(--font-sans); }
+footer .disclaimer { margin-top: 14px; font-size: 12px; opacity: 0.75; max-width: 640px; margin-inline: auto; }
+
+/* ---------- 響應式 ---------- */
+@media (max-width: 768px) {
+  body { font-size: 17px; }
+  .hero { padding-block: 56px 42px; }
+  .hero h1 { font-size: 36px; }
+  .hero .lede { font-size: 18px; }
+  h2 { font-size: 27px; }
+  h3 { font-size: 22px; }
+  section { padding-block: 46px; }
+  .lede { font-size: 19px; }
+  .pullquote { font-size: 21px; margin: 34px 0; padding: 24px; }
+  .story { padding: 30px 24px; }
+  .stat-card .big { font-size: 36px; }
+  .flow { flex-direction: column; }
+  .flow-arrow { width: auto; height: 30px; }
+  .flow-arrow::before { top: 2px; bottom: 2px; left: 50%; right: auto; width: 2px; height: auto; transform: translateX(-50%); }
+  .flow-arrow::after { top: auto; bottom: 4px; left: 50%; right: auto; transform: translateX(-50%) rotate(135deg); }
+  .compare td:first-child { width: auto; }
+}
+
+/* ---------- 列印 ---------- */
+@media print {
+  .toc { display: none; }
+  body { font-size: 12pt; }
+  .hero, .glossary {
+    color: var(--ink) !important; background: white !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .glossary h2, .glossary .term dt, .glossary .lede, .glossary .term .zh-name { color: var(--ink) !important; }
+  .glossary .term dd { color: var(--ink-soft) !important; }
+  pre.code { background: #f3f5f8 !important; color: #121821 !important; border: 1px solid #ccd; white-space: pre-wrap; }
+  pre.code .c, pre.code .k, pre.code .s, pre.code .a { color: inherit !important; }
+  section { page-break-inside: avoid; }
+}
+
+/* ---------- 整合版：模式列、圖卡帶、燈箱 ---------- */
+.modebar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; padding: 10px var(--gutter); background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--paper-shadow); font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.modebar .brand { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.modebar .left { display: flex; align-items: center; gap: 14px; }
+.modebar .homelink { font-size: 12px; font-weight: 600; color: var(--ink-mute); text-decoration: none; }
+.modebar .homelink:hover { color: var(--primary); text-decoration: underline; }
+.modebar .switch { display: flex; gap: 6px; }
+.modebar button { font: inherit; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.modebar button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+.modebar button:focus-visible, .cardlabel .zoom:focus-visible, .lightbox .close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.modebar .canvaslink { font-size: 12px; color: var(--ink-mute); }
+.cardband { max-width: 1600px; margin: 4px auto 40px; padding: 0 var(--gutter); }
+.cardlabel { display: flex; align-items: baseline; gap: 14px; padding: 0 2px 8px; font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.cardlabel .n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--warm); }
+.cardlabel .zoom { margin-left: auto; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--paper-shadow); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; font-size: 16px; color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(18, 24, 33, 0.86); display: none; align-items: center; justify-content: center; padding: 24px; }
+.lightbox.open { display: flex; }
+.lightbox .frame { border: none; border-radius: 8px; max-width: none; width: auto; flex: none; }
+.lightbox .close { position: absolute; top: 14px; right: 18px; font: inherit; font-family: var(--font-sans); font-size: 13px; color: #FFFFFF; background: transparent; border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.faq { margin: 36px 0 8px; padding: 0; }
+.faq > div { padding: 18px 0; border-top: 1px solid var(--paper-shadow); }
+.faq > div:last-child { border-bottom: 1px solid var(--paper-shadow); }
+.faq dt { margin: 0 0 6px; font-weight: 700; font-size: 17px; color: var(--ink); }
+.faq dt::before { content: "問"; display: inline-block; margin-right: 10px; padding: 1px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; color: #FFFFFF; background: var(--primary); vertical-align: 2px; }
+.faq dd { margin: 0; font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+body.mode-cards section .prose { display: none; }
+body.mode-cards section.nocard { display: none; }
+body.mode-cards section { padding-block: 44px; }
+body.mode-cards .toc li.nocard { display: none; }
+@media (max-width: 768px) { .cardband { margin-bottom: 32px; } .modebar { font-size: 12px; } }
+@media print {
+  .modebar, .lightbox, .cardlabel .zoom { display: none !important; }
+  body.mode-cards section .prose { display: block !important; }
+  body.mode-cards section.nocard { display: block !important; }
+  section { page-break-inside: auto; }
+  .cardband, .story, .explain, .thought, .stat-grid, .values, .cards, .table-scroll { page-break-inside: avoid; }
+  .frame { height: auto !important; border: none; border-radius: 0; }
+  .frame > div { transform: none !important; zoom: 0.44; }
+}
+
+</style>
+</head>
+<body>
+<div class="modebar">
+  <div class="left"><a class="homelink" href="../../">← 首頁</a><span class="brand">LLM Judge 2023 · 圖卡 + 教材</span></div>
+  <div class="switch" role="group" aria-label="閱讀模式">
+    <button type="button" data-mode="full" aria-pressed="true">圖卡＋詳解</button>
+    <button type="button" data-mode="cards" aria-pressed="false">只看圖卡</button>
+  </div>
+  <a class="canvaslink" href="cards.html">圖卡連續閱讀版</a>
+</div>
+<nav class="toc" aria-label="目錄">
+  <h5>目錄</h5>
+  <ol>
+    <li class="nocard"><a href="#prologue">第 8 週為什麼讀它</a></li>
+    <li><a href="#why-judge">為什麼要 LLM 評審</a></li>
+    <li><a href="#two-benchmarks">兩個基準怎麼建</a></li>
+    <li><a href="#judge-types">三種評審方式</a></li>
+    <li><a href="#position-bias">位置偏誤</a></li>
+    <li><a href="#verbosity-bias">冗長偏誤</a></li>
+    <li><a href="#math-grading">數學題評不準</a></li>
+    <li><a href="#multi-turn">多輪對話怎麼評</a></li>
+    <li><a href="#agreement-metric">一致程度怎麼算</a></li>
+    <li><a href="#agreement-results">和人對得上嗎</a></li>
+    <li class="nocard"><a href="#win-rates">勝率與自我偏好</a></li>
+    <li><a href="#two-kinds">兩種基準互補</a></li>
+    <li><a href="#vicuna-judge">微調小模型當評審</a></li>
+    <li><a href="#takeaways">限制與結論</a></li>
+    <li class="nocard"><a href="#glossary">名詞速查</a></li>
+  </ol>
+</nav>
+<header class="hero">
+  <div class="container">
+    <div class="hero-meta">
+      <span>arXiv · 2023-06-09（v4 2023-12-24；NeurIPS 2023 Datasets and Benchmarks Track）</span>
+      <span>研究論文（UC Berkeley、UC San Diego、Carnegie Mellon University、Stanford、MBZUAI，NeurIPS 2023 D&amp;B）</span>
+      <span>作者 Lianmin Zheng、Wei-Lin Chiang、Ying Sheng（共同第一作者）等 13 人</span>
+    </div>
+    <p class="eyebrow">LLM JUDGE · MT-BENCH · 圖卡＋教材整合版</p>
+    <h1>LLM 當評審， 和人對得上嗎？<span class="accent"><span style="white-space:nowrap">MT-bench</span> 與 Chatbot Arena： <span style="white-space:nowrap">GPT-4</span> 和人的一致程度超過八成， 追平人和人</span></h1>
+    <p class="lede">聊天助手答得好不好，選擇題考不太出來，請人評又慢又貴。這篇 2023 年的論文讓 GPT-4 這類強 LLM 當評審，建了兩個以人的偏好為準的基準來檢驗它：80 題兩輪問題的 MT-bench，以及群眾匿名對戰的 Chatbot Arena；同時逐一量出評審會偏在哪裡、怎麼緩解。結論是 GPT-4 和人的一致程度超過 80%，和人與人之間相當。每章開頭先放一張圖解卡講重點，往下是詳細作法；想速讀就切到「只看圖卡」。</p>
+    <dl class="hero-keystat">
+      <div><dt><span style="white-space:nowrap">GPT-4</span> 對人 · 不計平手</dt><dd>85<small>%</small></dd></div>
+      <div><dt>人對人 · 不計平手</dt><dd>81<small>%</small></dd></div>
+      <div><dt><span style="white-space:nowrap">MT-bench</span> 兩輪問題</dt><dd>80<small>題</small></dd></div>
+      <div><dt>Arena 一個月收到約</dt><dd>30K<small>票</small></dd></div>
+    </dl>
+  </div>
+</header>
+
+
+<section id="prologue" data-toc="第 8 週為什麼讀它" class="nocard">
+  <div class="container">
+    <p class="chapter">Prologue · 整理者的引言</p>
+    <h2><span class="seg">讓 LLM 當評審之前，</span><span class="seg">先量它和人合不合</span></h2>
+    <p class="lede">Stanford CS 329Z 第 8 週「LLM-as-Judge &amp; Evaluation Infrastructure」那一講（Evaluation for Agentic Systems 分區），談三種 grader、judge prompt 怎麼設計、已知的偏誤、pairwise 對 pointwise、非確定性的指標（pass@k 對 pass^k）、harness 設計，以及 Anthropic 的八步路線圖。這篇論文是這一講的必讀，它把「讓 LLM 當評審」當成要檢驗的方法。</p>
+
+    <p>同一講的另兩篇必讀是 Anthropic 的〈Demystifying evals for AI agents〉與 AutoMetrics（Ryan 等人），選讀是 AutoLibra。這篇的年代比它們早，處理的對象也單純一些：聊天助手對一個問題的回答，還沒有 agent 的多步驟軌跡。它回答的是這一講最基本的兩個問題：用一個 LLM 替另一個 LLM 的回答打分，和人的判斷對得上嗎？會在哪些地方偏掉？</p>
+    <p>整理者的補充：本站整理過的〈Who Validates the Validators?〉也在問 LLM 評估器和人對不對得上，那篇的做法是請人評一小部分輸出，再拿這些評分去挑評估器。</p>
+    <p>把這一講的講題對到論文裡的內容，大致如下。這張表是整理者的對照，論文沒有用這些講題分類。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>這一講的講題</th><th>論文裡對應的內容（整理者的對照）</th><th>本頁在哪一章</th></tr></thead>
+        <tbody>
+          <tr><td>三種 grader</td><td>規則程式與 ROUGE、BLEU 評不了開放式問題；人評是黃金標準，但又慢又貴；LLM 評審是作者提的第三條路</td><td>第 1、3 章</td></tr>
+          <tr><td>judge prompt 怎麼設計</td><td>附錄 A 的六個 prompt：先寫理由再照格式給判定、CoT 版、參考答案版、多輪版</td><td>第 3、6、7 章</td></tr>
+          <tr><td>已知的偏誤</td><td>位置偏誤、冗長偏誤、自我偏好，以及數學與推理題評不準</td><td>第 4、5、6、10 章</td></tr>
+          <tr><td>pairwise 對 pointwise</td><td>成對比較與單一答案評分各自的代價；GPT-4 的單一答案評分和成對比較、和人都很一致</td><td>第 3、9 章</td></tr>
+          <tr><td>非確定性的指標</td><td>論文沒有處理 pass@k 與 pass^k；最接近的是對調順序各判一次、兩次都贏才算贏（整理者的類比）</td><td>第 4 章</td></tr>
+          <tr><td>harness 設計</td><td>收人評的介面與流程、一致程度的算法、公開的題目與投票資料</td><td>第 2、8 章</td></tr>
+          <tr><td>Anthropic 的八步路線圖</td><td>論文沒有處理</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>十三位作者多數來自 UC Berkeley，也有 UC San Diego、Carnegie Mellon University、Stanford 與 MBZUAI 的成員，前三位是共同第一作者。論文是作者早先 Vicuna 部落格文章的延伸版。Vicuna 是作者拿 LLaMA 在對話資料上微調的模型，MT-bench 與 Chatbot Arena 也是作者建的，所以本頁提到作者對這三者的評價時，一律寫成「作者說」。arXiv 上最早是 2023 年 6 月 9 日的 v1，最新是 12 月 24 日的 v4；v4 的 PDF 第一頁標明它是 NeurIPS 2023 Datasets and Benchmarks Track 的論文。早期版本有些數字與 prompt 不同，本頁一律依 v4。</p>
+    <p>文中的模型（GPT-4、GPT-3.5、Claude-v1、Vicuna、LLaMA 等）與它們的高下，都是 2023 年寫作當時的狀態。附錄的案例由 gpt-4-0314 產生，作者也提醒，換成之後的 GPT-4 版本不一定重現得出來。</p>
+    <p>處理方式先交代。章節跟著論證走：第 1 到 3 章是問題、兩個基準與三種評審方式；第 4 到 7 章是評審的限制與對應的做法（位置、冗長、數學題、多輪）；第 8 到 10 章是一致程度的算法、結果與勝率；第 11、12 章是延伸（和知識類基準互補、微調小模型當評審）；第 13 章是限制與結論。有三處合併：位置偏誤與數學題這兩個限制，各自和專屬的解法放同一章；自我偏好放進第 10 章，因為它的證據就是那一章的勝率圖。數字只用正文、表格，以及圖上印出的文字與數字；圖 2、3、4 沒有標數字，只轉述作者的描述。論文前後寫法不一致的地方，兩邊都寫出來。prompt 與案例都是教學用的中文精簡版。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>論文的用語</th><th>意思（整理者加的對照）</th><th>這一頁怎麼寫</th></tr></thead>
+        <tbody>
+          <tr><td>LLM-as-a-judge</td><td>讓 LLM 讀問題與回答，判斷好壞或打分數</td><td>LLM 評審、評審</td></tr>
+          <tr><td>pairwise comparison</td><td>給評審一個問題、兩個回答，選較好的或判平手</td><td>成對比較（pairwise）</td></tr>
+          <tr><td>single answer grading</td><td>只給一個回答，直接打 1 到 10 分</td><td>單一答案評分（pointwise）</td></tr>
+          <tr><td>reference-guided grading</td><td>評審的 prompt 裡附上參考答案</td><td>參考答案引導</td></tr>
+          <tr><td>position／verbosity／self-enhancement bias</td><td>偏好某個位置、偏好較長的回答、偏好自己產生的回答</td><td>位置偏誤、冗長偏誤、自我偏好</td></tr>
+          <tr><td>consistency</td><td>對調兩個回答的順序後，判定維持不變的比例</td><td>一致率（只用在位置偏誤的測試）</td></tr>
+          <tr><td>agreement</td><td>兩類評審各隨機挑一位，在隨機一題上投票相同的機率</td><td>一致程度</td></tr>
+          <tr><td>win rate</td><td>一個模型勝過對手的比例；平均勝率是對所有對手的平均</td><td>勝率、平均勝率</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>先把幾個名詞對齊</h4>
+      <ul>
+        <li><strong>MMLU</strong>：涵蓋幾十個學科的選擇題基準；答案很短，可以用程式自動對答案。</li>
+        <li><strong>RLHF</strong>：用人的回饋做強化學習來調整模型，讓回答更合人的偏好。</li>
+        <li><strong>基底模型與微調模型</strong>：LLaMA-13B 只做過預訓練；Vicuna-13B 是作者拿它在對話資料上再訓練的版本。</li>
+        <li><strong>平手與非平手票</strong>：評一對回答時可以選 A、B 或平手；有些統計只算選了其中一方的票。</li>
+      </ul>
+    </div>
+
+    <div class="pullquote">
+      評審也是一個模型；它和人合不合，要一題一題量出來。
+      <cite>整理者的引言</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="why-judge" data-toc="為什麼要 LLM 評審">
+  <div class="container head">
+    <p class="chapter">Chapter 01 · Introduction · Motivation</p>
+    <h2><span class="seg">選擇題考不出，</span><span class="seg">人偏好哪個助手</span></h2>
+    <p class="lede">調過的聊天助手人明顯比較喜歡，MMLU、HELM 這類傳統基準卻分不太出它和原本的基底模型。人評分得出來，但又慢又貴；作者提議讓 GPT-4 這類強 LLM 代替人當評審，並先系統性地檢查這個做法。</p>
+    
+  </div>
+  <div class="cardband" id="card-02"><div class="cardlabel"><span class="n">圖卡 02 / 13</span><span class="t">一題選擇題加一個追問</span><button type="button" class="zoom" data-card="02">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">選擇題答對了，多問一句就分出高下</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 1：一題 MMLU 選擇題加一個追問，LLaMA-13B 與 Vicuna-13B 各答兩輪，再請 GPT-4 讀完兩段對話，判斷哪個助手答得比較好</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0; white-space:nowrap;">ASSISTANT A &#183; LLAMA-13B</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;"><span style="white-space:nowrap">LLaMA-13B</span>：只做過預訓練的基底模型</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0; white-space:nowrap;">ASSISTANT B &#183; VICUNA-13B</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;"><span style="white-space:nowrap">Vicuna-13B</span>：作者拿它在對話資料上微調的版本</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:342px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:218px; width:700px; height:38px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#4B5866;">Q1</div><div style="font-size:14px; font-weight:700; color:#1C2431;">MMLU：聯準會在次級市場買債，貨幣供給會怎樣？只輸出選項</div></div>
+  <div style="position:absolute; left:60px; top:266px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">ANS</div><div style="font-size:14px; color:#2B3340;">聯準會在次級市場買債，是為了增加貨幣供給。</div></div>
+  <div style="position:absolute; left:60px; top:304px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#4B5866;">Q2</div><div style="font-size:14px; font-weight:700; color:#1C2431;">追問：這對我的日常生活有什麼影響？舉 3 個例子</div></div>
+  <div style="position:absolute; left:60px; top:342px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">ANS 1</div><div style="font-size:14px; color:#2B3340;">增加貨幣供給。</div></div>
+  <div style="position:absolute; left:60px; top:380px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">ANS 2</div><div style="font-size:14px; color:#2B3340;">增加貨幣供給，並降低貼現率。</div></div>
+  <div style="position:absolute; left:60px; top:418px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">ANS 3</div><div style="font-size:14px; color:#2B3340;">增加貨幣供給、降低貼現率，再增加貨幣供給。</div></div>
+  <div style="position:absolute; left:60px; top:460px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">第一輪沒照「只輸出選項」的要求；追問的三點都在重複「增加貨幣供給」。</div>
+
+  <div style="position:absolute; left:840px; top:218px; width:700px; height:38px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#4B5866;">Q1</div><div style="font-size:14px; font-weight:700; color:#1C2431;">同一題：聯準會在次級市場買債，貨幣供給會怎樣？</div></div>
+  <div style="position:absolute; left:840px; top:266px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">ANS</div><div style="font-size:14px; color:#2B3340;">(A) 貨幣供給會增加。</div></div>
+  <div style="position:absolute; left:840px; top:304px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#4B5866;">Q2</div><div style="font-size:14px; font-weight:700; color:#1C2431;">同一個追問：對日常生活的影響，舉 3 個例子</div></div>
+  <div style="position:absolute; left:840px; top:342px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">ANS 1</div><div style="font-size:14px; color:#2B3340;">利率：聯準會的動作會影響借錢的成本。</div></div>
+  <div style="position:absolute; left:840px; top:380px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">ANS 2</div><div style="font-size:14px; color:#2B3340;">通膨：貨幣供給增加，物價可能跟著上漲。</div></div>
+  <div style="position:absolute; left:840px; top:418px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">ANS 3</div><div style="font-size:14px; color:#2B3340;">就業：經濟成長可能帶來更多工作機會。</div></div>
+  <div style="position:absolute; left:840px; top:460px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">第一輪只給選項；追問舉了三個不同面向的例子，每一點各有說明。</div>
+
+  <div style="position:absolute; left:60px; top:506px; width:1480px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#1F2A3A; background-color:#FFFFFF;">GPT-4 的判斷</div>
+    <div style="font-size:15px; color:#FFFFFF;">A 答錯了問題，回答重複、沒有清楚的例子；B 切題也正確，舉了利率、通膨、就業三個清楚的例子。B 較好。</div>
+  </div>
+  <div style="position:absolute; left:800px; top:572px; width:0px; height:218px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">傳統基準的分數，看不出這個差距</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">表 8：MMLU（5-shot）LLaMA-13B 47.0、Vicuna-13B 52.1；<br>用 GPT-4 評的 MT-bench 分數，卻是 2.61 對 6.39。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">作者說基底模型在傳統基準上有競爭力，開放式問答卻常不被人喜歡。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">人評最準，但又慢又貴</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">開放式問題多半沒有參考答案，規則程式寫不出來；<br>ROUGE、BLEU 這類相似度指標也不管用。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">作者的做法：讓經過 RLHF 的強 LLM 代替人評分，叫它 <span style="white-space:nowrap">LLM-as-a-judge</span>。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩個助手的回答依圖 1 精簡改寫成中文；Vicuna-13B 是作者自己的模型。GPT-4 的評語說 B 正確，第 1 章另有整理者對 B 答案的讀法。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>引言從一個落差講起。用指令微調與 RLHF 調過的聊天助手，使用者明顯比較喜歡；但在 MMLU、HELM 這類傳統基準上，它們和原本沒調過的基底模型差不多。作者認為落差出在現有評估只量核心能力，而且只在封閉的題型上量，例如選擇題或檢索題，沒有量開放式任務裡合不合人的偏好，像是能不能在多輪對話裡準確地照指示做。</p>
+    <p>圖 1 是作者的示範（第 02 卡）。題目取自 MMLU：聯準會在次級市場買進債券，貨幣供給會怎樣，並要求只輸出選項。LLaMA-13B 是只做過預訓練的基底模型，Vicuna-13B 是作者拿它在高品質對話上微調的版本。第一輪兩者都說貨幣供給會增加，差別只在 LLaMA 沒照「只輸出選項」的要求。第二輪追問「這對我的日常生活有什麼影響？舉三個例子」，LLaMA 把「增加貨幣供給」換個說法寫了三次，Vicuna 舉了利率、通膨、就業三個例子。GPT-4 讀完兩段對話，判 Vicuna 較好，也寫出理由：A 重複、沒有清楚的例子，B 切題、例子清楚。</p>
+    <p>作者說，基底 LLaMA 在傳統基準上表現有競爭力，開放式問題的回答卻常常不被人喜歡。第 5 節的表 8 有這兩個模型的數字：MMLU（5-shot）LLaMA-13B 47.0、Vicuna-13B 52.1；用 GPT-4 評的 MT-bench 分數，前者 2.61、後者 6.39（第 11 章）。論文因此把核心問題定成：需要一個穩健、可以擴大的自動方法，評估 LLM 和人的偏好對不對齊。</p>
+    <p>第 2.1 節把現有的基準分成三類，說明它們為什麼不夠：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>第 2.1 節 · 類別</th><th>例子</th><th>作者的評語</th></tr></thead>
+        <tbody>
+          <tr><td>核心知識</td><td>MMLU、HellaSwag、ARC、WinoGrande、HumanEval、GSM-8K、AGIEval</td><td>零樣本或少樣本，要模型給簡短、明確、可以自動驗證的答案</td></tr>
+          <tr><td>指令遵循</td><td>Flan、Self-instruct、NaturalInstructions、Super-NaturalInstructions</td><td>題目比較開放、任務比較多樣，用來評指令微調之後的模型</td></tr>
+          <tr><td>對話</td><td>CoQA、MMDialog、OpenAssistant</td><td>最接近作者要的用途，但題目的多樣與難度，常常考不倒最新的聊天機器人</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>作者說，人的偏好是量聊天機器人在開放、多輪互動裡有多有用最直接的尺，現有基準卻大多沒有量它。所以他們建了兩個以人評為主要指標的基準（第 2 章）。問題是人評又慢又貴。第 3 節開頭說明兩條自動化的路為什麼走不通：MT-bench 與 Arena 的題目大多是開放式、沒有參考答案，很難寫規則程式來評；ROUGE、BLEU 這類拿輸出和參考答案比相似度的指標，對這些問題也不管用。</p>
+    <p>作者的做法是用 GPT-4 這類最強的 LLM 代替人。理由是這些模型多半經過 RLHF，本身已經和人的偏好高度對齊。他們把這個做法叫 LLM-as-a-judge；作者自己的 Vicuna 部落格與同期的其他工作已經這樣用過，但還沒有人系統性地研究它。這篇的兩個貢獻是：一份對 LLM-as-a-judge 的系統研究，以及來自 MT-bench 與 Arena 的人類偏好資料集。作者也主張未來的基準採混合評估：既有的能力基準，加上用 LLM 評審的偏好基準，同時看模型的核心能力和它與人的對齊。</p>
+
+    <div class="explain stone">
+      <span class="label">整理者的讀法</span>
+      <h4>評審寫得出理由，不等於每一句都查過</h4>
+      <p>圖 1 裡 Vicuna 的第一個例子說，聯準會買債、推高債券需求時，房貸、車貸、信用卡的利率可能上升。照一般對貨幣政策的說法，央行買進債券通常會壓低利率，方向和這句相反。GPT-4 的評語仍然說 B 切題而且正確。論文沒有討論這一點，它用這張圖示範的是兩個助手的差距與評審會寫理由；這一段是整理者的讀法。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="two-benchmarks" data-toc="兩個基準怎麼建">
+  <div class="container head">
+    <p class="chapter">Chapter 02 · MT-Bench and Chatbot Arena · Appendix C</p>
+    <h2><span class="seg">一個考多輪指令，</span><span class="seg">一個收群眾投票</span></h2>
+    <p class="lede">MT-bench 是 80 題人工設計的兩輪問題，由專家成對評分；Chatbot Arena 讓任何人同時和兩個匿名模型對話、投票選較好的回答。作者說前者是小規模、受控的人評，後者是規模較大、在真實使用中收集的人評。</p>
+    
+  </div>
+  <div class="cardband" id="card-03"><div class="cardlabel"><span class="n">圖卡 03 / 13</span><span class="t">MT-bench 與 Chatbot Arena</span><button type="button" class="zoom" data-card="03">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">一個是專家評的考題，一個是群眾的對戰票</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2 節、第 4.1 節與附錄 C：兩個基準都以人的偏好為主要指標；作者說 MT-bench 是小規模、受控的人評，Chatbot Arena 是規模較大、在真實使用中收集的人評</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0; white-space:nowrap;">MT-BENCH &#183; CONTROLLED</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;"><span style="white-space:nowrap">MT-bench</span>：80 題兩輪問題，專家成對投票</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0; white-space:nowrap;">CHATBOT ARENA &#183; IN THE WILD</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">Chatbot Arena：匿名對戰，群眾投票</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:90px; top:222px; width:640px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center;"><div style="font-size:15px; font-weight:700; color:#1C2431;">8 類使用情境，每類人工設計 10 題，共 80 題</div></div>
+  <div style="position:absolute; left:90px; top:290px; width:640px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center;"><div style="font-size:15px; font-weight:700; color:#1C2431;">每題兩輪：第二輪是追問或改寫要求（表 1）</div></div>
+  <div style="position:absolute; left:90px; top:358px; width:640px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center;"><div style="font-size:15px; font-weight:700; color:#1C2431;">6 個模型作答，58 位專家看兩個匿名回答投票</div></div>
+  <div style="position:absolute; left:90px; top:426px; width:640px; height:48px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:0px 18px; display:flex; align-items:center;"><div style="font-size:15px; font-weight:700; color:#FFFFFF;">每人至少評 20 題，合計約 3K 票</div></div>
+  <div style="position:absolute; left:60px; top:494px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">八類：寫作、角色扮演、擷取、推理、數學、程式、STEM 知識、人文社會知識。<br>評 20 題付 20 美元，約合時薪 35 美元；沒把握的題目最多跳過 5 題，<br>數學與推理題看得到參考解。</div>
+
+  <div style="position:absolute; left:870px; top:222px; width:640px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center;"><div style="font-size:15px; font-weight:700; color:#1C2431;">使用者問一題，同時送給兩個匿名模型</div></div>
+  <div style="position:absolute; left:870px; top:290px; width:640px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center;"><div style="font-size:15px; font-weight:700; color:#1C2431;">兩個回答並排，使用者投票選較好的</div></div>
+  <div style="position:absolute; left:870px; top:358px; width:640px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center;"><div style="font-size:15px; font-weight:700; color:#1C2431;">投完票才揭曉兩個模型是誰</div></div>
+  <div style="position:absolute; left:870px; top:426px; width:640px; height:48px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:0px 18px; display:flex; align-items:center;"><div style="font-size:15px; font-weight:700; color:#FFFFFF;">跑一個月約 30K 票，隨機抽 3K 張單輪票來比對</div></div>
+  <div style="position:absolute; left:840px; top:494px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">沒有預設題目，收得到各種真實用法；網站免費、不用註冊，<br>但要先同意使用條款。一致程度用的 3K 票涵蓋 9 個模型，<br>投票者來自 2114 個不同的 IP。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">小規模、受控：能算人和人的一致</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">題目與評分者固定，同一題由多位專家評，<br>所以能算專家之間的一致程度（第 9、10 卡）。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">專家多為研究生，來自十多所大學；作者公開 80 題與 3K 張專家票。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">大規模、在野外：題目來自真實使用</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">任何人都能來問、來投票，收得到事先想不到的用法；<br>比較的 9 個模型包括 GPT-4、Claude、Vicuna、Dolly 等。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">公開 30K 段帶人類偏好的對話；釋出前清掉個資、標出有害對話。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左右都是作者建的基準，原文只說兩者的規模與收法不同，所以這張不用 ✗／✓；流程的分格是整理者的畫法。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M410 270V288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M410 338V356" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M410 406V424" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1190 270V288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1190 338V356" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1190 406V424" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>MT-bench 由 80 題高品質的多輪問題組成，測的是多輪對話與遵循指令的能力；題目涵蓋常見的使用情境，也刻意挑難題，好分出模型的高低。作者先定出使用者 prompt 的 8 個常見類別：寫作、角色扮演、擷取、推理、數學、程式、知識 I（STEM）、知識 II（人文與社會科學），每類人工設計 10 題。每題都有兩輪，第二輪是追問或改寫的要求。表 1 的三個範例如下（中文精簡）：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 1 · 類別</th><th>第一輪</th><th>第二輪</th></tr></thead>
+        <tbody>
+          <tr><td>寫作</td><td>寫一篇吸引人的夏威夷旅遊部落格，介紹文化體驗與必看景點</td><td>改寫上一個回答，每一句都以字母 A 開頭</td></tr>
+          <tr><td>數學</td><td>已知 f(x)＝4x³－9x－14，求 f(2)</td><td>求使 f(x)＝0 的 x</td></tr>
+          <tr><td>知識</td><td>說明 GDP、通膨與失業率之間的關係，以及財政與貨幣政策怎麼影響它們</td><td>再解釋一次，說得像講給五歲小孩聽</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Chatbot Arena 是群眾外包的對戰平台。使用者同時和兩個匿名模型對話，對兩者問同一題，再投票選出較好的回答；投完票才揭曉兩個模型是誰。平台沒有預設題目，所以收得到各種不受限的真實用法。跑了一個月，作者收到大約 30K 張票。</p>
+    <p>附錄 C 交代兩邊怎麼收人評。MT-bench 的投票介面先給一段和 GPT-4 評審 prompt 類似的指示，再列出題目與兩個隨機、匿名助手的回答，請人按 A 較好、B 較好或平手；先評第一輪，再用同樣的方式評第二輪。沒把握的題目最多可以跳過 5 題；數學、推理這類題目還看得到參考解。參與者簽了申請表表示同意，評 20 題拿 20 美元，約合時薪 35 美元，多數是十多所大學的研究生。</p>
+    <p>Arena 是免費網站，不付錢給使用者，也不用註冊，但使用者要先接受使用條款，同意並授權作者釋出對話資料。釋出之前，作者會清掉個人識別資訊，並用 OpenAI 的 moderation API 標出有害的對話。</p>
+    <p>第 9 章的一致程度實驗用的就是這兩邊的資料。MT-bench：6 個模型（GPT-4、GPT-3.5、Claude-v1、Vicuna-13B、Alpaca-13B、LLaMA-13B）回答全部 80 題，58 位專家級標註者每人至少評 20 題隨機的多輪問題，合計大約 3K 票；標註者多數是研究生，作者因此把他們看成比一般群眾工作者更有經驗的專家。Arena：從 30K 筆資料隨機抽 3K 張單輪票，涵蓋 9 個模型，投票的群眾來自 2114 個不同的 IP。作者公開了 80 題 MT-bench、3K 張專家票，以及 30K 段帶有人類偏好的對話。</p>
+
+    <div class="explain bronze">
+      <span class="label">實作提示</span>
+      <h4>兩種收法可以一起用</h4>
+      <p>MT-bench 題目固定、評分者固定，能算人和人之間的一致程度，適合當回歸測試；Arena 的題目來自真實使用，能看到事先想不到的用法。論文把兩者並列，本頁也照原文不分高下；怎麼搭配是整理者依第 2、4 節整理的建議。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="judge-types" data-toc="三種評審方式">
+  <div class="container head">
+    <p class="chapter">Chapter 03 · Types of LLM-as-a-Judge · Appendix A</p>
+    <h2><span class="seg">評審可以比兩個、</span><span class="seg">打一個分，</span><span class="seg">或對照解答</span></h2>
+    <p class="lede">第 3.1 節提出三種評審方式：給兩個回答選一個、給一個回答打分數、附上參考答案再評。三種可以單獨用也能組合，各有代價；共同的好處是可擴充、可解釋。</p>
+    
+  </div>
+  <div class="cardband" id="card-04"><div class="cardlabel"><span class="n">圖卡 04 / 13</span><span class="t">三種評審方式</span><button type="button" class="zoom" data-card="04">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">三種問法：比兩個、評一個、對照參考解</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.1 節與附錄 A：三種評審方式可以單獨用，也可以組合；每一種都先要評審寫理由，再照固定格式給判定，程式才讀得出結果</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">做法</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">評審看到什麼</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">輸出（附錄 A 的 prompt）</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">原文說的代價</div>
+  </div>
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">成對比較</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;"><span style="letter-spacing:0.08em">PAIRWISE</span> &#183; 圖 5</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>一個問題、兩個回答</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>先寫一段比較的說明，<br>再輸出 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">[[A]]</span>、<span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">[[B]]</span> 或平手 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">[[C]]</span></div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>參賽的模型一多，<br>要比的配對數呈平方成長</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:306px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">單一答案評分</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;"><span style="letter-spacing:0.08em">SINGLE</span> &#183; 圖 6</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>一個問題、一個回答</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>先寫說明，再照格式給 1 到 10 分：<br><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">Rating: [[5]]</span></div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>分不出兩個回答的細微差距；<br>換評審模型時，分數較容易浮動</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:402px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">參考答案引導</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;"><span style="letter-spacing:0.08em">REFERENCE</span> &#183; 圖 8、圖 10</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>問題、一段參考答案，<br>加上兩個或一個回答</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>先拿回答和參考答案比、<br>找出並改正錯誤，再給判定</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>要先有參考解；<br>原文的例子是數學題</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:560px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">預設 prompt 先把偏誤寫進指示</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">圖 5 要評審考慮有用、切題、正確、<br>深度、創意與細節；先比較、寫說明，<br>不讓順序、長度、名字影響判斷。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">第 5、6 卡會看到：寫進指示也擋不住偏誤。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:560px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">單一答案評分最好擴充</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;"><span style="white-space:nowrap">GPT-4</span> 的單一答案評分和成對比較、<br>和人都很一致（第 10 卡）；<br>第 11 卡的 <span style="white-space:nowrap">MT-bench</span> 分數就用它。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者說它有時略差、平手票也較多。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:560px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">兩個好處：可擴充、可解釋</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">少了人工，基準能做大、迭代更快；<br>評審除了分數還寫出理由（圖 1），<br>讀的人看得懂它為什麼這樣判。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">第 3.2 節的說法。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三種做法與代價照第 3.1 節；prompt 依附錄 A 的圖 5、6、8、10 精簡。多輪對話的兩個版本（圖 9、10）見第 8 卡。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <div class="values">
+      <div class="value-card"><span class="tag">PAIRWISE</span><h4>成對比較</h4><p>評審拿到一個問題與兩個回答，判斷哪個較好，或宣告平手。prompt 在附錄 A 的圖 5。</p></div>
+      <div class="value-card"><span class="tag">SINGLE</span><h4>單一答案評分</h4><p>評審只拿到一個回答，直接給分數。prompt 在圖 6。</p></div>
+      <div class="value-card"><span class="tag">REFERENCE</span><h4>參考答案引導</h4><p>有參考解時一併放進 prompt。作者評數學題的例子在圖 8。</p></div>
+    </div>
+
+    <p>作者直接點出兩種主要方式的代價。成對比較在參賽的模型變多時不好擴充，因為可能的配對數隨模型數呈平方成長。單一答案評分可能分不出兩個回答之間的細微差距；而且換掉評審模型時，絕對分數通常比成對比較的相對結果更容易浮動，結果可能不穩定。</p>
+    <p>第 3.2 節列了兩個好處。一是可擴充：少了人工，基準可以做大，迭代也更快。二是可解釋：LLM 評審除了分數，還會寫出理由，像圖 1 的 GPT-4 評語，讀的人看得懂它為什麼這樣判。</p>
+    <p>附錄 A 列出評審用的 prompt，完整版放在作者的 GitHub。預設的成對比較 prompt（圖 5）大致如下，這是教學用的中文精簡版：</p>
+
+    <div class="codeblock">
+      <span class="file">附錄 A 圖 5 · 預設的成對比較 prompt · 精簡改寫成中文</span>
+<pre class="code"><span class="c"># [系統]</span>
+你是公正的評審，評估兩個 AI 助手對下面這個使用者問題的回答。
+選出較能遵循使用者指示、回答得較好的助手。
+考慮：有用、切題、正確、深度、創意、細節的多寡。
+先比較兩個回答，寫一段簡短說明。
+<span class="a">不要讓回答出現的順序影響判斷；不要讓長度影響判斷；不要偏好某個助手的名字。</span>
+盡量客觀。寫完說明後，嚴格照格式輸出判定：
+  <span class="k">[[A]]</span> A 較好　<span class="k">[[B]]</span> B 較好　<span class="k">[[C]]</span> 平手
+
+<span class="c"># [使用者問題]</span>  {question}
+<span class="c"># [A 的回答開始]</span>  {answer_a}  <span class="c"># [A 的回答結束]</span>
+<span class="c"># [B 的回答開始]</span>  {answer_b}  <span class="c"># [B 的回答結束]</span></pre>
+    </div>
+
+    <p>其餘幾個 prompt 都從這裡變化。單一答案評分（圖 6）只放一個回答，指示改成先寫說明、再照「Rating: [[5]]」的格式給 1 到 10 分。數學與推理題的 CoT 版（圖 7）把考量改成正確與有用，要評審先自己一步一步解題，再拿兩個回答和自己的解答比，找出並改正錯誤。參考答案版（圖 8）多放一段參考答案，要評審拿兩個回答和它比。多輪的兩個版本（圖 9、圖 10）放進完整的兩輪對話，第 7 章再談。</p>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>寫進指示，不等於做得到</h4>
+      <p>預設 prompt 已經要評審別受順序、長度、名字影響。第 4 章的表 2 用的「default」就是這個 prompt，三個評審仍然有明顯的位置偏誤；第 5 章的冗長測試裡，也有兩個評審選了只是變長的回答（論文沒有寫明冗長測試用哪一版 prompt）。這段是整理者把幾處原文放在一起看。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="position-bias" data-toc="位置偏誤">
+  <div class="container head">
+    <p class="chapter">Chapter 04 · Position Bias · Swapping Positions · Appendix D.1, D.2</p>
+    <h2><span class="seg">答案換個順序，</span><span class="seg">評審就可能改判</span></h2>
+    <p class="lede">把兩個回答對調再問一次，三個 LLM 評審都常常改判，多半偏向放在前面的那一個；只有 GPT-4 在超過六成的情況維持原判。最直接的處理是對調順序各判一次，兩次都贏才算贏。</p>
+    
+  </div>
+  <div class="cardband" id="card-05"><div class="cardlabel"><span class="n">圖卡 05 / 13</span><span class="t">位置偏誤：對調順序再判一次</span><button type="button" class="zoom" data-card="05">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">對調順序後，只有 GPT-4 超過六成不改判</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 2：MT-bench 每題第一輪，用 GPT-3.5（溫度 0.7）產生兩個相近的回答，對調順序各判一次；default 是預設 prompt，rename 把兩個助手改名</div>
+
+  <div style="position:absolute; left:60px; top:136px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#2E7B4F;"></div>一致：對調後判定不變</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#C8501F;"></div>偏向第一個</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FCF1EA; border:1px solid #E6B49A; box-sizing:border-box;"></div>偏向第二個</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#D5DAE1;"></div>格式錯誤</div>
+  </div>
+  <div style="position:absolute; left:1284px; top:160px; font-size:12px; color:#8A93A0;">偏後 &#183; 格式錯誤</div>
+
+  <div style="position:absolute; left:60px; top:204px; font-size:18px; font-weight:700; color:#1C2431; white-space:nowrap;">Claude-v1</div>
+  <div style="position:absolute; left:196px; top:189px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">default</div>
+  <div style="position:absolute; left:196px; top:231px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">rename</div>
+  <div style="position:absolute; left:60px; top:304px; font-size:18px; font-weight:700; color:#1C2431; white-space:nowrap;">GPT-3.5</div>
+  <div style="position:absolute; left:196px; top:289px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">default</div>
+  <div style="position:absolute; left:196px; top:331px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">rename</div>
+  <div style="position:absolute; left:60px; top:404px; font-size:18px; font-weight:700; color:#1C2431; white-space:nowrap;">GPT-4</div>
+  <div style="position:absolute; left:196px; top:389px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">default</div>
+  <div style="position:absolute; left:196px; top:431px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">rename</div>
+
+  <div style="position:absolute; left:300px; top:180px; width:228.5px; height:34px; box-sizing:border-box; background-color:#2E7B4F; border-radius:5px 0px 0px 5px; display:flex; align-items:center; padding:0px 10px; white-space:nowrap; font-size:13px; font-weight:700; color:#FFFFFF;">一致 23.8%</div>
+  <div style="position:absolute; left:528.5px; top:180px; width:720px; height:34px; box-sizing:border-box; background-color:#C8501F; display:flex; align-items:center; padding:0px 10px; white-space:nowrap; font-size:13px; font-weight:700; color:#FFFFFF;">偏前 75.0%</div>
+  <div style="position:absolute; left:1248.5px; top:180px; width:11.5px; height:34px; box-sizing:border-box; background-color:#D5DAE1; border-radius:0px 5px 5px 0px;"></div>
+  <div style="position:absolute; left:1284px; top:188px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">0.0% &#183; 1.2%</div>
+
+  <div style="position:absolute; left:300px; top:222px; width:539.5px; height:34px; box-sizing:border-box; background-color:#2E7B4F; border-radius:5px 0px 0px 5px; display:flex; align-items:center; padding:0px 10px; white-space:nowrap; font-size:13px; font-weight:700; color:#FFFFFF;">一致 56.2%</div>
+  <div style="position:absolute; left:839.5px; top:222px; width:107.5px; height:34px; box-sizing:border-box; background-color:#C8501F; display:flex; align-items:center; padding:0px 10px; white-space:nowrap; font-size:13px; font-weight:700; color:#FFFFFF;">偏前 11.2%</div>
+  <div style="position:absolute; left:947px; top:222px; width:275.5px; height:34px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; padding:0px 10px; white-space:nowrap; font-size:13px; font-weight:700; color:#C8501F;">偏後 28.7%</div>
+  <div style="position:absolute; left:1222.5px; top:222px; width:37.5px; height:34px; box-sizing:border-box; background-color:#D5DAE1; border-radius:0px 5px 5px 0px;"></div>
+  <div style="position:absolute; left:1284px; top:230px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">28.7% &#183; 3.8%</div>
+
+  <div style="position:absolute; left:300px; top:280px; width:443.5px; height:34px; box-sizing:border-box; background-color:#2E7B4F; border-radius:5px 0px 0px 5px; display:flex; align-items:center; padding:0px 10px; white-space:nowrap; font-size:13px; font-weight:700; color:#FFFFFF;">一致 46.2%</div>
+  <div style="position:absolute; left:743.5px; top:280px; width:480px; height:34px; box-sizing:border-box; background-color:#C8501F; display:flex; align-items:center; padding:0px 10px; white-space:nowrap; font-size:13px; font-weight:700; color:#FFFFFF;">偏前 50.0%</div>
+  <div style="position:absolute; left:1223.5px; top:280px; width:11.5px; height:34px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A;"></div>
+  <div style="position:absolute; left:1235px; top:280px; width:25px; height:34px; box-sizing:border-box; background-color:#D5DAE1; border-radius:0px 5px 5px 0px;"></div>
+  <div style="position:absolute; left:1284px; top:288px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">1.2% &#183; 2.5%</div>
+
+  <div style="position:absolute; left:300px; top:322px; width:491.5px; height:34px; box-sizing:border-box; background-color:#2E7B4F; border-radius:5px 0px 0px 5px; display:flex; align-items:center; padding:0px 10px; white-space:nowrap; font-size:13px; font-weight:700; color:#FFFFFF;">一致 51.2%</div>
+  <div style="position:absolute; left:791.5px; top:322px; width:372.5px; height:34px; box-sizing:border-box; background-color:#C8501F; display:flex; align-items:center; padding:0px 10px; white-space:nowrap; font-size:13px; font-weight:700; color:#FFFFFF;">偏前 38.8%</div>
+  <div style="position:absolute; left:1164px; top:322px; width:59.5px; height:34px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A;"></div>
+  <div style="position:absolute; left:1223.5px; top:322px; width:36.5px; height:34px; box-sizing:border-box; background-color:#D5DAE1; border-radius:0px 5px 5px 0px;"></div>
+  <div style="position:absolute; left:1284px; top:330px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">6.2% &#183; 3.8%</div>
+
+  <div style="position:absolute; left:300px; top:380px; width:624px; height:34px; box-sizing:border-box; background-color:#2E7B4F; border-radius:5px 0px 0px 5px; display:flex; align-items:center; padding:0px 10px; white-space:nowrap; font-size:13px; font-weight:700; color:#FFFFFF;">一致 65.0%</div>
+  <div style="position:absolute; left:924px; top:380px; width:288px; height:34px; box-sizing:border-box; background-color:#C8501F; display:flex; align-items:center; padding:0px 10px; white-space:nowrap; font-size:13px; font-weight:700; color:#FFFFFF;">偏前 30.0%</div>
+  <div style="position:absolute; left:1212px; top:380px; width:48px; height:34px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:0px 5px 5px 0px;"></div>
+  <div style="position:absolute; left:1284px; top:388px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">5.0% &#183; 0.0%</div>
+
+  <div style="position:absolute; left:300px; top:422px; width:635.5px; height:34px; box-sizing:border-box; background-color:#2E7B4F; border-radius:5px 0px 0px 5px; display:flex; align-items:center; padding:0px 10px; white-space:nowrap; font-size:13px; font-weight:700; color:#FFFFFF;">一致 66.2%</div>
+  <div style="position:absolute; left:935.5px; top:422px; width:275.5px; height:34px; box-sizing:border-box; background-color:#C8501F; display:flex; align-items:center; padding:0px 10px; white-space:nowrap; font-size:13px; font-weight:700; color:#FFFFFF;">偏前 28.7%</div>
+  <div style="position:absolute; left:1211px; top:422px; width:49px; height:34px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:0px 5px 5px 0px;"></div>
+  <div style="position:absolute; left:1284px; top:430px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">5.0% &#183; 0.0%</div>
+
+  <div style="position:absolute; left:60px; top:482px; width:1480px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">名字也會偏</div>
+    <div style="font-size:15px; color:#2B3340;">Claude-v1 改名之後，偏前從 75.0% 降到 11.2%、偏後從 0.0% 升到 28.7%：作者說它偏好的是「Assistant A」這個名字。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:566px; width:470px; height:192px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">GPT-4 最穩，仍有三成偏前</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">default、rename 下維持原判 65.0%、66.2%，<br>仍有 30.0%、28.7% 偏向第一個位置。<br>作者說這個測試很難：兩個回答非常像。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">原因作者只猜測：訓練資料，或由左到右讀的架構。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:566px; width:470px; height:192px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">對調各判一次，兩次都贏才算贏</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">不一致就記平手，論文後面的實驗都用它；<br>few-shot 範例把 GPT-4 拉到 77.5%，<br>但 prompt 變長，API 貴 4 倍（表 12）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">另一種做法是隨機排位置，大量評分時期望值正確。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:566px; width:470px; height:192px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">差距大、題目明確時比較少偏</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">表 11：GPT-4 評 GPT-3.5 對 LLaMA-13B，<br>一致率 98.8%。表 10：數學、程式題 86.0%，<br>寫作 42.0%、人文 36.0%。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">數學題一致率高，判斷仍常常是錯的（第 7 卡）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：數字照表 2；四段的分色是整理者的畫法，每列四格相加因四捨五入是 99.9% 到 100%。一致只表示對調後判定不變，不表示判得對。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>位置偏誤是評審傾向偏好某些位置。作者說這不是 LLM 評審獨有的，人的決策與其他機器學習領域也看得到。附錄 B 的圖 11 是一個例子：問在日本做生意有哪些商務禮儀，GPT-3.5 與 Vicuna-13B 各答一份。GPT-3.5 的回答放前面時，GPT-4 說它比較詳細、比較好；兩個回答對調之後，GPT-4 改判 Vicuna 的回答較好。</p>
+    <p>為了量這個偏誤，作者替 MT-bench 每一題的第一輪問題，用 GPT-3.5（溫度 0.7）呼叫兩次，得到兩個相近的回答；再用三個 LLM、兩種 prompt 去評，每一組都把兩個回答對調各評一次。「default」是第 3 章的預設 prompt；「rename」把 prompt 裡的助手改名，用來分辨偏的是位置還是名字。表 2 的四個欄位：一致率是對調後判定不變的比例，偏前、偏後是偏好第一個或第二個回答的比例，格式錯誤是輸出不照格式的比例。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 2 · 評審</th><th>prompt</th><th>一致率</th><th>偏前</th><th>偏後</th><th>格式錯誤</th></tr></thead>
+        <tbody>
+          <tr><td>Claude-v1</td><td>default</td><td>23.8%</td><td>75.0%</td><td>0.0%</td><td>1.2%</td></tr>
+          <tr><td>Claude-v1</td><td>rename</td><td>56.2%</td><td>11.2%</td><td>28.7%</td><td>3.8%</td></tr>
+          <tr><td>GPT-3.5</td><td>default</td><td>46.2%</td><td>50.0%</td><td>1.2%</td><td>2.5%</td></tr>
+          <tr><td>GPT-3.5</td><td>rename</td><td>51.2%</td><td>38.8%</td><td>6.2%</td><td>3.8%</td></tr>
+          <tr><td>GPT-4</td><td>default</td><td>65.0%</td><td>30.0%</td><td>5.0%</td><td>0.0%</td></tr>
+          <tr><td>GPT-4</td><td>rename</td><td>66.2%</td><td>28.7%</td><td>5.0%</td><td>0.0%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>作者的讀法：三個評審都有強烈的位置偏誤，多數偏向第一個位置，只有 GPT-4 在超過 60% 的情況給出一致的結果。Claude-v1 還有名字偏誤：改名之後，它偏向第一個的比例從 75.0% 掉到 11.2%，偏向第二個從 0.0% 升到 28.7%，作者說它偏好的是「Assistant A」這個名字。作者也提醒這個測試很難，兩個回答非常相似，有時連人都分不出來。偏誤從哪裡來，作者只提出猜測：可能來自訓練資料，或是因果 Transformer 由左到右讀的架構本身，留待之後研究。</p>
+    <p>附錄 D.1 再加兩種 prompt。「score」讓評審替兩個回答各給一個絕對分數，而不是選一個；這讓 GPT-3.5 的一致率升到 55.0%，卻讓 Claude-v1 降到 20.0%、GPT-4 降到 51.2%。「short」是預設 prompt 的簡化版，拿掉「避免位置偏誤」「先評估並寫簡短說明」這類指示；三個評審的一致率都略降，Claude-v1 是 22.5%、GPT-3.5 是 38.8%、GPT-4 是 62.5%。</p>
+    <p>偏誤的大小也看題目與模型。表 10 依題目類別分：寫作、STEM、人文這類開放題最明顯，一致率是 42.0%、44.0%、36.0%；數學與程式題最高，都是 86.0%。作者提醒，數學、程式題上評審比較有把握，判斷卻常常是錯的（第 6 章）。表 11 用 GPT-4 與預設 prompt 評三組模型配對：GPT-3.5 對 Claude-v1 一致率 67.5%，對 Vicuna-13B 73.8%，對 LLaMA-13B 98.8%。兩個模型表現接近時偏誤明顯，差距很大時幾乎消失。</p>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>一致率高，不等於判得對</h4>
+      <p>一致率只表示對調之後判定沒變。第 6 章的數學題就是反例：評審可以兩次都判錯。另外，表 10 沒有寫是哪一個評審的結果，表 11 才註明是 GPT-4。這段提醒是整理者依附錄 D.1 整理的。</p>
+    </div>
+
+    <p>第 3.4 節給了兩個處理位置偏誤的做法。第一個是交換位置。保守的做法是呼叫評審兩次、對調兩個回答的順序，兩個順序都偏好同一個回答才算它贏；兩次結果不一致，就記為平手。比較積極的做法是隨機指派位置，大規模評分時，期望值是對的。之後所有實驗都用保守的做法：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>對調順序各判一次</strong>先把 A 放前面判一次，再把 B 放前面判一次。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>兩次都贏才算贏</strong>兩個順序都偏好同一個回答，它才算勝出。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>不一致就記平手</strong>兩次判定相反，這一題算平手；第 8 章的 S1 算法就把這種票當成平手。</div></div>
+    </div>
+
+    <p>第二個是 few-shot 評審：在 prompt 裡放三個好的判斷範例，分別是 A 較好、B 較好、平手；範例的題目是 MT-bench 風格的問題，回答由 GPT-3.5 與 Vicuna 產生，判斷由 GPT-4 產生。表 12 顯示三個評審的一致率都明顯上升：GPT-4 從 65.0% 到 77.5%，Claude-v1 從 23.8% 到 63.7%，GPT-3.5 從 46.2% 到 55.0%。附錄 D.2 補充：GPT-4 的位置偏誤幾乎消失（偏前 10.0%、偏後 12.5%），GPT-3.5 的偏誤卻從第一個位置移到第二個（偏前 16.2%、偏後 28.7%）。</p>
+    <p>作者也說了 few-shot 的代價：一致率高不代表準確率高，範例可能帶進新的偏誤，prompt 變長讓 API 貴 4 倍；few-shot 的 GPT-4 成對比較和人的一致程度，也和零樣本差不多。所以後面的實驗預設用零樣本的 prompt。</p>
+
+    <div class="thought">
+      <span class="label">思考題 · 01</span>
+      <h4>你的評估流程裡，換個順序會不會換個答案？</h4>
+      <p>想一個你用 LLM 比較兩個輸出的地方：兩版 prompt、兩個模型，或兩份摘要。</p>
+      <p class="hint">照第 3.4 節的保守做法，抽一批題目對調順序各評一次，算出一致率；再照表 11 的發現，把表現接近的那幾組配對挑出來特別檢查，偏誤最容易出現在那裡。這個練習是整理者依原文整理的。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="verbosity-bias" data-toc="冗長偏誤">
+  <div class="container head">
+    <p class="chapter">Chapter 05 · Verbosity Bias</p>
+    <h2><span class="seg">清單多重複一遍，</span><span class="seg">兩個評審就上當</span></h2>
+    <p class="lede">作者把回答裡的清單換句話說再接一次，內容沒變、只是變長。23 個回答裡，Claude-v1 與 GPT-3.5 有 91.3% 選了變長的版本，GPT-4 只有 8.7%。</p>
+    
+  </div>
+  <div class="cardband" id="card-06"><div class="cardlabel"><span class="n">圖卡 06 / 13</span><span class="t">冗長偏誤：重複清單攻擊</span><button type="button" class="zoom" data-card="06">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">把清單重複一次，兩個評審就選了長的</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.3 節、表 3、圖 12：「重複清單」攻擊測的是冗長偏誤。兩版回答的內容一樣，只差在長度；評審選了變長的那一版，就算攻擊成功</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　挑回答</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;"><span style="white-space:nowrap">MT-bench</span> 的模型回答裡，<br>挑出含編號清單的 23 個</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　改寫清單</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">請 <span style="white-space:nowrap">GPT-4</span> 把清單換句話說，<br>不加任何新資訊</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#C8501F;">Step 3　接到前面</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">改寫版插在原清單前面：<br>原本 5 項，變成 10 項</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　請評審比</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">變長的新版對原版，<br>問評審哪一個較好</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　判定</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">評審選了新版＝攻擊成功，<br>也就是這一題評審失敗</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:288px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">先做校準</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">兩個一模一樣的回答，三個評審都會正確地判平手。過不了的，是這種只加長度、不加資訊的攻擊。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:366px; font-size:14px; font-weight:700; color:#1C2431;">圖 12 的例子：分子生物學的中心法則是什麼、包含哪些過程、誰命名的</div>
+  <div style="position:absolute; left:60px; top:396px; width:420px; height:92px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:14px; font-weight:700; color:#1C2431;">原版（B）：兩個過程</div><div style="font-size:13px; color:#6B7380; line-height:1.55;">1. 轉錄：DNA 的資訊複製到 RNA<br>2. 轉譯：用 RNA 的資訊合成蛋白質</div></div>
+  <div style="position:absolute; left:500px; top:396px; width:520px; height:92px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:14px; font-weight:700; color:#C8501F;">加長版（A）：前兩項是改寫，其餘和 B 一樣</div><div style="font-size:13px; color:#6B7380; line-height:1.55;">1. 轉錄（換句話說）　2. 轉譯（換句話說）<br>3. 轉錄　4. 轉譯</div></div>
+  <div style="position:absolute; left:1060px; top:396px; width:480px; height:26px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:6px; display:flex; align-items:center; padding:0px 14px; font-size:13px; font-weight:700; color:#C8501F; white-space:nowrap;">GPT-3.5：選 A，說它解釋得更詳細</div>
+  <div style="position:absolute; left:1060px; top:429px; width:480px; height:26px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:6px; display:flex; align-items:center; padding:0px 14px; font-size:13px; font-weight:700; color:#C8501F; white-space:nowrap;">Claude-v1：選 A，說它更深入、更完整</div>
+  <div style="position:absolute; left:1060px; top:462px; width:480px; height:26px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; padding:0px 14px; font-size:13px; font-weight:700; color:#2E7B4F; white-space:nowrap;">GPT-4：選 B，指出 A 把兩個過程重複寫了兩遍</div>
+
+  <div style="position:absolute; left:60px; top:514px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:530px; font-size:20px; font-weight:700; color:#1C2431;">表 3：23 個回答的失敗率</div>
+
+  <div style="position:absolute; left:60px; top:572px; width:470px; height:206px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;"><span style="white-space:nowrap">Claude-v1</span>、<span style="white-space:nowrap">GPT-3.5</span>：91.3%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.7;">23 個裡約 21 個選了變長的版本，<br>連內容完全重複的項目，<br>也被當成「解釋得更完整」。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">個數是整理者從百分比換算的。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:572px; width:470px; height:206px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;"><span style="white-space:nowrap">GPT-4</span>：8.7%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.7;">約 2 個，防得明顯比另外兩個好；<br>作者的結論仍是所有 LLM 都可能<br>有冗長偏誤。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">個數同樣是整理者換算的。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:572px; width:470px; height:206px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">冗長偏誤：只因為長而被選</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.7;">評審偏好較長、較囉嗦的回答，即使它<br>沒有比較清楚、品質好或正確。這個攻擊<br>只加長度、不加資訊，才量得出它。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">定義照第 3.3 節；最後一句是整理者的讀法。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：五步依第 3.3 節的描述畫成，例子依圖 12（分子生物學的中心法則）精簡；論文沒有寫明這個測試用的是哪一版評審 prompt。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>冗長偏誤是評審偏好較長、較囉嗦的回答，即使它沒有比較短的回答清楚、品質好或正確。要測它，得讓兩個回答除了長度之外都一樣，作者因此設計了「重複清單」攻擊：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>挑回答</strong>從 MT-bench 的模型回答裡，挑出 23 個含有編號清單的回答。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>改寫清單</strong>請 GPT-4 把清單換句話說，不加任何新資訊。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>接到前面</strong>把改寫的清單插在原清單前面；原本 5 項的回答變成 10 項，前 5 項是改寫版。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>請評審比</strong>新版與原版並排，問評審哪一個較好。</div></div>
+      <div class="cascade-step"><div class="n">5</div><div class="t"><strong>判定</strong>評審認為新版較好，就算攻擊成功，也就是評審失敗。</div></div>
+    </div>
+
+    <p>表 3 是 23 個回答的失敗率：Claude-v1 與 GPT-3.5 都是 91.3%，GPT-4 是 8.7%。換成個數，大約是 23 個裡 21 個與 2 個（整理者換算）。作者的結論是：所有 LLM 都可能有冗長偏誤，GPT-4 防得明顯比另外兩個好。作者也做了校準：兩個一模一樣的回答，三個評審都會正確地判平手；過不了的是這種更進階的攻擊。</p>
+    <p>附錄 B 的圖 12 是一個例子。題目問分子生物學的中心法則是什麼、包含哪些過程、由誰命名。兩個回答只差在 A 把「轉錄」「轉譯」各換句話說、多列了一次。GPT-3.5 與 Claude-v1 都選 A，理由是它對這些過程的解釋更完整、更詳細；GPT-4 指出 A 把兩個過程重複寫了兩遍，判比較精簡的 B 較好。</p>
+
+    <div class="explain stone">
+      <span class="label">本頁的安排</span>
+      <h4>自我偏好放在第 10 章</h4>
+      <p>第 3.3 節在冗長偏誤之後，列的是自我偏好：評審可能偏好自己產生的回答。作者拿來檢查它的證據，是不同評審之下各模型的勝率，所以本頁把它和勝率放在同一章。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="math-grading" data-toc="數學題評不準">
+  <div class="container head">
+    <p class="chapter">Chapter 06 · Limited Reasoning Ability · Chain-of-Thought and Reference-Guided Judge</p>
+    <h2><span class="seg">數學題的評審，</span><span class="seg">要先拿到自己的解答</span></h2>
+    <p class="lede">GPT-4 自己會解的基礎數學題，當評審時卻會被兩個回答帶著算錯。要它在 prompt 裡先自己解（CoT）只改善一部分；先另外解好、再把解答當參考答案放進 prompt，10 題 20 次判斷的失敗從 14 次降到 3 次。</p>
+    
+  </div>
+  <div class="cardband" id="card-07"><div class="cardlabel"><span class="n">圖卡 07 / 13</span><span class="t">數學題：先解好再比對</span><button type="button" class="zoom" data-card="07">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">看著答案算會抄錯，先另外解好再比對</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.3、3.4 節與表 4：GPT-4 單獨作答會解的基礎數學題，當評審時卻被兩個回答帶著算錯；作者比了三種評審 prompt</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 看著回答判（預設、CoT）</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 先另外解好，當參考答案</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:110px; top:200px; width:600px; height:48px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">題目和 A、B 兩個回答，一起放進評審的 prompt</div>
+  <div style="position:absolute; left:110px; top:282px; width:600px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">評審解題、比較</div><div style="margin-top:2px; font-size:12.5px; color:#6B7380;">預設：直接比較　CoT：先自己一步一步解，再比較（圖 7）</div></div></div>
+  <div style="position:absolute; left:110px; top:372px; width:600px; height:48px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">解題時跟著回答走：照抄 B 的算式與答案</div>
+  <div style="position:absolute; left:110px; top:448px; width:600px; height:48px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">把錯的 B 判成正確</div>
+  <div style="position:absolute; left:60px; top:514px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">圖 15：|x＋5|＜10 有幾個整數解？正解 19。A 答 19、B 答 20，<br>GPT-4 用 CoT prompt 照抄 B 的算式，判 B 對。圖 13（預設 prompt）：<br>書店題正解 280 美元，它把 100＋90＋90 加成 295，判答 295 的 B 對。</div>
+
+  <div style="position:absolute; left:890px; top:200px; width:600px; height:48px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">先只給題目，不附任何回答</div>
+  <div style="position:absolute; left:890px; top:282px; width:600px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">評審另外、獨立地作答一次</div><div style="margin-top:2px; font-size:12.5px; color:#6B7380;">這時它看不到 A、B 怎麼算</div></div></div>
+  <div style="position:absolute; left:890px; top:372px; width:600px; height:48px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">把它的解答放進評審 prompt，當參考答案（圖 8）</div>
+  <div style="position:absolute; left:890px; top:448px; width:600px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">拿 A、B 和參考答案比，找錯、改錯，再給判定</div>
+  <div style="position:absolute; left:840px; top:514px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">單獨作答時，GPT-4 兩題都答對（280 美元、19 個）：<br>它會解題，只是看著回答算會被帶偏。參考答案法讓它<br>先在看不到回答的時候解題。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#C8501F;">預設 14/20，CoT 6/20</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">10 題數學，LLaMA-13B 對 Vicuna-13B、對調位置各判一次，<br>共 20 次；失敗是指 GPT-4 把錯的答案說成對的。</div>
+    <div style="font-size:13px; color:#8A93A0;">CoT 有改善，但作者說評審仍然可能被脈絡誤導。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#2E7B4F;">參考答案：3/20</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">正文：失敗率從預設的 70% 降到 15%。<br>MT-bench 的評分也有參考答案版的 prompt（圖 10）。</div>
+    <div style="font-size:13px; color:#8A93A0;">參考答案來自評審自己作答；它若算錯，參考也會錯（整理者的提醒）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：14/20、6/20、3/20 照表 4，70% 與 15% 是第 3.4 節正文的寫法；例子依圖 13、圖 15 精簡，左右分欄是整理者的畫法。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M410 248V280" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M410 338V370" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c07)"></path>
+    <path d="M410 420V446" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c07)"></path>
+    <path d="M1190 248V280" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M1190 338V370" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c07)"></path>
+    <path d="M1190 420V446" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>LLM 的數學與推理能力本來就有限，遇到不會的題目，自然評不準，因為它不知道正確答案。作者說更有意思的是另一件事：它自己會解的基礎數學題，當評審時也會評錯。</p>
+    <p>圖 13 是一題書店的算術：買 5 本 20 美元的科幻小說、3 本 30 美元的歷史書、2 本 45 美元的哲學書，總共多少錢。正解是 280 美元，單獨問 GPT-4 時，它就是用 5×20＋3×30＋2×45 算出 280。兩個助手一個答 115、一個答 295。GPT-4 當評審時列出的算式是 100＋90＋90，總和卻寫成 295，於是判答 295 的 B 正確。作者說它被提供的答案誤導了。</p>
+    <p>圖 14 是一題推理：橘子比蘋果貴、橘子比香蕉便宜，那麼「香蕉比蘋果貴，而且比橘子貴」是真、假，還是不確定？單獨問 GPT-4，它答「真」；當評審時，兩個助手都答「假」，它卻判兩個都對。作者說 GPT-3.5 與 Claude-v1 也有同樣的弱點。</p>
+    <p>第 3.4 節提了兩個方法。第一個是 CoT 評審，沿用 chain-of-thought 的想法：在評分的 prompt 裡要評審先獨立解題、再評分（圖 7）。但作者發現，很多時候評審在解題過程中犯的錯，和回答裡的一模一樣。圖 15 問 |x＋5|＜10 有幾個整數解：正解是 19（從 −14 到 4）；A 答 19，B 列了算式、答 20。GPT-4 用 CoT prompt 評的時候，照抄了 B 的算式與答案，判 B 正確；單獨問它時，它答的是 19。作者認為評審仍然可能被脈絡誤導。</p>
+    <p>第二個是參考答案引導：先讓評審另外、獨立地作答，再把它的答案當參考答案放進評審的 prompt（圖 8）。表 4 是 10 題數學題的結果：評的是 LLaMA-13B 對 Vicuna-13B，對調位置各判一次，共 20 次判斷；失敗的定義是 GPT-4 把錯的答案說成對的。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 4 · prompt</th><th>預設</th><th>CoT</th><th>參考答案</th></tr></thead>
+        <tbody>
+          <tr><td>失敗次數</td><td>14/20</td><td>6/20</td><td><strong>3/20</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>正文說失敗率從 70% 降到 15%，也就是 14/20 到 3/20；CoT 的 6/20 是 30%（整理者算的）。第 11 章的 MT-bench 分數，作者寫明用的是圖 6 與圖 10 的 prompt，後者就是參考答案版的單一答案評分。第 3.4 節最後還提了第四個方向：拿 Arena 的資料微調 Vicuna-13B 當評審，結果在附錄 F，本頁放在第 12 章。</p>
+
+    <div class="story">
+      <div class="label">關鍵觀念 · 一</div>
+      <h4>會解題，不代表會評題</h4>
+      <p>書店題與不等式題，GPT-4 單獨作答都對；一旦旁邊擺著兩個答案，它的算式就跟著答案走。CoT 要它先自己解，但解題的時候答案已經在眼前了。參考答案法把「自己解」挪到看見答案之前、放在另一次呼叫裡做，這是它和 CoT 真正的差別。</p>
+      <p>這一段是整理者依圖 13、圖 15 與第 3.4 節的讀法。</p>
+    </div>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>參考答案也是評審自己算的</h4>
+      <p>這個方法的參考答案來自評審自己獨立作答；它若算錯，參考答案也會跟著錯。論文的 3/20 沒有細分失敗出在哪一種情況。這段是整理者的提醒。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="multi-turn" data-toc="多輪對話怎麼評">
+  <div class="container head">
+    <p class="chapter">Chapter 07 · Multi-turn Judge</p>
+    <h2>兩輪對話要整段給評審看</h2>
+    <p class="lede">MT-bench 每題都有兩輪，比兩個助手就要放兩個問題、四個回答。拆成兩個 prompt，評審會找不準助手上一輪說了什麼；把兩段完整對話放進同一個 prompt，作者說這個問題明顯緩解。</p>
+    
+  </div>
+  <div class="cardband" id="card-08"><div class="cardlabel"><span class="n">圖卡 08 / 13</span><span class="t">兩輪對話整段給評審</span><button type="button" class="zoom" data-card="08">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">兩輪拆開給，評審會找錯上一輪的回答</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.5 節：MT-bench 每題兩輪，比兩個助手就要放兩個問題、四個回答；作者試了「拆成兩個 prompt」與「整段放進一個 prompt」兩種設計</div>
+
+  <div style="position:absolute; left:60px; top:146px; font-size:22px; font-weight:700; color:#C8501F;">✗ 兩輪拆成兩個 prompt</div>
+  <div style="position:absolute; left:840px; top:146px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 兩段完整對話放進一個 prompt</div>
+  <div style="position:absolute; left:800px; top:146px; width:0px; height:654px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:196px; width:700px; height:38px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; padding:0px 16px; font-size:14px; font-weight:700; color:#1C2431;">圖 16 的例子：第 1 輪一個 prompt，第 2 輪另一個 prompt</div>
+  <div style="position:absolute; left:60px; top:244px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">P1 &#183; Q</div><div style="font-size:14px; color:#2B3340;">列 5 件名畫，各給一個兒童互動體驗的點子</div></div>
+  <div style="position:absolute; left:60px; top:282px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">P1 &#183; A</div><div style="font-size:14px; color:#2B3340;">A 的第 2 個例子：達利〈記憶的堅持〉</div></div>
+  <div style="position:absolute; left:60px; top:320px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">P1 &#183; B</div><div style="font-size:14px; color:#6B7380;">B 的回答（圖上省略）</div></div>
+  <div style="position:absolute; left:60px; top:358px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#4B5866;">P2 &#183; Q</div><div style="font-size:14px; font-weight:700; color:#1C2431;">替你的第二個例子寫具體計畫，附上預算估計</div></div>
+  <div style="position:absolute; left:60px; top:396px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">P2 &#183; A</div><div style="font-size:14px; color:#2B3340;">A：〈記憶的堅持〉的計畫，預算 5,000 美元</div></div>
+  <div style="position:absolute; left:60px; top:434px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">P2 &#183; B</div><div style="font-size:14px; color:#2B3340;">B：〈蒙娜麗莎〉兒童互動體驗的計畫</div></div>
+  <div style="position:absolute; left:60px; top:472px; width:700px; height:32px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">GPT-4</div><div style="font-size:14px; font-weight:700; color:#C8501F;">「第二個例子是 B 的〈蒙娜麗莎〉」，判 B 較切題　✗</div></div>
+  <div style="position:absolute; left:60px; top:520px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">A 其實照指示，寫了自己第二個例子的計畫；<br>評審把「你的第二個例子」對到了 B 的回答。</div>
+
+  <div style="position:absolute; left:840px; top:196px; width:700px; height:38px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; padding:0px 16px; font-size:14px; font-weight:700; color:#1C2431;">圖 9：兩個助手各自的完整兩輪對話，放在同一個 prompt</div>
+  <div style="position:absolute; left:840px; top:244px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">SYS</div><div style="font-size:14px; color:#2B3340;">預設的成對比較指示：不讓順序、長度、名字影響判斷</div></div>
+  <div style="position:absolute; left:840px; top:282px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">CONV A</div><div style="font-size:14px; color:#2B3340;">〈A 的對話〉使用者 Q1 → A 答 1 → 使用者 Q2 → A 答 2</div></div>
+  <div style="position:absolute; left:840px; top:320px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">CONV B</div><div style="font-size:14px; color:#2B3340;">〈B 的對話〉使用者 Q1 → B 答 1 → 使用者 Q2 → B 答 2</div></div>
+  <div style="position:absolute; left:840px; top:358px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#4B5866;">FOCUS</div><div style="font-size:14px; font-weight:700; color:#1C2431;">請評審專注在第二個問題（第 3.5 節的說法）</div></div>
+  <div style="position:absolute; left:840px; top:396px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">OUT</div><div style="font-size:14px; color:#2B3340;">輸出 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">[[A]]</span>、<span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">[[B]]</span> 或 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">[[C]]</span></div></div>
+  <div style="position:absolute; left:840px; top:434px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">REF</div><div style="font-size:14px; color:#2B3340;">圖 10：參考答案版，只評一個助手的第二題，給 1 到 10 分</div></div>
+  <div style="position:absolute; left:840px; top:472px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">WHY</div><div style="font-size:14px; font-weight:700; color:#2E7B4F;">完整的對話讓評審掌握脈絡（作者的說法）　✓</div></div>
+  <div style="position:absolute; left:840px; top:520px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">每個回答都在它自己的對話裡，<br>「你的第二個例子」對得回同一個助手說過的話。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#C8501F;">拆開：找不準上一輪的回答</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">作者發現，這種設計讓評審很難精確找到助手前一輪的回答；<br>圖 16 的 GPT-4 就把「第二個例子」對到了 B。</div>
+    <div style="font-size:13px; color:#8A93A0;">附錄 B 的案例由 gpt-4-0314 產生，換成之後的版本不一定重現。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F;">整段放一起：作者說明顯緩解</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">兩個助手的完整對話放在同一個 prompt，<br>請評審專注第二個問題，對錯回答的問題明顯減少。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文沒有給這個改進的數字。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：對話依圖 16 精簡，P1、P2 是整理者為了標出「兩個 prompt」加的。第 3.5 節說圖 9 請評審專注第二題，圖 9 印出的 prompt 沒有這句，圖 10 有。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>作者試了兩種設計：一是把兩輪拆成兩個 prompt，二是把完整的對話放在一個 prompt 裡。第一種的問題是評審很難精確找到助手前一輪的回答。圖 16 是一個例子：第一輪請助手分享把名畫改成兒童互動體驗的點子，列出 5 件作品；A 的第二個例子是達利的〈記憶的堅持〉。第二輪追問「替你的第二個例子寫一份具體計畫，附上預算估計」，A 照做了，寫出〈記憶的堅持〉的計畫，預算 5,000 美元。GPT-4 卻把「第二個例子」對到 B 的回答，說使用者要的是 B 的〈蒙娜麗莎〉，判 B 比較切題。</p>
+    <p>作者由此認為，要讓評審掌握脈絡，就得把完整的對話給它看。第二種設計把兩個助手各自的兩輪完整對話放在同一個 prompt，請評審專注在第二個問題；作者說這明顯緩解了對錯回答的問題，但沒有給數字。圖 9 的結構大致如下：</p>
+
+    <div class="codeblock">
+      <span class="file">附錄 A 圖 9 · 多輪成對比較 prompt 的結構 · 精簡改寫成中文</span>
+<pre class="code"><span class="c"># [系統] 同第 3 章的預設成對比較指示，最後輸出 [[A]]、[[B]] 或 [[C]]</span>
+〈助手 A 和使用者的對話 開始〉
+  使用者：{第一個問題}
+  助手 A：{第一個回答}
+  使用者：{第二個問題}
+  助手 A：{第二個回答}
+〈助手 A 和使用者的對話 結束〉
+〈助手 B 和使用者的對話 開始〉
+  <span class="c"># 同樣的兩輪，換成 B 的回答</span>
+〈助手 B 和使用者的對話 結束〉</pre>
+    </div>
+
+    <p>另一個多輪的 prompt 是圖 10，參考答案版的單一答案評分：只評一個助手，先放兩輪的參考答案（使用者的兩個問題，各配一個參考答案），再放這個助手的完整兩輪對話；指示要評審把評估放在助手對第二個問題的回答上，先和參考答案比、找出錯誤，最後給 1 到 10 分。</p>
+
+    <div class="explain stone">
+      <span class="label">原文前後不一致</span>
+      <h4>「專注第二題」寫在哪裡</h4>
+      <p>第 3.5 節說這個設計會請評審專注在第二個問題，並指向圖 9；但圖 9 印出的 prompt 只有預設的成對比較指示，沒有這一句。附錄 A 的圖 10 才有「評估要放在助手對第二個問題的回答」。兩處照錄，本頁不替作者補上。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="agreement-metric" data-toc="一致程度怎麼算">
+  <div class="container head">
+    <p class="chapter">Chapter 08 · Agreement Evaluation · Setup · Appendix D.3</p>
+    <h2><span class="seg">一致程度，</span><span class="seg">是隨機兩位評審的同意率</span></h2>
+    <p class="lede">兩類評審各隨機挑一位（不能是同一位），在隨機一題上投出一樣的票，這個機率就是一致程度。照這個定義，人和人的一致可能被低估，所以附錄 D.3 另外加了「人的多數決」當對照。</p>
+    
+  </div>
+  <div class="cardband" id="card-09"><div class="cardlabel"><span class="n">圖卡 09 / 13</span><span class="t">一致程度怎麼算</span><button type="button" class="zoom" data-card="09">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">一致程度：隨機挑兩個評審，看兩票同不同</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4.1 節與附錄 D.3：兩類評審各隨機挑一位（不能是同一位），在隨機一題投出相同票的機率；下面是附錄 D.3 的例子：三個人投 A、A、B，GPT-4 投 A</div>
+
+  <div style="position:absolute; left:300px; top:152px; font-size:13px; font-weight:700; color:#4B5866;">同一題的投票者，兩兩配對 →</div>
+  <div style="position:absolute; left:300px; top:200px; width:120px; text-align:center; font-size:13px; font-weight:700; color:#4B5866;">人 1 &#183; 投 A</div>
+  <div style="position:absolute; left:428px; top:200px; width:120px; text-align:center; font-size:13px; font-weight:700; color:#4B5866;">人 2 &#183; 投 A</div>
+  <div style="position:absolute; left:556px; top:200px; width:120px; text-align:center; font-size:13px; font-weight:700; color:#4B5866;">人 3 &#183; 投 B</div>
+  <div style="position:absolute; left:736px; top:200px; width:140px; text-align:center; font-size:13px; font-weight:700; color:#1F2A3A; white-space:nowrap;">GPT-4 &#183; 投 A</div>
+  <div style="position:absolute; left:696px; top:196px; width:0px; height:212px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:130px; top:248px; width:150px; text-align:right; font-size:13px; font-weight:700; color:#4B5866;">人 1 &#183; 投 A</div>
+  <div style="position:absolute; left:130px; top:308px; width:150px; text-align:right; font-size:13px; font-weight:700; color:#4B5866;">人 2 &#183; 投 A</div>
+  <div style="position:absolute; left:130px; top:368px; width:150px; text-align:right; font-size:13px; font-weight:700; color:#4B5866;">人 3 &#183; 投 B</div>
+
+  <div style="position:absolute; left:300px; top:232px; width:120px; height:52px; box-sizing:border-box; border-radius:6px; background-color:#EEF1F5; display:flex; align-items:center; justify-content:center; font-size:13px; color:#8A93A0;">同一人</div>
+  <div style="position:absolute; left:428px; top:232px; width:120px; height:52px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">✓ 相同</div>
+  <div style="position:absolute; left:556px; top:232px; width:120px; height:52px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">✗ 不同</div>
+  <div style="position:absolute; left:736px; top:232px; width:140px; height:52px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">✓ 相同</div>
+
+  <div style="position:absolute; left:300px; top:292px; width:120px; height:52px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px dashed #D5DAE1;"></div>
+  <div style="position:absolute; left:428px; top:292px; width:120px; height:52px; box-sizing:border-box; border-radius:6px; background-color:#EEF1F5; display:flex; align-items:center; justify-content:center; font-size:13px; color:#8A93A0;">同一人</div>
+  <div style="position:absolute; left:556px; top:292px; width:120px; height:52px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">✗ 不同</div>
+  <div style="position:absolute; left:736px; top:292px; width:140px; height:52px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">✓ 相同</div>
+
+  <div style="position:absolute; left:300px; top:352px; width:120px; height:52px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px dashed #D5DAE1;"></div>
+  <div style="position:absolute; left:428px; top:352px; width:120px; height:52px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px dashed #D5DAE1;"></div>
+  <div style="position:absolute; left:556px; top:352px; width:120px; height:52px; box-sizing:border-box; border-radius:6px; background-color:#EEF1F5; display:flex; align-items:center; justify-content:center; font-size:13px; color:#8A93A0;">同一人</div>
+  <div style="position:absolute; left:736px; top:352px; width:140px; height:52px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">✗ 不同</div>
+
+  <div style="position:absolute; left:300px; top:440px; width:376px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">人對人：1/3</div><div style="font-size:12.5px; color:#6B7380;">右上三對裡，只有一對相同</div></div></div>
+  <div style="position:absolute; left:716px; top:440px; width:180px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF; white-space:nowrap;">GPT-4 對人：2/3</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">三對裡兩對相同</div></div></div>
+
+  <div style="position:absolute; left:940px; top:232px; width:230px; height:112px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">人的多數決</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.06em; color:#8A93A0;">HUMAN-MAJORITY</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">三票 A、A、B，<br>多數是 A</div></div>
+  <div style="position:absolute; left:940px; top:440px; width:230px; height:56px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF; white-space:nowrap;">GPT-4 對多數決：1</div><div style="font-size:12.5px; color:rgba(255,255,255,0.8);">A 對 A，這一題相同</div></div></div>
+
+  <div style="position:absolute; left:1210px; top:150px; width:330px; height:262px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 22px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:17px; font-weight:700; color:#1C2431;">怎麼讀這張表</div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">01</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">列與欄都是投票者；✓ 是那一對<br>投的票相同，對角線是同一個人。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">02</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">人對人只看右上三格，<br>GPT-4 對人看最右邊那一欄。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">03</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">人的票分歧時，人對人被壓低；<br>GPT-4 只要跟多數走，<br>就顯得比人對人高。</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:520px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">S1：勝、負、平手三種結果（對調後前後不一致的票算平手），兩個亂猜的評審一致 33%；S2：只算非平手票，亂猜 50%。表 5、表 6 兩種都報。</div>
+
+  <div style="position:absolute; left:60px; top:584px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">人對人可能被低估</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">三個人投 A、A、B，人對人只有 1/3；<br>GPT-4 投 A 時是 2/3，投 B 時是 1/3。<br>作者因此加了一種評審：人的多數決。</div>
+    <div style="font-size:13px; color:#8A93A0;">附錄 D.3 的例子。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:584px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">多數決給出上限</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">GPT-4 和當題多數票相同的機率；<br>沒有多數時各算一半。作者說多數決<br>對人的一致程度，就是 GPT-4 對人的上限。</div>
+    <div style="font-size:13px; color:#8A93A0;">表 13：不計平手時，人對多數決 90%（第一輪）。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:584px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">比之前，先看算法與票數</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">S1 含平手，亂猜 33%；S2 只算非平手票，<br>亂猜 50%。表 5 每一格上面是一致程度，<br>下面是票數。</div>
+    <div style="font-size:13px; color:#8A93A0;">兩個數字要是同一種算法，才能放在一起比。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：方格是整理者依附錄 D.3 的三人例子畫的，左下的虛線格是重複的配對，不另外算；「GPT-4 對多數決：1」是整理者照定義算的。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c09" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M488 406V438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M806 406V438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M1055 346V438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 4 節比的是不同 LLM 評審和人之間的一致程度，在 MT-bench 上也比人和人之間的一致程度。作者說 MT-bench 是小規模、受控的人評研究，Chatbot Arena 是規模較大、群眾在真實使用中的人評研究。兩邊的評審都有兩種：LLM 評審，以及人；MT-bench 是 58 位專家，Arena 是來自 2114 個 IP 的群眾（第 2 章）。在 MT-bench 上，LLM 評審評全部的配對，每位專家則至少評 20 題。</p>
+    <p>一致程度的定義是：兩類評審各隨機挑一位（不能是同一位），在隨機挑的一題上投出相同票的機率。比 GPT-4 和 Claude，就是兩者在隨機一題投票相同的機率；比 GPT-4 和人，是 GPT-4 和隨機一位人在隨機一題相同的機率；人和人之間，則是隨機挑兩位不同的人，在隨機一題相同的機率。另一個指標是平均勝率：一個模型對其他所有參賽者勝率的平均。兩個指標都可以選擇含或不含平手票。</p>
+    <p>表格裡的一致程度有兩種算法。S1 包含非平手、平手，以及因為位置偏誤而前後不一致的票，不一致的票算成平手；每票有三種結果，兩個亂猜的評審一致的機率是 33%。S2 只算非平手票，只有兩種結果，亂猜是 50%。表 5、表 6 每一格上面是一致程度，下面是票數。</p>
+    <p>附錄 D.3 用一個例子說明，人和人的一致程度為什麼可能比 GPT-4 對人還低。一題有三個人投票，分別投 A、A、B。三個人兩兩配對有三對：(A, A)、(A, B)、(A, B)，只有一對相同，所以人和人的一致程度只有 1/3。GPT-4 若投 A，它和三個人各配一對，有兩對相同，一致程度是 2/3；投 B 則是 1/3。</p>
+    <p>為了看得更完整，作者加了一種評審：人的多數決（human-majority），也就是每一題取人的多數票。GPT-4 對多數決的一致程度，就是 GPT-4 和當題多數票相同的機率；沒有多數時各算一半，例如 A、B 票數一樣、GPT-4 投 A，這一題就算 1/2。作者說，GPT-4 對人的一致程度，上限就是多數決對人的一致程度。</p>
+
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>一致程度要和亂猜比</h4>
+      <p>一致程度本身沒有絕對的好壞，要看同樣的算法下，兩個亂猜的評審能有多少：S1 有三種結果，亂猜是 33%；S2 只有兩種，亂猜是 50%。同一個 85%，放在 S2 裡是比亂猜高 35 個百分點（整理者算的）。比較兩個數字之前，先確認它們是不是同一種算法。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="agreement-results" data-toc="和人對得上嗎">
+  <div class="container head">
+    <p class="chapter">Chapter 09 · High Agreement between GPT-4 and Humans</p>
+    <h2><span class="seg">GPT-4 和人的一致程度，</span><span class="seg">追平人和人</span></h2>
+    <p class="lede">在 MT-bench 上，不計平手時 GPT-4 和專家的一致程度是 85%，比專家之間的 81% 還高；Chatbot Arena 的群眾票也是同樣的走向。兩個模型的差距越大，GPT-4 和人越容易一致。</p>
+    
+  </div>
+  <div class="cardband" id="card-10"><div class="cardlabel"><span class="n">圖卡 10 / 13</span><span class="t">GPT-4 和人的一致程度</span><button type="button" class="zoom" data-card="10">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">不計平手時，GPT-4 和人的一致高過人和人</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 5（MT-bench 第一輪）與表 6（Chatbot Arena）：每組上條是 S1（含平手，亂猜 33%），下條是 S2（只算非平手票，亂猜 50%）；條尾是一致程度與票數</div>
+
+  <div style="position:absolute; left:60px; top:132px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#2E7B4F;"></div>GPT-4 對人</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#1F2A3A;"></div>人對人</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#9AA3AE;"></div>其他 LLM 評審對人</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#E5E9EE;"></div>淺色＝S1</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:18px; height:0px; border-top:1.5px dashed #8A93A0;"></div>亂猜的一致程度</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:166px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;"><span style="letter-spacing:0.12em">MT-BENCH</span> &#183; 第一輪（表 5a）</div>
+  <div style="position:absolute; left:715px; top:166px; font-size:12px; color:#8A93A0; white-space:nowrap;">33%</div>
+  <div style="position:absolute; left:916px; top:166px; font-size:12px; color:#8A93A0; white-space:nowrap;">50%</div>
+
+  <div style="position:absolute; left:60px; top:199px; font-size:15px; font-weight:700; color:#1C2431; white-space:nowrap;">GPT-4 成對 對人</div>
+  <div style="position:absolute; left:286px; top:190px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">S1</div>
+  <div style="position:absolute; left:286px; top:214px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">S2</div>
+  <div style="position:absolute; left:320px; top:188px; width:778.8px; height:20px; box-sizing:border-box; background-color:#B4D5C0; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:1107px; top:189px; white-space:nowrap; font-size:13px; color:#2B3340;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">66%</span> &#183; 1,343 票</div>
+  <div style="position:absolute; left:320px; top:212px; width:1003px; height:20px; box-sizing:border-box; background-color:#2E7B4F; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:1331px; top:213px; white-space:nowrap; font-size:13px; font-weight:700; color:#2E7B4F;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">85%</span> &#183; 859 票</div>
+
+  <div style="position:absolute; left:60px; top:259px; font-size:15px; font-weight:700; color:#1C2431; white-space:nowrap;">GPT-4 單一 對人</div>
+  <div style="position:absolute; left:286px; top:250px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">S1</div>
+  <div style="position:absolute; left:286px; top:274px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">S2</div>
+  <div style="position:absolute; left:320px; top:248px; width:708px; height:20px; box-sizing:border-box; background-color:#B4D5C0; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:1036px; top:249px; white-space:nowrap; font-size:13px; color:#2B3340;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">60%</span> &#183; 1,280 票</div>
+  <div style="position:absolute; left:320px; top:272px; width:1003px; height:20px; box-sizing:border-box; background-color:#2E7B4F; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:1331px; top:273px; white-space:nowrap; font-size:13px; font-weight:700; color:#2E7B4F;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">85%</span> &#183; 739 票</div>
+
+  <div style="position:absolute; left:60px; top:319px; font-size:15px; font-weight:700; color:#1C2431; white-space:nowrap;">人 對 人</div>
+  <div style="position:absolute; left:286px; top:310px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">S1</div>
+  <div style="position:absolute; left:286px; top:334px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">S2</div>
+  <div style="position:absolute; left:320px; top:308px; width:743.4px; height:20px; box-sizing:border-box; background-color:#C5CCD5; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:1072px; top:309px; white-space:nowrap; font-size:13px; color:#2B3340;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">63%</span> &#183; 721 票</div>
+  <div style="position:absolute; left:320px; top:332px; width:955.8px; height:20px; box-sizing:border-box; background-color:#1F2A3A; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:1284px; top:333px; white-space:nowrap; font-size:13px; font-weight:700; color:#1F2A3A;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">81%</span> &#183; 479 票</div>
+
+  <div style="position:absolute; left:60px; top:376px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;"><span style="letter-spacing:0.12em">CHATBOT ARENA</span> &#183; 表 6</div>
+
+  <div style="position:absolute; left:60px; top:409px; font-size:15px; font-weight:700; color:#1C2431; white-space:nowrap;">GPT-4 對人</div>
+  <div style="position:absolute; left:286px; top:400px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">S1</div>
+  <div style="position:absolute; left:286px; top:424px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">S2</div>
+  <div style="position:absolute; left:320px; top:398px; width:755.2px; height:20px; box-sizing:border-box; background-color:#B4D5C0; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:1083px; top:399px; white-space:nowrap; font-size:13px; color:#2B3340;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">64%</span> &#183; 3,066 票</div>
+  <div style="position:absolute; left:320px; top:422px; width:1026.6px; height:20px; box-sizing:border-box; background-color:#2E7B4F; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:1355px; top:423px; white-space:nowrap; font-size:13px; font-weight:700; color:#2E7B4F;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">87%</span> &#183; 1,944 票</div>
+
+  <div style="position:absolute; left:60px; top:469px; font-size:15px; font-weight:700; color:#1C2431; white-space:nowrap;">GPT-3.5 對人</div>
+  <div style="position:absolute; left:286px; top:460px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">S1</div>
+  <div style="position:absolute; left:286px; top:484px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">S2</div>
+  <div style="position:absolute; left:320px; top:458px; width:637.2px; height:20px; box-sizing:border-box; background-color:#E5E9EE; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:965px; top:459px; white-space:nowrap; font-size:13px; color:#2B3340;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">54%</span> &#183; 3,061 票</div>
+  <div style="position:absolute; left:320px; top:482px; width:979.4px; height:20px; box-sizing:border-box; background-color:#9AA3AE; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:1308px; top:483px; white-space:nowrap; font-size:13px; font-weight:700; color:#4B5866;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">83%</span> &#183; 1,567 票</div>
+
+  <div style="position:absolute; left:60px; top:529px; font-size:15px; font-weight:700; color:#1C2431; white-space:nowrap;">Claude 對人</div>
+  <div style="position:absolute; left:286px; top:520px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">S1</div>
+  <div style="position:absolute; left:286px; top:544px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">S2</div>
+  <div style="position:absolute; left:320px; top:518px; width:625.4px; height:20px; box-sizing:border-box; background-color:#E5E9EE; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:954px; top:519px; white-space:nowrap; font-size:13px; color:#2B3340;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">53%</span> &#183; 3,062 票</div>
+  <div style="position:absolute; left:320px; top:542px; width:991.2px; height:20px; box-sizing:border-box; background-color:#9AA3AE; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:1320px; top:543px; white-space:nowrap; font-size:13px; font-weight:700; color:#4B5866;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">84%</span> &#183; 1,475 票</div>
+
+  <div style="position:absolute; left:60px; top:596px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">MT-bench：85% 對 81%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">不計平手時，GPT-4 的成對比較與<br>單一答案評分對專家都是 85%，<br>高過專家之間的 81%；第二輪是 85% 對 82%。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說：GPT-4 的判斷和多數人很接近。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:596px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">Arena：差在肯不肯下判斷</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">三個 LLM 評審的非平手一致差不多，<br>但 GPT-4 的非平手票有 1,944 張，<br>GPT-3.5、Claude 是 1,567 與 1,475 張。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者：GPT-4 比較肯定，較少受位置偏誤影響。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:596px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">專家看了理由，75% 說合理</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">專家和 GPT-4 意見不同時，<br>介面會顯示 GPT-4 的判斷：<br>75% 認為合理，34% 願意改選。</div>
+    <div style="font-size:13px; color:#8A93A0;">附錄 C.1；作者說它也許能幫人判得更好。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：比較時要看同一種算法。圖 2 的走勢：兩個模型的勝率差越大，GPT-4 和人越一致，約從 70% 到接近 100%（圖上沒有標各點的數字）。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M709.4 184V566" stroke="#8A93A0" stroke-width="1.5" stroke-dasharray="4 4"></path>
+    <path d="M910 184V566" stroke="#8A93A0" stroke-width="1.5" stroke-dasharray="4 4"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>表 5 是 MT-bench 的結果，分第一輪與第二輪。GPT-4 不論用成對比較（G4-Pair）還是單一答案評分（G4-Single），和專家的一致程度都很高。S2 下 GPT-4 成對比較對人是 85%，比人對人的 81% 還高；作者的讀法是 GPT-4 的判斷和多數人很接近。粗體照原表，括號裡是票數。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 5 · 兩類評審</th><th>第一輪 S1</th><th>第一輪 S2</th><th>第二輪 S1</th><th>第二輪 S2</th></tr></thead>
+        <tbody>
+          <tr><td>GPT-4 成對 對 GPT-4 單一</td><td>70%（1138）</td><td>97%（662）</td><td>70%（1161）</td><td>95%（727）</td></tr>
+          <tr><td>GPT-4 成對 對 人</td><td>66%（1343）</td><td><strong>85%</strong>（859）</td><td>66%（1325）</td><td><strong>85%</strong>（864）</td></tr>
+          <tr><td>GPT-4 單一 對 人</td><td>60%（1280）</td><td>85%（739）</td><td>59%（1285）</td><td>84%（776）</td></tr>
+          <tr><td>人 對 人</td><td>63%（721）</td><td><strong>81%</strong>（479）</td><td>67%（707）</td><td><strong>82%</strong>（474）</td></tr>
+          <tr><td>亂猜</td><td>33%</td><td>50%</td><td>33%</td><td>50%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>摘要把這個結果寫成一句：</p>
+    <div class="quote-en">
+      "achieving over 80% agreement, the same level of agreement between humans"
+      <span class="zh">「一致程度超過 80%，和人與人之間在同一個水準」：摘要對 GPT-4 這類強評審的結論。</span>
+    </div>
+
+    <p>作者也說，GPT-4 的判斷也許能幫人判得更好。收集 MT-bench 的資料時，專家的選擇和 GPT-4 不同，介面就額外顯示 GPT-4 的判斷，請他按三個按鈕之一：合理、我要改選；合理、但維持原選；判斷錯誤（附錄 C.1 的圖 18）。結果專家在 75% 的情況認為 GPT-4 的判斷合理，在 34% 的情況甚至願意改選。</p>
+    <p>Chatbot Arena 的資料（表 6）呈現同樣的走向。不計平手時，GPT-4 對人是 87%，GPT-4 單一答案評分對人是 85%，GPT-3.5 與 Claude 對人是 83% 與 84%。作者的讀法是：幾個 LLM 評審和人的非平手一致比例差不多，但 GPT-4 的非平手票多得多，代表 GPT-4 比較肯下判斷、比較少受位置偏誤影響；其他模型肯下判斷的時候，表現也不錯。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 6 · 兩類評審</th><th>S1</th><th>S2</th></tr></thead>
+        <tbody>
+          <tr><td>GPT-4 對 人</td><td>64%（3066）</td><td><strong>87%</strong>（1944）</td></tr>
+          <tr><td>GPT-4 單一 對 人</td><td>60%（2968）</td><td>85%（1761）</td></tr>
+          <tr><td>GPT-3.5 對 人</td><td>54%（3061）</td><td>83%（1567）</td></tr>
+          <tr><td>Claude 對 人</td><td>53%（3062）</td><td>84%（1475）</td></tr>
+          <tr><td>GPT-4 對 GPT-4 單一</td><td>72%（2968）</td><td>95%（1967）</td></tr>
+          <tr><td>GPT-4 對 GPT-3.5</td><td>66%（3061）</td><td>94%（1788）</td></tr>
+          <tr><td>GPT-4 對 Claude</td><td>66%（3062）</td><td>95%（1712）</td></tr>
+          <tr><td>GPT-4 單一 對 GPT-3.5</td><td>60%（2964）</td><td>89%（1593）</td></tr>
+          <tr><td>GPT-4 單一 對 Claude</td><td>62%（2964）</td><td>91%（1538）</td></tr>
+          <tr><td>GPT-3.5 對 Claude</td><td>68%（3057）</td><td>96%（1497）</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>兩張表裡，GPT-4 單一答案評分和 GPT-4 成對比較、和人都很一致。作者說這代表 GPT-4 有一套相對穩定的內在評分標準；它有時比成對比較略差、平手票也比較多，但更容易擴充。第 11 章的 MT-bench 分數就用它。</p>
+    <p>最後是細分。只算非平手票，把每一對模型各算一個 GPT-4 對人的一致程度，畫成圖 2：橫軸是兩個模型的勝率差，縱軸是一致程度。作者說一致程度隨模型之間的差距變大而升高，從 70% 左右到接近 100%；兩個模型的表現差得越多，GPT-4 和人越容易一致。圖 2 的點沒有標數字，這裡只寫作者描述的走勢。</p>
+    <p>附錄 D.3 的表 13 在 MT-bench 上多放了 Claude、作者本人的票與人的多數決。不計平手時，GPT-4 成對比較對多數決是 85%（第一輪，546 票），人對多數決是 90%（631 票）；第二輪是 85% 與 91%。依第 8 章的說法，人對多數決就是 GPT-4 對人的上限，GPT-4 成對比較對人（85%）離這個上限還差 5 到 6 個百分點（整理者算的）。</p>
+
+    <div class="story">
+      <div class="label">關鍵觀念 · 二</div>
+      <h4>人和人也只有八成一致</h4>
+      <p>85% 聽起來不夠高，要看和誰比。專家之間不計平手也只有 81% 到 82%；在 S1 把平手算進去，人和人只有 63% 到 67%。評審能追的目標，是人和人之間的一致程度，100% 本來就不存在。</p>
+      <p>這一段是整理者依表 5 的讀法。</p>
+    </div>
+
+    <div class="thought">
+      <span class="label">思考題 · 02</span>
+      <h4>你的 LLM 評審，和你的團隊比起來一致嗎？</h4>
+      <p>假設你要把產品的評分交給一個 LLM 評審，手上有兩三位同事可以幫忙評一小批。</p>
+      <p class="hint">照第 8、9 章的做法：同一批題目讓幾位同事和 LLM 評審都評，分別算人對人、LLM 對人的一致程度，含平手與不含平手各算一次。LLM 對人追得上人對人，才考慮把大部分評分交給它。這是整理者依原文整理的建議。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="win-rates" data-toc="勝率與自我偏好" class="nocard">
+  <div class="container">
+    <p class="chapter">Chapter 10 · Win Rates under Different Judges · Self-enhancement Bias</p>
+    <h2><span class="seg">換成 LLM 評審，</span><span class="seg">模型的排名幾乎不變</span></h2>
+    <p class="lede">不同評審替六個、九個模型算出的平均勝率曲線，LLM 評審的和人的很接近。同一組勝率也拿來檢查自我偏好：有些評審偏袒某些模型，但資料太少，作者沒有下結論。</p>
+
+    <p>第 4.3 節把不同評審之下各模型的平均勝率畫成曲線：圖 3 是 MT-bench 的六個模型，分全部票與非平手票、第一輪與第二輪四張小圖；圖 4 是 Chatbot Arena 的九個模型，分全部票與非平手票。作者說 LLM 評審的勝率曲線和人的曲線非常接近。</p>
+
+    <div class="explain stone">
+      <span class="label">怎麼讀圖 3、圖 4</span>
+      <h4>看各條線是不是一起起伏</h4>
+      <p>兩張圖都沒有在點上標數字。橫軸是模型，縱軸是 0 到 1 的平均勝率；每條線是一種評審：GPT-4、GPT-3.5、Claude 與人；圖 3 第二輪的兩張小圖另外畫了一條第一輪的人評，圖 4 多了 GPT-4 單一答案評分、沒有 Claude。讀法是看幾條線的高低起伏是不是一起走。這是整理者對圖的讀法，本頁不替各點補數字。</p>
+    </div>
+
+    <p>作者從圖 3 讀出一個差別：在 MT-bench 的第二輪，人比第一輪更偏好 Claude、GPT-3.5 這類閉源模型；作者認為多輪的基準比較能分出模型的某些進階能力。</p>
+    <p>表 7 列出幾個代表模型在各類題目的勝率，用來說明 MT-bench 分得出模型。GPT-4 在每一類都明顯最好；Vicuna-13B 在推理、數學、程式三類明顯不如 GPT-3.5 與 GPT-4。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 7 · 模型</th><th>寫作</th><th>角色扮演</th><th>推理</th><th>數學</th><th>程式</th><th>擷取</th><th>STEM</th><th>人文</th></tr></thead>
+        <tbody>
+          <tr><td>GPT-4</td><td>61.2%</td><td>67.9%</td><td>49.3%</td><td>66.1%</td><td>56.3%</td><td>66.2%</td><td>76.6%</td><td>72.2%</td></tr>
+          <tr><td>GPT-3.5</td><td>50.9%</td><td>60.6%</td><td>32.6%</td><td>63.8%</td><td>55.0%</td><td>48.8%</td><td>52.8%</td><td>53.8%</td></tr>
+          <tr><td>Vicuna-13B</td><td>39.7%</td><td>39.2%</td><td>20.1%</td><td>18.0%</td><td>36.9%</td><td>29.2%</td><td>47.0%</td><td>47.5%</td></tr>
+          <tr><td>LLaMA-13B</td><td>15.1%</td><td>15.1%</td><td>7.8%</td><td>7.5%</td><td>2.1%</td><td>9.3%</td><td>6.8%</td><td>10.1%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>數學與程式兩類，GPT-3.5 和 GPT-4 的整體勝率接近，作者的解釋是兩者都答不出某些難題；但直接成對比較或單一答案評分時，GPT-4 仍然明顯比較好（原文這句寫成「比 GPT-3 好」，前後文比的是 GPT-3.5）。表 7 沒有寫明是哪一種評審算出的勝率。附錄 D.4 另外用單一答案評分，替 6 個模型畫了各類分數的雷達圖（圖 20），圖上沒有標數字。</p>
+    <p>第 3.3 節列的第三種偏誤，自我偏好，用的就是這些勝率。作者借用社會認知研究的名詞，指評審可能偏好自己產生的回答，並拿圖 3(b)（第一輪、不含平手）的勝率做統計上的檢查。和人比起來，有些評審確實偏袒某些模型：GPT-4 評自己時勝率高了 10%，Claude-v1 評自己時高了 25%（原文沒有說明是百分點還是相對比例，圖上也沒有標數字）。但它們也偏袒其他模型，GPT-3.5 則沒有偏袒自己。</p>
+    <p>作者說資料有限、差距又小，這個研究無法判定模型有沒有自我偏好。受控的研究也很難做，因為很難在不改變品質的前提下，把一個回答改寫成另一個模型的風格。</p>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>用自家模型當評審時，先留一批人評</h4>
+      <p>作者沒能排除自我偏好，所以受測模型和評審同一家時，保守的做法是換一個不同家族的評審交叉檢查，或拿一小批人評對一次（第 9 章）。這是整理者的建議，論文沒有這樣寫。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="two-kinds" data-toc="兩種基準互補">
+  <div class="container head">
+    <p class="chapter">Chapter 11 · Human Preference Benchmark and Standardized Benchmark · Appendix E</p>
+    <h2><span class="seg">偏好基準和知識考試，</span><span class="seg">量的是兩件事</span></h2>
+    <p class="lede">作者用 MMLU、TruthfulQA 與 MT-bench 評了一系列 LLaMA 衍生模型：少量高品質對話就能大幅拉高 MT-bench 分數，MMLU 卻幾乎不動；訓練資料越多，MMLU 才跟著上升。沒有單一基準能決定模型的品質。</p>
+    
+  </div>
+  <div class="cardband" id="card-11"><div class="cardlabel"><span class="n">圖卡 11 / 13</span><span class="t">MMLU 對 MT-bench 分數</span><button type="button" class="zoom" data-card="11">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">MMLU 考得好，MT-bench 分數不一定高</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 8：橫軸是 MMLU（5-shot），縱軸是 GPT-4 單一答案評分的 MT-bench 分數（每輪 1 到 10 分，160 個分數的平均）；八個 LLaMA 衍生模型與兩個 GPT</div>
+
+  <div style="position:absolute; left:60px; top:136px; display:flex; gap:24px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#6B7380;"></div>LLaMA 基底</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #6B7380; box-sizing:border-box;"></div>Alpaca</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>Vicuna（作者的模型）</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>GPT</div>
+    <div style="color:#8A93A0;">點旁的數字：MMLU · MT-bench</div>
+  </div>
+
+  <div style="position:absolute; left:180px; top:237px; width:900px; height:0px; border-top:1px solid #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:331px; width:900px; height:0px; border-top:1px solid #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:426px; width:900px; height:0px; border-top:1px solid #EEF1F5;"></div>
+
+  <div style="position:absolute; left:190px; top:166px; font-size:12px; color:#8A93A0; white-space:nowrap;">↑ <span style="white-space:nowrap">MT-bench</span> 分數</div>
+  <div style="position:absolute; left:130px; top:229px; width:40px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">8</div>
+  <div style="position:absolute; left:130px; top:323px; width:40px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">6</div>
+  <div style="position:absolute; left:130px; top:418px; width:40px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">4</div>
+  <div style="position:absolute; left:130px; top:512px; width:40px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">2</div>
+  <div style="position:absolute; left:160px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">30</div>
+  <div style="position:absolute; left:310px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">40</div>
+  <div style="position:absolute; left:460px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">50</div>
+  <div style="position:absolute; left:610px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">60</div>
+  <div style="position:absolute; left:760px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">70</div>
+  <div style="position:absolute; left:910px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">80</div>
+  <div style="position:absolute; left:1060px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">90</div>
+  <div style="position:absolute; left:780px; top:552px; width:300px; text-align:right; font-size:12px; color:#8A93A0;">MMLU（5-shot）→</div>
+
+  <div style="position:absolute; left:1017px; top:181.5px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:808px; top:182px; width:200px; text-align:right; white-space:nowrap; font-size:13px; font-weight:700; color:#1F2A3A;">GPT-4　<span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">86.4 · 8.99</span></div>
+  <div style="position:absolute; left:771px; top:231px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:796px; top:231px; white-space:nowrap; font-size:13px; font-weight:700; color:#1F2A3A;">GPT-3.5　<span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">70.0 · 7.94</span></div>
+
+  <div style="position:absolute; left:502.5px; top:304px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:528px; top:300px; white-space:nowrap; font-size:13px; font-weight:700; color:#2E7B4F; background-color:#FFFFFF; padding:0px 3px;">Vicuna-13B（all）<span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">52.1 · 6.39</span></div>
+  <div style="position:absolute; left:382.5px; top:320.5px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:306px; top:295px; width:170px; text-align:center; white-space:nowrap; font-size:12.5px; color:#2E7B4F;">7B single <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">44.1 · 6.04</span></div>
+  <div style="position:absolute; left:427.5px; top:322.4px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:448px; top:345px; white-space:nowrap; font-size:12.5px; color:#2E7B4F; background-color:#FFFFFF; padding:0px 3px;">7B all <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">47.1 · 6.00</span></div>
+  <div style="position:absolute; left:280.5px; top:324.8px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:196px; top:347px; width:190px; text-align:center; white-space:nowrap; font-size:12.5px; font-weight:700; color:#2E7B4F; background-color:#FFFFFF;">7B selected <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">37.3 · 5.95</span></div>
+
+  <div style="position:absolute; left:322.5px; top:391.3px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #6B7380; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:246px; top:414px; width:170px; text-align:center; white-space:nowrap; font-size:12.5px; color:#2B3340;">Alpaca-7B <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">40.1 · 4.54</span></div>
+  <div style="position:absolute; left:442.5px; top:391.7px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #6B7380; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:468px; top:392px; white-space:nowrap; font-size:12.5px; color:#2B3340;">Alpaca-13B <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">48.1 · 4.53</span></div>
+
+  <div style="position:absolute; left:249px; top:476px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:266px; top:452px; white-space:nowrap; font-size:12.5px; color:#2B3340;">LLaMA-7B <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">35.2 · 2.74</span></div>
+  <div style="position:absolute; left:426px; top:482px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:452px; top:483px; white-space:nowrap; font-size:12.5px; color:#2B3340;">LLaMA-13B <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">47.0 · 2.61</span></div>
+
+  <div style="position:absolute; left:1120px; top:170px; width:420px; height:296px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 24px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:17px; font-weight:700; color:#1C2431;">怎麼讀這張圖</div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#6B7380; margin-top:2px;">01</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">兩個 LLaMA 基底模型的 MMLU 不低，<br>MT-bench 卻只有 2.74 與 2.61。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">02</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">Vicuna-7B（selected）只用 4.8M token、<br>3K 段對話：MMLU 37.3，MT-bench 5.95。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">03</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">同樣是 Vicuna-7B，資料越多 MMLU 越高<br>（37.3、44.1、47.1），MT-bench 都在 6 上下。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#1F2A3A; margin-top:2px;">04</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">作者的結論：沒有單一基準能決定<br>模型的品質，兩種基準都要看。</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:196px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">少量對話，學到的是風格</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">作者說少量高品質對話能很快教會模型<br>GPT-4（大致也是人）偏好的風格，<br>卻不會明顯提高 MMLU。</div>
+    <div style="font-size:13px; color:#8A93A0;">selected：至少 3 輪的 GPT-4 對話，分 3K 群取中心。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">資料越多，知識分數越高</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">在 ShareGPT 對話上微調，MMLU 隨資料量<br>穩定上升；三個 Vicuna-7B 的 TruthfulQA<br>在 0.30 到 0.32 之間。</div>
+    <div style="font-size:13px; color:#8A93A0;">ShareGPT 清理後有 125K 段對話（附錄 E）。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">混合評估：能力＋偏好</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">作者主張兩種基準一起用：<br>既有的能力基準看核心能力，<br>用 LLM 評審的偏好基準看對齊。</div>
+    <div style="font-size:13px; color:#8A93A0;">他們也維護一個定期更新的排行榜。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：散點圖是整理者依表 8 重畫的，原文是表格；GPT-3.5、GPT-4 沒有訓練 token 數與 TruthfulQA。模型與分數是 2023 年的結果。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c11" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M180 520V168" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+    <path d="M180 520H1094" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+    <path d="M330 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M480 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M630 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M780 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M930 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M1080 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 5 節的立場是：MT-bench、Chatbot Arena 這類人類偏好基準，是現有標準化基準的補充；兩者量的是模型不同的面向，建議兩種一起用。作者拿幾個從 LLaMA 衍生的模型，在 MMLU（5-shot）、TruthfulQA（MC1，0-shot）與 MT-bench 上評分。MT-bench 用 GPT-4 單一答案評分，因為第 9 章顯示它表現好，又比較容易擴充、比較簡單；每一輪給 1 到 10 分（圖 6、圖 10 的 prompt），報 80 題乘 2 輪、共 160 個分數的平均。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 8 · 模型</th><th>訓練 token</th><th>MMLU<br>（5-shot）</th><th>TruthfulQA<br>（0-shot）</th><th>MT-bench<br>（GPT-4 評）</th></tr></thead>
+        <tbody>
+          <tr><td>LLaMA-7B</td><td>1T</td><td>35.2</td><td>0.22</td><td>2.74</td></tr>
+          <tr><td>LLaMA-13B</td><td>1T</td><td>47.0</td><td>0.26</td><td>2.61</td></tr>
+          <tr><td>Alpaca-7B</td><td>4.4M</td><td>40.1</td><td>0.26</td><td>4.54</td></tr>
+          <tr><td>Alpaca-13B</td><td>4.4M</td><td>48.1</td><td>0.30</td><td>4.53</td></tr>
+          <tr><td>Vicuna-7B（selected）</td><td>4.8M</td><td>37.3</td><td>0.32</td><td>5.95</td></tr>
+          <tr><td>Vicuna-7B（single）</td><td>184M</td><td>44.1</td><td>0.30</td><td>6.04</td></tr>
+          <tr><td>Vicuna-7B（all）</td><td>370M</td><td>47.1</td><td>0.32</td><td>6.00</td></tr>
+          <tr><td>Vicuna-13B（all）</td><td>370M</td><td>52.1</td><td>0.35</td><td>6.39</td></tr>
+          <tr><td>GPT-3.5</td><td>—</td><td>70.0</td><td>—</td><td>7.94</td></tr>
+          <tr><td>GPT-4</td><td>—</td><td>86.4</td><td>—</td><td>8.99</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>三個 Vicuna-7B 的差別在訓練資料（附錄 E）。Vicuna 是用 ShareGPT 上使用者分享的 ChatGPT 對話微調 LLaMA 得到的；作者把 HTML 轉回 markdown、濾掉不當或低品質的樣本，清理後有 125K 段對話，再把太長的對話切成符合模型脈絡長度的片段。從這份資料做出三個規模的訓練集（表 14）：all 是全部，370M token；single 只取每段對話的第一輪，184M token；selected 是 3K 段的小型高品質資料，4.8M token，做法是挑出至少 3 輪、由 GPT-4 產生的對話，分成 3K 群，每群取中心的那一段。對照的 Alpaca 資料是 4.4M token、52K 段、每段 1 輪。</p>
+    <p>所有 Vicuna 模型用同一組超參數：批次 128、學習率 2e-5、3 個 epoch、序列長 2048，只有 selected 訓練 5 個 epoch。訓練用 8 張 A100，最長的一次約兩天。</p>
+    <p>作者的讀法有兩點。第一，在高品質的對話資料（ShareGPT）上微調，能穩定提升 MMLU，而且隨微調資料量增加：Vicuna-7B 從 selected 的 37.3、single 的 44.1 到 all 的 47.1。第二，少量的高品質對話能很快教會模型 GPT-4（大致也就是人）偏好的風格，卻不會明顯提高 MMLU：selected 只用了 4.8M token、3K 段對話，MT-bench 就有 5.95 分，MMLU 只有 37.3。從表 8 看，沒有單一基準能決定模型的品質，所以需要全面的評估。</p>
+    <p>作者由此認為，用 LLM 評審近似人的偏好高度可行，可能成為未來基準的新標準；他們也維護一個定期更新、收錄更多模型的排行榜。作者另外提到 DynaBench：一個動態收集資料、讓人參與其中的研究平台，說它和自己的精神一致。它處理的是靜態標準化基準會飽和、會被過度擬合的問題，LLM 評審可以把這類平台自動化、做大。</p>
+
+    <div class="pullquote">
+      知識考試量模型知道什麼，偏好基準量人喜不喜歡它的回答；兩個都要看。
+      <cite>整理自第 5 節</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="vicuna-judge" data-toc="微調小模型當評審">
+  <div class="container head">
+    <p class="chapter">Chapter 12 · Exploring Vicuna as a Judge · Appendix F</p>
+    <h2><span class="seg">用 Arena 的投票，</span><span class="seg">把小模型調成評審</span></h2>
+    <p class="lede">GPT-4 當評審，評多了也貴。作者試著用開源的 Vicuna-13B 代替：直接用時一致率只有一兩成，還常常寫不出規定的格式；拿 Arena 的 20K 張人類投票微調成三選一的分類器後，一致率升到 65.0%，格式錯誤是 0%。</p>
+    
+  </div>
+  <div class="cardband" id="card-12"><div class="cardlabel"><span class="n">圖卡 12 / 13</span><span class="t">微調 Vicuna 當評審</span><button type="button" class="zoom" data-card="12">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">零樣本 Vicuna 常寫不出格式，微調後一致率 65%</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">附錄 F：GPT-4 評多了也貴，作者試用開源的 Vicuna-13B 當便宜的評審；先直接拿來用（零樣本），再用 Chatbot Arena 的人類投票微調</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 零樣本：直接拿 <span style="white-space:nowrap">Vicuna-13B</span> 當評審</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 微調：改成三選一的分類</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:90px; top:198px; width:640px; height:40px; box-sizing:border-box; background-color:#4B5866; border-radius:10px 10px 0px 0px; padding:0px 20px; display:flex; align-items:center; font-size:16px; font-weight:700; color:#FFFFFF;">給它預設的評審 prompt 與兩個回答，它常這樣回</div>
+  <div style="position:absolute; left:90px; top:238px; width:640px; height:62px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 10px 10px; padding:0px 20px; display:flex; align-items:center; gap:18px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">「A 的回答比 B 好。」</div><div style="font-size:13px; color:#C8501F;">沒有 [[A]]、[[B]]、[[C]] 的標記，程式解析不了</div></div>
+
+  <div style="position:absolute; left:90px; top:322px; width:640px; height:32px; box-sizing:border-box; background-color:#EEF1F5; border-radius:6px 6px 0px 0px; display:grid; grid-template-columns:150px 1fr 1fr;">
+    <div style="padding:0px 16px; display:flex; align-items:center; font-size:13px; font-weight:700; color:#4B5866;">表 15 · prompt</div>
+    <div style="padding:0px 16px; display:flex; align-items:center; font-size:13px; font-weight:700; color:#4B5866;">一致率</div>
+    <div style="padding:0px 16px; display:flex; align-items:center; font-size:13px; font-weight:700; color:#4B5866;">格式錯誤</div>
+  </div>
+  <div style="position:absolute; left:90px; top:354px; width:640px; height:44px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:150px 1fr 1fr;">
+    <div style="padding:0px 16px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">default</div>
+    <div style="padding:0px 16px; display:flex; align-items:center; gap:10px;"><div style="width:26px; height:12px; border-radius:2px; background-color:#9AA3AE;"></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#1C2431;">15.0%</div></div>
+    <div style="padding:0px 16px; display:flex; align-items:center; gap:10px;"><div style="width:39px; height:12px; border-radius:2px; background-color:#C8501F;"></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#C8501F;">22.5%</div></div>
+  </div>
+  <div style="position:absolute; left:90px; top:398px; width:640px; height:44px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:150px 1fr 1fr;">
+    <div style="padding:0px 16px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">rename</div>
+    <div style="padding:0px 16px; display:flex; align-items:center; gap:10px;"><div style="width:28px; height:12px; border-radius:2px; background-color:#9AA3AE;"></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#1C2431;">16.2%</div></div>
+    <div style="padding:0px 16px; display:flex; align-items:center; gap:10px;"><div style="width:54px; height:12px; border-radius:2px; background-color:#C8501F;"></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#C8501F;">31.2%</div></div>
+  </div>
+  <div style="position:absolute; left:90px; top:442px; width:640px; height:44px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:150px 1fr 1fr;">
+    <div style="padding:0px 16px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">score</div>
+    <div style="padding:0px 16px; display:flex; align-items:center; gap:10px;"><div style="width:19px; height:12px; border-radius:2px; background-color:#9AA3AE;"></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#1C2431;">11.2%</div></div>
+    <div style="padding:0px 16px; display:flex; align-items:center; gap:10px;"><div style="width:134px; height:12px; border-radius:2px; background-color:#C8501F;"></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#C8501F;">78.8%</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:504px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">作者說零樣本的一致率遠低於所有閉源模型（表 2 是 23.8% 到 66.2%）；<br>格子裡的小長條依百分比畫，是整理者加的。</div>
+
+  <div style="position:absolute; left:890px; top:200px; width:600px; height:48px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">從 Arena 隨機抽 22K 張單輪票，涵蓋 15 個模型</div>
+  <div style="position:absolute; left:890px; top:282px; width:600px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">20K 張訓練、2K 張驗證</div><div style="margin-top:2px; font-size:12.5px; color:#6B7380;">3 個 epoch，cosine 排程，最大學習率 2e-5</div></div></div>
+  <div style="position:absolute; left:890px; top:372px; width:600px; height:48px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">輸入預設 prompt 與兩個回答，預測 A、B 或平手</div>
+  <div style="position:absolute; left:890px; top:448px; width:600px; height:48px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">三選一的分類：不必照格式寫答案，輸出一定認得出</div>
+  <div style="position:absolute; left:840px; top:514px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">平手的標籤包含「兩個都差」與平手票；<br>在正文用的同一組 3K 張票上測試。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#C8501F;">零樣本：一致率最多 16.2%</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">default、rename、score 三種 prompt 是 15.0%、16.2%、11.2%；<br>格式錯誤最高 78.8%（score 版）。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說它明顯受位置偏誤等限制所苦，指令也不太照著做。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#2E7B4F;">微調後：一致率 65.0%，錯誤 0%</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">3K 票上的準確率：含平手 56.8%、不含平手 85.5%；<br>亂猜是 33% 與 50%，GPT-4 是 66% 與 87%。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者：有潛力當便宜的開源評審；這是初步結果。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：正文寫一致率從 16.2% 升到 65.0%，表 15 的零樣本 default 是 15.0%；附錄 F 的 GPT-4 66% 和表 6 的 64% 不同，論文沒有說明。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c12" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c12" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c12" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M1190 248V280" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c12)"></path>
+    <path d="M1190 338V370" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c12)"></path>
+    <path d="M1190 420V446" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c12)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>論文大部分在評 GPT-4 這類閉源模型能不能代替人評分，但評分的次數一多，這類服務也會變貴。附錄 F 探索另一條路：開源的 Vicuna-13B 語言理解能力不差，成本又低得多，能不能當便宜的評審？</p>
+    <p>直接拿來用（零樣本），Vicuna-13B 明顯受前面幾章講的限制所苦，例如位置偏誤。表 15 顯示它在三種 prompt 下的一致率只有 11.2% 到 16.2%，遠低於所有閉源模型；它的指令遵循能力較弱，格式錯誤率從 22.5% 到 78.8%。很多時候它回的是「A 的回答比 B 好」這類自然語言，不照預先定好的格式，程式很難自動解析，放進可擴充的自動評估流程就不實用。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 15 · Vicuna-13B</th><th>prompt</th><th>一致率</th><th>偏前</th><th>偏後</th><th>格式錯誤</th></tr></thead>
+        <tbody>
+          <tr><td>零樣本</td><td>default</td><td>15.0%</td><td>53.8%</td><td>8.8%</td><td>22.5%</td></tr>
+          <tr><td>零樣本</td><td>rename</td><td>16.2%</td><td>12.5%</td><td>40.0%</td><td>31.2%</td></tr>
+          <tr><td>零樣本</td><td>score</td><td>11.2%</td><td>10.0%</td><td>0.0%</td><td>78.8%</td></tr>
+          <tr><td>微調後</td><td>default</td><td><strong>65.0%</strong></td><td>27.5%</td><td>7.5%</td><td>0.0%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>所以作者用 Chatbot Arena 的人類投票進一步微調。他們從 Arena 隨機抽 22K 張單輪票，涵蓋論文投稿時平台支援的全部 15 個模型（例如 GPT-4、GPT-3.5、Claude-v1、Vicuna、Koala、Alpaca、LLaMA、Dolly、ChatGLM、StableLM），讓模型看到更多樣的回答與人的偏好；其中 20K 張訓練、2K 張驗證。為了避開指令遵循弱的問題，他們把任務改成三選一的序列分類：輸入是預設 prompt 加上兩個回答，標籤是 A、B、平手（平手包含「兩個都差」與平手票），模型只要預測哪個較好或平手，不必照答案模板寫。訓練 3 個 epoch，用 cosine 學習率排程、最大學習率 2e-5；用 2K 驗證集挑超參數，再在正文用的同一組 3K 資料上測試。</p>
+    <p>結果是：因為改成分類，每一個輸出都認得出來，格式錯誤率 0%。位置偏誤方面，正文寫一致率從 16.2% 升到 65.0%；表 15 的零樣本 default 是 15.0%，16.2% 是 rename 的值，兩個數字照錄。在 3K 張測試票上，含三個標籤的準確率是 56.8%，不含平手的預測與標籤是 85.5%，明顯高於亂猜的 33% 與 50%；作者拿來對照的 GPT-4 是 66% 與 87%。</p>
+    <p>表 6 裡 GPT-4 對人的一致程度是 64% 與 87%，附錄 F 寫的 66% 和它不同，論文沒有說明兩者的算法差別。作者的結論是，微調後的 Vicuna-13B 有潛力成為昂貴閉源模型的便宜開源替代品；同期的另一篇論文也有類似的結論。</p>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>這是初步結果</h4>
+      <p>附錄 F 只測了位置偏誤與準確率，沒有重做冗長、數學題這些測試；第 6 節的未來方向，也把「和人的偏好對齊的開源 LLM 評審」列為待做的事（第 13 章）。這段是整理者依附錄 F 與第 6 節整理的提醒。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="takeaways" data-toc="限制與結論">
+  <div class="container head">
+    <p class="chapter">Chapter 13 · Discussion · Conclusion</p>
+    <h2><span class="seg">LLM 評審可用，</span><span class="seg">但偏誤要先量過</span></h2>
+    <p class="lede">作者的結論是：GPT-4 這類強 LLM 當評審，和人的一致程度超過 80%，和專家之間相當，是可擴充、可解釋的近似人評方法。他們也承認這篇只看有用程度、沒看安全，把多個面向併成一個分數，偏誤的解法也還是初步的。</p>
+    
+  </div>
+  <div class="cardband" id="card-13"><div class="cardlabel"><span class="n">圖卡 13 / 13</span><span class="t">結論：先量偏誤，再和人對一次</span><button type="button" class="zoom" data-card="13">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">LLM 當評審：先量偏誤，再和人對一次</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 6、7 節：GPT-4 這類強評審和人的一致程度超過 80%，和專家之間相當；作者也列出這篇沒處理的限制與三個方向</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:340px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">01　偏誤要量出來</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">寫進 prompt 的提醒，<br>擋不住位置偏誤</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">預設 prompt 已要評審別受順序、長度、<br>名字影響，表 2 仍量到明顯的位置偏誤；<br>對調順序、重複清單就是量它的小測試。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 只在 prompt 裡寫「請保持客觀」<br>✓ 每一種偏誤各設計一個小測試</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:340px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">02　和人對一次</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">一致程度要拿去和<br>人與人之間的比</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">專家之間不計平手也只有 81% 到 82%，<br>GPT-4 對人是 85%。比較之前，<br>先確認是同一種算法，也看票數。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 期待評審和人百分之百一致<br>✓ 以人與人之間的一致當目標</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:340px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">03　兩種基準一起看</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">知識考試和偏好基準，<br>量的是兩件事</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">Vicuna-7B（selected）：MMLU 37.3、<br>MT-bench 5.95；LLaMA-13B 是 47.0 與 2.61。<br>只看其中一種，兩個模型的高下會反過來。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">作者主張混合評估：能力基準，<br>加上用 LLM 評審的偏好基準。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:556px; font-size:20px; font-weight:700; color:#1C2431;">作者點名的限制與方向（不排順序）</div>
+  <div style="position:absolute; left:60px; top:598px; width:260px; height:72px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#C8501F;">LIMIT 1</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">只看有用，沒看安全</div>
+  </div>
+  <div style="position:absolute; left:360px; top:598px; width:260px; height:72px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#C8501F;">LIMIT 2</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">多個面向併成一個分數</div>
+  </div>
+  <div style="position:absolute; left:660px; top:598px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">DIRECTION 1</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">更多類別、大規模評比</div>
+  </div>
+  <div style="position:absolute; left:960px; top:598px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">DIRECTION 2</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">和人對齊的開源評審</div>
+  </div>
+  <div style="position:absolute; left:1260px; top:598px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">DIRECTION 3</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">加強開源模型的數學推理</div>
+  </div>
+  <div style="position:absolute; left:60px; top:690px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">兩個限制與三個方向照第 6 節；作者也說第 3.4 節的緩解做法是初步的，預期會有更進階的方法。<br>附錄 F 微調 Vicuna 當評審，是「和人對齊的開源評審」這個方向的初步結果（第 12 卡）。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">硬規則：上排三條原則是整理者歸納的，數字取自表 2、表 5、表 8；下排照第 6 節。模型與結果都是 2023 年的狀況。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 6 節的限制有兩點。第一，這篇強調有用（helpfulness），大致忽略了安全；誠實與無害對聊天助手一樣重要，作者預期改寫預設 prompt，就能用類似的方法評這些指標。第二，就算只看有用，也有正確、切題、創意等好幾個面向，這篇全部併成一個指標；分析並拆開這些面向，可以做出更完整的評估。作者也說第 3.4 節的解法是初步的，預期會有更進階的方法出現。</p>
+    <p>資料的收集與釋出在附錄 C（第 2 章）。社會影響方面，作者說這些評估方法能幫忙提升聊天機器人的品質與使用體驗，但方法裡的偏誤要處理；資料集能支援對人的偏好與模型行為的研究；更進階的聊天助手可能取代某些人的工作，帶來失業，也帶來新的機會。</p>
+    <p>作者點名三個未來方向：用更多類別、大規模地評比聊天機器人；和人的偏好對齊的開源 LLM 評審（附錄 F 是初步結果，第 12 章）；加強開源模型的數學與推理能力。</p>
+    <p>第 7 節的結論很短：他們提出用 LLM 當評審來評聊天機器人，並用 MT-bench 上 58 位專家與 Chatbot Arena 上數千名群眾的人類偏好資料，系統性地檢驗它的效果；強的 LLM 能達到超過 80% 的一致程度，和專家之間的一致程度相當。作者說這為以 LLM 為基礎的評估框架建立了基礎。</p>
+
+    <div class="explain">
+      <span class="label">整理者的讀法</span>
+      <h4>放回這一講：評審本身也要被評估</h4>
+      <p>這一講談評估的基礎建設，這篇可以帶走三件事。第一，先決定用成對比較還是單一答案評分，並知道各自的代價。第二，把偏誤當成要量的東西，用對調順序、重複清單、參考答案這類小測試量出來。第三，拿一小批人評對一次，和人與人之間的一致程度比。論文沒有處理 agent 的多步驟軌跡，也沒有談 pass@k 這類非確定性的指標，這些由同一講的其他讀物處理。這一段是整理者的連結。</p>
+    </div>
+
+    <dl class="faq">
+      <div><dt>GPT-4 當評審，可以完全取代人評嗎？</dt><dd>作者沒有這樣說。他們的結論是 GPT-4 和人的一致程度超過 80%，和專家之間相當，是可擴充的近似方法；同時列出位置偏誤、冗長偏誤、數學題評不準等限制，解法也還是初步的（第 3.3、3.4、6 節）。</dd></div>
+      <div><dt>成對比較和單一答案評分該用哪一種？</dt><dd>成對比較在模型多時，配對數會平方成長；單一答案評分可能分不出細微差距，換評審模型時分數也比較不穩。作者在 MT-bench 的分數上用 GPT-4 單一答案評分，因為它和成對比較、和人都很一致，又比較容易擴充（第 3.1、4.2、5 節）。</dd></div>
+      <div><dt>為什麼人和人的一致程度只有八成？</dt><dd>一致程度是隨機兩位評審投相同票的機率，人本來就不會全部同意；附錄 D.3 的例子裡，三個人投 A、A、B，人對人只有 1/3。作者因此加了人的多數決，當作 GPT-4 對人的上限（附錄 D.3）。</dd></div>
+    </dl>
+
+    <div class="thought">
+      <span class="label">思考題 · 03</span>
+      <h4>你會先替哪一種偏誤設計小測試？</h4>
+      <p>回想你手上的 LLM 評審：它評的是長文、短答、程式，還是數學題？</p>
+      <p class="hint">長文容易被長度騙，可以仿第 5 章做一個只加長度的版本；比兩個相近的系統時，先照第 4 章對調順序；題目有標準答案時，照第 6 章先另外解好、當參考答案。先挑離你的任務最近的那一種。這是整理者依原文整理的建議。</p>
+    </div>
+
+    <div class="pullquote bronze">
+      評審的分數能不能信，看的是先量過它偏在哪裡、和人差多少。
+      <cite>整理自第 3、4 節</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="glossary" class="nocard glossary" data-toc="名詞速查">
+  <div class="wide">
+    <p class="eyebrow">Reference · 名詞速查</p>
+    <h2><span class="seg">關鍵名詞，</span><span class="seg">與它們在論文裡的位置</span></h2>
+    <p class="lede">先列評審的做法與兩個基準，再列偏誤與緩解，最後是一致程度與延伸實驗用到的名詞。</p>
+    <dl class="glossary-grid">
+      <div class="term"><dt>LLM-as-a-judge</dt><span class="zh-name">LLM 評審</span><dd>讓強的 LLM 讀問題與回答，判斷好壞或打分數，用來近似人的偏好（第 3 節）。</dd></div>
+      <div class="term"><dt>MT-bench</dt><span class="zh-name">多輪問題基準</span><dd>80 題人工設計的兩輪問題，分寫作、角色扮演、擷取、推理、數學、程式、STEM、人文 8 類（第 2.2 節）。</dd></div>
+      <div class="term"><dt>Chatbot Arena</dt><span class="zh-name">群眾對戰平台</span><dd>使用者同時問兩個匿名模型、投票選較好的，投完才揭曉身分；一個月約 30K 票（第 2.3 節）。</dd></div>
+      <div class="term"><dt>pairwise comparison</dt><span class="zh-name">成對比較</span><dd>給評審一個問題與兩個回答，選較好的或判平手；模型多時配對數平方成長（第 3.1 節）。</dd></div>
+      <div class="term"><dt>single answer grading</dt><span class="zh-name">單一答案評分</span><dd>只給一個回答，評審直接打 1 到 10 分；較好擴充，但可能分不出細微差距（第 3.1 節）。</dd></div>
+      <div class="term"><dt>reference-guided grading</dt><span class="zh-name">參考答案引導</span><dd>評審的 prompt 附上參考答案；數學題先讓評審另外作答，再當參考答案放進去（第 3.4 節）。</dd></div>
+      <div class="term"><dt>position bias</dt><span class="zh-name">位置偏誤</span><dd>評審偏好某個位置的回答，多半是第一個；對調順序後判定會變（第 3.3 節、表 2）。</dd></div>
+      <div class="term"><dt>name bias</dt><span class="zh-name">名字偏誤</span><dd>Claude-v1 在改名的 prompt 下偏好「Assistant A」這個名字，而不是位置（表 2 的 rename）。</dd></div>
+      <div class="term"><dt>consistency</dt><span class="zh-name">一致率</span><dd>位置偏誤測試裡，對調兩個回答後判定維持不變的比例；不代表判得對（表 2）。</dd></div>
+      <div class="term"><dt>verbosity bias</dt><span class="zh-name">冗長偏誤</span><dd>評審偏好較長、較囉嗦的回答，即使它沒有比較清楚或正確（第 3.3 節）。</dd></div>
+      <div class="term"><dt>repetitive list attack</dt><span class="zh-name">重複清單攻擊</span><dd>把回答裡的清單改寫後接在前面，只加長度不加資訊；評審選了長版就算失敗（表 3）。</dd></div>
+      <div class="term"><dt>self-enhancement bias</dt><span class="zh-name">自我偏好</span><dd>評審偏好自己產生的回答；作者從勝率看到跡象，但資料太少、無法判定（第 3.3 節）。</dd></div>
+      <div class="term"><dt>chain-of-thought judge</dt><span class="zh-name">CoT 評審</span><dd>在評分 prompt 裡要評審先獨立解題再評分；仍常照抄回答裡的錯（第 3.4 節、圖 15）。</dd></div>
+      <div class="term"><dt>few-shot judge</dt><span class="zh-name">few-shot 評審</span><dd>prompt 裡放三個判斷範例；GPT-4 的一致率從 65.0% 升到 77.5%，但 API 貴 4 倍（表 12）。</dd></div>
+      <div class="term"><dt>swapping positions</dt><span class="zh-name">交換位置</span><dd>對調順序各判一次，兩次都贏才算贏，不一致算平手；論文實驗都用這個保守做法（第 3.4 節）。</dd></div>
+      <div class="term"><dt>multi-turn judge</dt><span class="zh-name">多輪評審</span><dd>把兩個助手各自的完整兩輪對話放進同一個 prompt；拆成兩個 prompt 會對錯回答（第 3.5 節）。</dd></div>
+      <div class="term"><dt>agreement</dt><span class="zh-name">一致程度</span><dd>兩類評審各隨機挑一位，在隨機一題上投出相同票的機率（第 4.1 節、附錄 D.3）。</dd></div>
+      <div class="term"><dt>S1、S2</dt><span class="zh-name">兩種算法</span><dd>S1 含平手與前後不一致的票，亂猜 33%；S2 只算非平手票，亂猜 50%（表 5）。</dd></div>
+      <div class="term"><dt>human-majority</dt><span class="zh-name">人的多數決</span><dd>每題取人的多數票；多數決對人的一致程度，是 GPT-4 對人的上限（附錄 D.3）。</dd></div>
+      <div class="term"><dt>average win rate</dt><span class="zh-name">平均勝率</span><dd>一個模型對其他所有參賽者勝率的平均，可含或不含平手（第 4.1 節、圖 3、圖 4）。</dd></div>
+      <div class="term"><dt>hybrid evaluation</dt><span class="zh-name">混合評估</span><dd>作者主張的基準做法：既有的能力基準，加上用 LLM 評審的偏好基準（第 1、5 節）。</dd></div>
+      <div class="term"><dt>MMLU</dt><span class="zh-name">知識選擇題基準</span><dd>多學科選擇題；表 8 用 5-shot，和 MT-bench 分數對照（第 5 節）。</dd></div>
+      <div class="term"><dt>TruthfulQA</dt><span class="zh-name">真實性基準</span><dd>表 8 用它的 MC1 設定、0-shot，分數介於 0.22 到 0.35（第 5 節）。</dd></div>
+      <div class="term"><dt>Vicuna</dt><span class="zh-name">作者的對話模型</span><dd>用 ShareGPT 對話微調 LLaMA 得到的模型；selected、single、all 三種訓練資料（附錄 E）。</dd></div>
+      <div class="term"><dt>3-way sequence classification</dt><span class="zh-name">三選一分類</span><dd>附錄 F 把評審改成預測 A、B 或平手的分類器，輸出一定認得出來，格式錯誤是 0%。</dd></div>
+      <div class="term"><dt>RLHF</dt><span class="zh-name">人類回饋強化學習</span><dd>用人的回饋調整模型；作者說經過 RLHF 的強模型已和人的偏好高度對齊，所以適合當評審（第 1 節）。</dd></div>
+    </dl>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>資料來源：arXiv，〈Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena〉，Lianmin Zheng、Wei-Lin Chiang、Ying Sheng、Siyuan Zhuang、Zhanghao Wu、Yonghao Zhuang、Zi Lin、Zhuohan Li、Dacheng Li、Eric P. Xing、Hao Zhang、Joseph E. Gonzalez、Ion Stoica（UC Berkeley、UC San Diego、Carnegie Mellon University、Stanford、MBZUAI），2023-06-09（v4 2023-12-24；NeurIPS 2023 Datasets and Benchmarks Track）。頁面上的數字、表號與圖號依 arXiv v4 的 PDF。<br><a href="https://arxiv.org/abs/2306.05685">arxiv.org/abs/2306.05685</a></p>
+    <p class="credit">整理於 2026-09-24</p>
+    <p class="disclaimer">本頁為學習用的重述與整理，不是原文逐句翻譯。觀點與著作權屬於原作者。程式片段為教學用精簡版，實際用法請以原文與官方文件為準。</p>
+  </div>
+</footer>
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="圖卡大圖"><button type="button" class="close">關閉（Esc）</button><div class="frame"></div></div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fitFrames() {
+    var frames = document.querySelectorAll('.cardband .frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  var KEY = 'rearranged-article-mode';
+  function setMode(m, save) {
+    document.body.classList.toggle('mode-cards', m === 'cards');
+    var btns = document.querySelectorAll('.modebar button[data-mode]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-mode') === m ? 'true' : 'false');
+    }
+    if (save) { try { localStorage.setItem(KEY, m); } catch (e) {} }
+    fitFrames();
+  }
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  setMode(saved === 'cards' ? 'cards' : 'full', false);
+
+  var box = document.getElementById('lightbox');
+  var boxFrame = box.querySelector('.frame');
+  function fitLightbox() {
+    if (!box.classList.contains('open')) return;
+    var root = boxFrame.firstElementChild;
+    if (!root) return;
+    var s = Math.min(1, (window.innerWidth - 48) / W, (window.innerHeight - 48) / H);
+    root.style.transform = 'scale(' + s + ')';
+    boxFrame.style.width = Math.round(W * s) + 'px';
+    boxFrame.style.height = Math.round(H * s) + 'px';
+  }
+  function openLightbox(num) {
+    var bandEl = document.getElementById('card-' + num);
+    if (!bandEl) return;
+    var root = bandEl.querySelector('.frame > div');
+    boxFrame.innerHTML = '';
+    var clone = root.cloneNode(true);
+    clone.style.transform = '';
+    boxFrame.appendChild(clone);
+    box.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    fitLightbox();
+  }
+  function closeLightbox() {
+    box.classList.remove('open');
+    boxFrame.innerHTML = '';
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var b = t.closest('.modebar button[data-mode]');
+    if (b) { setMode(b.getAttribute('data-mode'), true); return; }
+    var z = t.closest('.cardlabel .zoom');
+    if (z) { openLightbox(z.getAttribute('data-card')); return; }
+    if (t.closest('.lightbox') && !t.closest('.lightbox .frame')) { closeLightbox(); }
+  });
+  document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') closeLightbox(); });
+  window.addEventListener('resize', function () { fitFrames(); fitLightbox(); });
+  window.addEventListener('load', fitFrames);
+  fitFrames();
+})();
+</script>
+</body>
+</html>
