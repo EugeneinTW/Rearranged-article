@@ -469,6 +469,42 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "data-flywheels",
+      "path": "articles/data-flywheels/index.html",
+      "title": "Data Flywheels：讓每一筆生產資料，回頭改進 LLM 應用",
+      "summary": "Shreya Shankar 2024 年的部落格文章：用生產資料持續改進 LLM 應用的三步框架。從讀真實輸出定指標、驗證多步驟管線與輸入，到讓指標與 LLM 判官跟著資料更新、把修好的低分輸出變成下一次的範例，最後是作者提的三個研究問題；每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "Shreya Shankar Blog · Shreya Shankar",
+        "url": "https://www.sh-reya.com/blog/ai-engineering-flywheel/",
+        "date": "2024-07-01"
+      },
+      "date": "2026-09-24",
+      "tags": [
+        "data-flywheel",
+        "llm-evaluation",
+        "llm-as-a-judge",
+        "llmops",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 6,
+        "kind": "必讀",
+        "section": "Data for Agentic Systems",
+        "lecture": "What Data Do Agents Need?",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/data-flywheels/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "autogen-multi-agent",
       "path": "articles/autogen-multi-agent/index.html",
       "title": "AutoGen：讓可對話的代理彼此對話，把 LLM 應用的流程寫成多代理對話",
