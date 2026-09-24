@@ -1,6 +1,42 @@
 window.ARTICLES = {
   "articles": [
     {
+      "slug": "validating-llm-evaluators",
+      "path": "articles/validating-llm-evaluators/index.html",
+      "title": "誰來驗證評估器：EvalGen 用少量人工評分挑出 LLM 評估器，並發現評估標準會隨評分漂移",
+      "summary": "UC Berkeley 與蒙特婁大學團隊在 2024 年處理一個越來越常見的問題：用 LLM 評估 LLM 的輸出時，評估器本身也會出錯，誰來驗證它。他們做了 EvalGen：LLM 建議評估標準、為每條標準寫出幾個候選斷言（Python 函式或評分 prompt），使用者在等待時替一部分輸出按好或壞，系統依和人的一致程度挑出斷言。離線評估和全自動的 SPADE 比較，九位從業者的使用者研究則發現「標準漂移」：人要有標準才能評分，標準卻是在評分中才定下來。這份整理逐章重述系統、一致程度的算法與研究發現，每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "arXiv · Shreya Shankar、J.D. Zamfirescu-Pereira、Björn Hartmann、Aditya G. Parameswaran、Ian Arawjo（UC Berkeley、Université de Montréal）",
+        "url": "https://arxiv.org/abs/2404.12272",
+        "date": "2024-04-18"
+      },
+      "date": "2026-09-24",
+      "tags": [
+        "llm-evaluation",
+        "llm-as-a-judge",
+        "human-ai-interaction",
+        "evaluation-assistants",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 7,
+        "kind": "必讀",
+        "section": "Data for Agentic Systems",
+        "lecture": "Data Selection & Quality",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/validating-llm-evaluators/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "test-time-compute",
       "path": "articles/test-time-compute/index.html",
       "title": "測試時算力的最佳分配：多想一下有沒有用，要看題目對模型多難",

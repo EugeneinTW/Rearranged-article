@@ -1,0 +1,943 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EvalGen（Shankar et al. 2024） · 圖解卡</title>
+<meta name="description" content="UC Berkeley 與蒙特婁大學團隊在 2024 年處理一個越來越常見的問題：用 LLM 評估 LLM 的輸出時，評估器本身也會出錯，誰來驗證它。他們做了 EvalGen：LLM 建議評估標準、為每條標準寫出幾個候選斷言（Python 函式或評分 prompt），使用者在等待時替一部分輸出按好或壞，系統依和人的一致程度挑出斷言。離線評估和全自動的 SPADE 比較，九位從業者的使用者研究則發現「標準漂移」：人要有標準才能評分，標準卻是在評分中才定下來。這份整理逐章重述系統、一致程度的算法與研究發現，每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="llm-evaluation, llm-as-a-judge, human-ai-interaction, evaluation-assistants, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2404.12272">
+<meta name="date" content="2026-09-24">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+:root { color-scheme: light; --bg: #F4F5F7; --line: #E5E9EE; --ink: #1C2431; --mute: #8A93A0; --orange: #C8501F; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: #C8501F; } a:hover { color: #9E3E16; }
+a:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.wrap { max-width: 1600px; margin: 0 auto; padding-block: 24px 48px; padding-inline: 16px; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; padding: 6px 4px 18px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; letter-spacing: 0.12em; color: var(--mute); }
+.head nav { display: flex; flex-wrap: wrap; gap: 6px 14px; letter-spacing: 0.04em; }
+.head nav a { color: var(--mute); text-decoration: none; font-weight: 600; }
+.head nav a:hover { color: var(--orange); }
+.page { margin-bottom: 36px; scroll-margin-top: 16px; }
+.label { display: flex; align-items: baseline; gap: 14px; padding: 0 4px 8px; font-size: 13px; color: var(--mute); }
+.label .n { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-weight: 600; font-size: 12px; letter-spacing: 0.1em; color: var(--orange); }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--line); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; }
+.foot { padding: 12px 4px 0; font-size: 12px; color: var(--mute); line-height: 1.7; }
+@media print {
+  @page { size: 1600px 900px; margin: 0; }
+  body { background: #FFFFFF; }
+  .wrap { max-width: none; padding: 0; }
+  .head, .label, .foot { display: none; }
+  .page { margin: 0; page-break-after: always; }
+  .frame { border: none; border-radius: 0; height: auto !important; }
+  .frame > div { transform: none !important; }
+}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><span>EvalGen（Shankar et al. 2024） · 圖解卡 · 13 張 · 連續閱讀版</span><nav class="site" aria-label="導覽"><a href="../../">首頁</a><a href="index.html">圖卡＋教材版</a></nav><nav aria-label="跳頁"><a href="#p01" title="封面">01</a><a href="#p02" title="典型管線對 EvalGen 管線">02</a><a href="#p03" title="EvalGen 的五個畫面">03</a><a href="#p04" title="邊產生、邊執行、邊評分">04</a><a href="#p05" title="覆蓋率、誤判失敗率與一致程度">05</a><a href="#p06" title="和 SPADE 比：表 1">06</a><a href="#p07" title="使用者研究怎麼做">07</a><a href="#p08" title="參與者的典型流程">08</a><a href="#p09" title="當成起點：喜歡的與想要的">09</a><a href="#p10" title="標準漂移的兩條回頭路">10</a><a href="#p11" title="同一條斷言，兩種讀法">11</a><a href="#p12" title="程式斷言對 LLM 斷言">12</a><a href="#p13" title="結論：驗證是持續的工作">13</a></nav></div>
+<section class="page" id="p01">
+  <div class="label"><span class="n">01 / 13</span><span>封面</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.14em; color:#8A93A0;">EVALGEN &#183; WHO VALIDATES THE VALIDATORS &#183; 圖解卡 &#183; 16:9 &#183; 13 張</div>
+  <div style="position:absolute; left:60px; top:110px; width:840px; font-size:60px; font-weight:700; color:#1C2431; line-height:1.3; letter-spacing:0.01em;">評分的 LLM，<br>也要有人驗證。</div>
+  <div style="position:absolute; left:60px; top:296px; width:840px; font-size:20px; color:#6B7380; line-height:1.7;">整理自 arXiv 論文〈Who Validates the Validators?〉<br>（2024-04-18，v1；Shreya Shankar 等 5 人，<br>UC Berkeley、Université de Montréal；課程書單標注 UIST 2024）。<br>EvalGen 讓人評一小部分輸出來挑評估器，使用者研究發現評估標準會隨評分漂移。</div>
+  <div style="position:absolute; left:60px; top:486px; display:flex; align-items:center; gap:36px;">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#C8501F;"></div>
+      <div style="font-size:15px; color:#2B3340;">評估器出錯與代價</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#2E7B4F;"></div>
+      <div style="font-size:15px; color:#2B3340;">人的評分與一致的斷言</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#1F2A3A;"></div>
+      <div style="font-size:15px; color:#2B3340;">EvalGen／終點</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div>
+      <div style="font-size:15px; color:#2B3340;">中性節點</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; top:532px; width:840px; font-size:13px; color:#8A93A0; line-height:1.6;">整組共用同一套語意色：橘是評估器出錯的地方與它的代價（漏抓、錯殺），綠是人的評分與和人一致的斷言，深藍是 EvalGen 本身與終點。</div>
+  <div style="position:absolute; left:60px; top:600px; width:840px; box-sizing:border-box; border-left:3px solid #2E7B4F; padding:4px 0px 4px 18px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">EVALGEN &#183; 一輪四步</div>
+    <div style="font-size:17px; color:#1C2431; line-height:1.7;">LLM 提標準 &#183; 人增刪改 &#183; LLM 寫候選斷言 &#183; 人評一部分輸出 &#8594; 依一致程度挑斷言</div>
+    <div style="font-size:14px; color:#6B7380; line-height:1.6;">離線：醫療與產品兩條管線，每條只給 16 筆人評，和全自動的 SPADE 比。<br>使用者研究：9 位業界從業者，發現「標準漂移」：要有標準才能評分，標準卻是評出來的。</div>
+  </div>
+  <div style="position:absolute; left:960px; top:110px; width:580px; box-sizing:border-box; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 34px; display:flex; flex-direction:column;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">本組 &#183; 13 頁</div>
+    <div style="margin-top:8px; display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">01</div><div style="font-size:16px; color:#1C2431;">封面</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">02</div><div style="font-size:16px; color:#1C2431;">典型管線對 EvalGen 管線</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">03</div><div style="font-size:16px; color:#1C2431;">EvalGen 的五個畫面</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">04</div><div style="font-size:16px; color:#1C2431;">邊產生、邊執行、邊評分</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">05</div><div style="font-size:16px; color:#1C2431;">覆蓋率、誤判失敗率與一致程度</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">06</div><div style="font-size:16px; color:#1C2431;">和 SPADE 比：表 1</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">07</div><div style="font-size:16px; color:#1C2431;">使用者研究怎麼做</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">08</div><div style="font-size:16px; color:#1C2431;">參與者的典型流程</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">09</div><div style="font-size:16px; color:#1C2431;">當成起點：喜歡的與想要的</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">10</div><div style="font-size:16px; color:#1C2431;">標準漂移的兩條回頭路</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">11</div><div style="font-size:16px; color:#1C2431;">同一條斷言，兩種讀法</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">12</div><div style="font-size:16px; color:#1C2431;">程式斷言對 LLM 斷言</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#2E7B4F;">13</div><div style="font-size:16px; color:#1C2431;">結論：驗證是持續的工作</div></div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">來源：arxiv.org/abs/2404.12272 —— 本組為學習用重述，數字依 arXiv v1，prompt 與例子為教學用精簡版。</div>
+</div></div>
+</section>
+<section class="page" id="p02">
+  <div class="label"><span class="n">02 / 13</span><span>典型管線對 EvalGen 管線</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">評分的 LLM，是另一個需要被測的 prompt</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 1：典型的管線寫好指標就直接出測試結果；EvalGen 在指標這一段多一圈：LLM 提標準與候選斷言，人評一部分輸出，依一致程度挑斷言</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 典型管線：寫好指標就相信分數</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ EvalGen：用人的評分挑斷言</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:200px; width:150px; height:52px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">輸入</div>
+  <div style="position:absolute; left:250px; top:200px; width:220px; height:52px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">受測 prompt · LLM</div>
+  <div style="position:absolute; left:510px; top:200px; width:150px; height:52px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">輸出</div>
+  <div style="position:absolute; left:330px; top:320px; width:200px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">指標：程式</div><div style="font-size:12.5px; color:#6B7380;">寫得出規則的檢查</div></div></div>
+  <div style="position:absolute; left:550px; top:320px; width:210px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#C8501F;">指標：評分 prompt</div><div style="font-size:12.5px; color:#6B7380;">交給評估用 LLM 判斷</div></div></div>
+  <div style="position:absolute; left:440px; top:440px; width:200px; height:52px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">測試結果</div>
+  <div style="position:absolute; left:60px; top:454px; width:228px; text-align:right; font-size:13px; color:#8A93A0;">不滿意就改 prompt 再跑</div>
+  <div style="position:absolute; left:60px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">評分 prompt 和任何 prompt 一樣，措辭或結構稍動，判斷就可能改變；很多工具沒有驗證它的功能，只請使用者相信測試結果。</div>
+
+  <div style="position:absolute; left:840px; top:200px; width:150px; height:52px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">受測 prompt</div><div style="font-size:12.5px; color:#6B7380;">與它的輸出</div></div></div>
+  <div style="position:absolute; left:1030px; top:200px; width:250px; height:52px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">候選標準</div><div style="font-size:12.5px; color:#6B7380;">LLM 依 prompt 提議</div></div></div>
+  <div style="position:absolute; left:1330px; top:200px; width:210px; height:52px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#FFFFFF;">使用者</div><div style="font-size:12.5px; color:rgba(255,255,255,0.8);">改標準、按好或壞</div></div></div>
+  <div style="position:absolute; left:1030px; top:300px; width:250px; height:52px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">候選斷言</div><div style="font-size:12.5px; color:#6B7380;">每條標準幾個：程式或評分 prompt</div></div></div>
+  <div style="position:absolute; left:1330px; top:300px; width:210px; height:52px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#2E7B4F;">評過的輸出</div><div style="font-size:12.5px; color:#6B7380;">一部分，讚或倒讚</div></div></div>
+  <div style="position:absolute; left:1030px; top:400px; width:250px; height:52px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#2E7B4F;">依一致程度挑選</div><div style="font-size:12.5px; color:#6B7380;">每條標準留最一致的一條</div></div></div>
+  <div style="position:absolute; left:1330px; top:400px; width:210px; height:52px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#FFFFFF;">選中的斷言</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">附一致程度報告卡</div></div></div>
+  <div style="position:absolute; left:840px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">右邊多出來的一圈：LLM 提標準與候選斷言，人改標準、評一部分輸出；候選在評過的輸出上比對，依一致程度挑選。報告卡讓人決定要不要再改、再評。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#C8501F;">評分 prompt 和被評的一樣敏感</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">措辭或結構的小改動，就可能改變評分；<br>很多系統卻沒有驗證的功能，只請人相信。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者的問題：誰來驗證這些驗證者？</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F;">人評一部分，用來挑斷言</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">好或壞兩種評分引導自動挑選；<br>報告卡顯示選中的斷言和人一致到什麼程度。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說可以延伸：用人的偏好更新指標，或改問逐條標準的評分。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：依圖 1 重畫；圖說寫明管線的輸入與輸出由更大的系統提供，不在論文範圍內。✗／✓ 依第 1 節對現有工具「只請使用者相信」的批評。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M210 226H248" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M470 226H508" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M585 252V290H430V318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M585 252V290H655V318" stroke="#C8501F" stroke-width="1.5" marker-end="url(#ao-c02)"></path>
+    <path d="M430 376V408H520V438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M655 376V408H560V438" stroke="#C8501F" stroke-width="1.5" marker-end="url(#ao-c02)"></path>
+    <path d="M440 466H300V254" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c02)"></path>
+
+    <path d="M990 226H1028" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1330 226H1282" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c02)"></path>
+    <path d="M1155 252V298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1435 252V298" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c02)"></path>
+    <path d="M1280 318H1328" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1330 334H1282" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c02)"></path>
+    <path d="M1155 352V398" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1435 352V376H1210V398" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c02)"></path>
+    <path d="M1280 426H1328" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1540 426H1560V226H1542" stroke="#2E7B4F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#an-c02)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p03">
+  <div class="label"><span class="n">03 / 13</span><span>EvalGen 的五個畫面</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">EvalGen 把人的評分，塞進等 LLM 的時間</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 2 的五個畫面：從 Multi-Eval 節點打開精靈，挑標準、評分、看報告卡；候選斷言在背景產生與執行，人就在這段空檔替輸出按好或壞</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　打開精靈</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">Multi-Eval 節點上的按鈕；<br>三個選項：推論、手動、先評分</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　挑標準</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">自然語言的建議，各選程式或 LLM；<br>可改、可刪、可加</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　評分</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">一次一筆，按好或壞</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">邊等候選邊評</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　報告卡</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">每條標準的一致程度、<br>整組的覆蓋率與誤判失敗率</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　回主畫面</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">斷言放進 Multi-Eval 節點；<br>表格檢視看全部輸出</div>
+  </div>
+
+  <div style="position:absolute; left:212px; top:267px; font-size:12.5px; font-weight:500; color:#2E7B4F;">選「先評分」：先到第 3 步評至少 5 筆，再回第 2 步挑標準</div>
+
+  <div style="position:absolute; left:60px; top:320px; width:1480px; height:60px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">回到主畫面</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">選中的斷言依標準命名、放進 Multi-Eval 節點；表格檢視列出每條斷言在每筆輸出上的判定（圖 3），斷言也能再手動修改。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:452px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:476px; font-size:20px; font-weight:700; color:#1C2431;">三個刻意的設計</div>
+
+  <div style="position:absolute; left:60px; top:520px; width:470px; height:246px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">只給好或壞，不逐條評</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">逐條評每一筆太花時間，所以只有讚與倒讚。<br>讚代表這筆通過所有標準；<br>候選若讓讚的輸出不通過，就往後排。<br>評錯了可以用箭頭回到前面改分。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者說這是有雜訊、但有資訊量的訊號。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:520px; width:470px; height:246px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">評幾筆不設上限</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">產生與執行斷言要多久說不準，<br>暗示評分有終點，人可能提早停手，<br>少給了有用的資訊；也有人覺得評分有趣。<br>按下「我累了」才結束評分。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">只有「先評分」的畫面保留剩幾筆的進度條。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:520px; width:470px; height:246px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">人無法完全驗證評估器</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">完整的驗證只能評完全部輸出，<br>那就失去用 LLM 評估的意義。<br>所以只評一部分，<br>用的是本來就要等候選產生的時間。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者說這是心力與驗證嚴謹之間的取捨。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：依圖 2 的五個畫面重畫，介面截圖沒有搬；「先評分」是精靈的第三個選項，至少評 5 筆才去挑標準。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="an-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M193 262V292H769V264" stroke="#2E7B4F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#an-c03)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p04">
+  <div class="label"><span class="n">04 / 13</span><span>邊產生、邊執行、邊評分</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">每評一筆，候選斷言的排名就重算一次</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4.1、4.2 節：候選一寫出來就在所有輸出上執行，人的每個評分都更新它們的一致程度；取樣器再依信心分數挑下一筆給人評</div>
+
+  <div style="position:absolute; left:380px; top:150px; width:380px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">GPT-4：寫候選斷言</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">每條標準呼叫一次，在標記之間串流寫出多個候選：Python 函式或評分 prompt</div></div>
+  <div style="position:absolute; left:840px; top:150px; width:380px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">全部 LLM 輸出</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">候選一解析出來就在每一筆上執行；執行出錯的直接淘汰，結果用來更新選擇性</div></div>
+
+  <div style="position:absolute; left:566px; top:262px; width:110px; text-align:right; font-size:12.5px; color:#8A93A0;">標準</div>
+  <div style="position:absolute; left:724px; top:262px; font-size:12.5px; color:#8A93A0;">候選</div>
+  <div style="position:absolute; left:766px; top:262px; width:110px; text-align:right; font-size:12.5px; color:#8A93A0;">執行</div>
+  <div style="position:absolute; left:924px; top:262px; font-size:12.5px; color:#8A93A0;">通過與否</div>
+
+  <div style="position:absolute; left:60px; top:316px; width:200px; height:58px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">使用者確認的標準</div><div style="font-size:12px; color:#6B7380;">每條選程式或 LLM</div></div></div>
+  <div style="position:absolute; left:640px; top:300px; width:320px; height:90px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:19px; font-weight:700; color:#FFFFFF;">EvalGen 的執行器</div><div style="margin-top:4px; font-size:12.5px; color:rgba(255,255,255,0.75); line-height:1.5;">持續更新三個估計：<br>選擇性、信心分數 σ、一致程度</div></div></div>
+  <div style="position:absolute; left:1340px; top:316px; width:200px; height:58px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">選中的斷言</div><div style="font-size:12px; color:#6B7380;">每條標準一致程度最高的</div></div></div>
+
+  <div style="position:absolute; left:666px; top:406px; width:110px; text-align:right; font-size:12.5px; color:#8A93A0;">下一筆</div>
+  <div style="position:absolute; left:824px; top:406px; font-size:12.5px; color:#2E7B4F;">好或壞</div>
+
+  <div style="position:absolute; left:610px; top:444px; width:380px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#2E7B4F;">使用者：按好或壞</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">取樣器依信心分數 σ 挑下一筆給人評；<br>使用者研究用高低交替的挑法</div></div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:222px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">和 SPADE 不同：邊跑邊更新</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">SPADE 離線解一個整數線性規劃，<br>一次求出最佳的斷言集合；<br>EvalGen 是串流的，每個新候選、<br>每個新評分都立刻更新估計。</div>
+    <div style="font-size:13px; color:#8A93A0;">使用者停手時，每條標準挑一致程度最高的。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:222px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">多寫幾個候選，才有一個對得上</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">候選多一點，<br>至少一個符合期待的機率就高一點。<br>程式候選偶爾會幻想出不存在的函式，<br>執行出錯就直接淘汰。</div>
+    <div style="font-size:13px; color:#8A93A0;">也可以設誤判失敗率門檻，只挑不超過的。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:222px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">隨機挑給人評，結果最不穩</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">附錄 A.4：每次評 16 筆、每種策略 10 次。<br>隨機挑的一致程度變異最大；<br>三種依信心分數挑的都比隨機高，<br>交替並沒有每次勝出。</div>
+    <div style="font-size:13px; color:#8A93A0;">圖 4 沒有標數字，這裡只轉述作者的描述。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：中央加三方一來一回，是整理者依第 4.1 節三個元件的畫法；附錄 A.1 信心分數的式子與文字方向不一致，見正文第 4 章。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M262 345L638 345" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M962 345L1338 345" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c04)"></path>
+    <path d="M686 298L686 248" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M714 248L714 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M886 298L886 248" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M914 248L914 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M786 392L786 442" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M814 442L814 392" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c04)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p05">
+  <div class="label"><span class="n">05 / 13</span><span>覆蓋率、誤判失敗率與一致程度</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">一致程度看兩件事：壞的抓到幾成、好的錯殺幾成</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">附錄 A.3：列是人評過的輸出，欄是一組斷言；一列只要有一條斷言回 0，整組就判它不通過。覆蓋率只看壞的列，誤判失敗率只看好的列</div>
+
+  <div style="position:absolute; left:290px; top:142px; font-size:13px; font-weight:700; color:#4B5866;">一組斷言 F（欄名取自圖 3 的表格檢視）→</div>
+  <div style="position:absolute; left:60px; top:184px; font-size:13px; font-weight:700; color:#4B5866;">輸出 ↓</div>
+  <div style="position:absolute; left:150px; top:184px; width:110px; text-align:center; font-size:13px; font-weight:700; color:#4B5866;">人評</div>
+  <div style="position:absolute; left:290px; top:166px; width:160px; text-align:center; font-size:12px; color:#8A93A0; line-height:1.4;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">f1 · 程式</span><br>條列格式</div>
+  <div style="position:absolute; left:470px; top:166px; width:160px; text-align:center; font-size:12px; color:#8A93A0; line-height:1.4;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">f2 · 程式</span><br>沒有 hashtag</div>
+  <div style="position:absolute; left:650px; top:166px; width:160px; text-align:center; font-size:12px; color:#8A93A0; line-height:1.4;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">f3 · LLM</span><br>沒有編造的實體</div>
+  <div style="position:absolute; left:840px; top:184px; width:110px; text-align:center; font-size:13px; font-weight:700; color:#4B5866;">整組判定</div>
+
+  <div style="position:absolute; left:60px; top:216px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">e1</div>
+  <div style="position:absolute; left:60px; top:258px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">e2</div>
+  <div style="position:absolute; left:60px; top:300px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">e3</div>
+  <div style="position:absolute; left:60px; top:342px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">e4</div>
+  <div style="position:absolute; left:60px; top:384px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">e5</div>
+  <div style="position:absolute; left:60px; top:426px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">e6</div>
+  <div style="position:absolute; left:60px; top:468px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#2B3340;">e7</div>
+
+  <div style="position:absolute; left:150px; top:210px; width:110px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">壞 · y＝0</div>
+  <div style="position:absolute; left:150px; top:252px; width:110px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">壞 · y＝0</div>
+  <div style="position:absolute; left:150px; top:294px; width:110px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">壞 · y＝0</div>
+  <div style="position:absolute; left:150px; top:336px; width:110px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">壞 · y＝0</div>
+  <div style="position:absolute; left:150px; top:378px; width:110px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">好 · y＝1</div>
+  <div style="position:absolute; left:150px; top:420px; width:110px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">好 · y＝1</div>
+  <div style="position:absolute; left:150px; top:462px; width:110px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">好 · y＝1</div>
+
+  <div style="position:absolute; left:290px; top:206px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">1 · 通過</div>
+  <div style="position:absolute; left:470px; top:206px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#FFFFFF;">0 · 不通過</div>
+  <div style="position:absolute; left:650px; top:206px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">1 · 通過</div>
+
+  <div style="position:absolute; left:290px; top:248px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">1 · 通過</div>
+  <div style="position:absolute; left:470px; top:248px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">1 · 通過</div>
+  <div style="position:absolute; left:650px; top:248px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#FFFFFF;">0 · 不通過</div>
+
+  <div style="position:absolute; left:290px; top:290px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#FFFFFF;">0 · 不通過</div>
+  <div style="position:absolute; left:470px; top:290px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">1 · 通過</div>
+  <div style="position:absolute; left:650px; top:290px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">1 · 通過</div>
+
+  <div style="position:absolute; left:290px; top:332px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">1 · 通過</div>
+  <div style="position:absolute; left:470px; top:332px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">1 · 通過</div>
+  <div style="position:absolute; left:650px; top:332px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">1 · 通過</div>
+
+  <div style="position:absolute; left:60px; top:372px; width:890px; height:0px; border-top:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:290px; top:374px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">1 · 通過</div>
+  <div style="position:absolute; left:470px; top:374px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">1 · 通過</div>
+  <div style="position:absolute; left:650px; top:374px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">1 · 通過</div>
+
+  <div style="position:absolute; left:290px; top:416px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">1 · 通過</div>
+  <div style="position:absolute; left:470px; top:416px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#FFFFFF;">0 · 不通過</div>
+  <div style="position:absolute; left:650px; top:416px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">1 · 通過</div>
+
+  <div style="position:absolute; left:290px; top:458px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">1 · 通過</div>
+  <div style="position:absolute; left:470px; top:458px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">1 · 通過</div>
+  <div style="position:absolute; left:650px; top:458px; width:160px; height:38px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">1 · 通過</div>
+
+  <div style="position:absolute; left:840px; top:211px; width:110px; height:28px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#2E7B4F;">0 · 抓到</div>
+  <div style="position:absolute; left:840px; top:253px; width:110px; height:28px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#2E7B4F;">0 · 抓到</div>
+  <div style="position:absolute; left:840px; top:295px; width:110px; height:28px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#2E7B4F;">0 · 抓到</div>
+  <div style="position:absolute; left:840px; top:337px; width:110px; height:28px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#C8501F;">1 · 漏抓</div>
+  <div style="position:absolute; left:840px; top:379px; width:110px; height:28px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#2E7B4F;">1 · 放行</div>
+  <div style="position:absolute; left:840px; top:421px; width:110px; height:28px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#C8501F;">0 · 錯殺</div>
+  <div style="position:absolute; left:840px; top:463px; width:110px; height:28px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#2E7B4F;">1 · 放行</div>
+
+  <div style="position:absolute; left:990px; top:250px; width:190px; height:80px; box-sizing:border-box; border-radius:8px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:17px; font-weight:700; color:#2E7B4F;">覆蓋率 0.75</div><div style="margin-top:2px; font-size:12.5px; color:#6B7380;">壞的 4 筆，抓到 3 筆</div></div></div>
+  <div style="position:absolute; left:990px; top:398px; width:190px; height:80px; box-sizing:border-box; border-radius:8px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:17px; font-weight:700; color:#C8501F;">誤判失敗率 0.33</div><div style="margin-top:2px; font-size:12.5px; color:#6B7380;">好的 3 筆，錯殺 1 筆</div></div></div>
+
+  <div style="position:absolute; left:1230px; top:140px; width:310px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:16px 20px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">怎麼讀這張表</div>
+    <div style="display:flex; gap:10px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:12px; color:#2E7B4F; margin-top:2px;">01</div><div style="font-size:13px; color:#2B3340; line-height:1.5;">格子裡 1 是通過、0 是不通過。</div></div>
+    <div style="display:flex; gap:10px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:12px; color:#2E7B4F; margin-top:2px;">02</div><div style="font-size:13px; color:#2B3340; line-height:1.5;">一列有任何一格是 0，整組就判 0。</div></div>
+    <div style="display:flex; gap:10px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:12px; color:#2E7B4F; margin-top:2px;">03</div><div style="font-size:13px; color:#2B3340; line-height:1.5;">壞的判 0 是抓到，好的判 0 是錯殺。</div></div>
+    <div style="display:flex; gap:10px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:12px; color:#2E7B4F; margin-top:2px;">04</div><div style="font-size:13px; color:#2B3340; line-height:1.5;">兩個比例再合成一個一致程度。</div></div>
+  </div>
+  <div style="position:absolute; left:1230px; top:336px; width:310px; height:84px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:19px; font-weight:700; color:#FFFFFF;">一致程度 0.71</div><div style="margin-top:3px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:rgba(255,255,255,0.75);">2 × 0.75 × 0.67 ÷ (0.75 ＋ 0.67)</div></div></div>
+
+  <div style="position:absolute; left:60px; top:512px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">附錄 A.3 的三條式子：覆蓋率 ＝ 壞的列裡整組判 0 的比例；誤判失敗率 ＝ 好的列裡整組判 0 的比例；一致程度 ＝ 2 × 覆蓋率 × (1 − 誤判失敗率) ÷〔覆蓋率 ＋ (1 − 誤判失敗率)〕。作者說它很像 F1，但算的是「不通過」，而且以整組斷言為單位。</div>
+
+  <div style="position:absolute; left:60px; top:590px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">覆蓋率：壞的抓到幾成</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">分母是人評為壞的輸出，<br>分子是其中被任一條斷言判 0 的；<br>作者說它是這組斷言的真陰性率。</div>
+    <div style="font-size:13px; color:#8A93A0;">表 1 產品管線：EvalGen 0.73、SPADE 0.49。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:590px; width:470px; height:196px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">誤判失敗率：好的錯殺幾成</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">分母是人評為好的輸出，<br>分子是其中被任一條斷言判 0 的；<br>可以設門檻，只挑不超過門檻的斷言。</div>
+    <div style="font-size:13px; color:#8A93A0;">離線評估從 10% 起，SPADE 在產品管線要放寬到 40%。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:590px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">一致程度：兩者的調和平均</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">用式子重算表 1：醫療 0.33 與 0.10 得 48.29%，<br>產品 0.73 與 0.39 得 66.46%，<br>SPADE 的 0.49 與 0.39 得 54.35%。</div>
+    <div style="font-size:13px; color:#8A93A0;">三個都對得上（整理者核對）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：方格裡的通過與否、筆數與算出的 0.75、0.33、0.71 都是整理者的示意，不是論文的數字；欄名取自圖 3。式子裡 y＝0 是人評為壞。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M812 225H838" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M812 267H838" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M812 309H838" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M812 351H838" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M812 393H838" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M812 435H838" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M812 477H838" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M952 225L990 272" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M952 267L990 284" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M952 309L990 296" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M952 351L990 308" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M952 393L990 426" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M952 435L990 438" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M952 477L990 450" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M1180 290L1228 364" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M1180 438L1228 394" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p06">
+  <div class="label"><span class="n">06 / 13</span><span>和 SPADE 比：表 1</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">人先挑過標準，斷言更少，一致程度不輸</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 5 節、表 1：醫療逐字稿 84 筆、商品描述 100 筆，兩位作者評完全部輸出；誤判失敗率門檻都從 10% 起，兩者差在兩個地方</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">SPADE · BASELINE</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">SPADE：標準也交給 LLM，一次解出最小集合</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">EVALGEN · WITH HUMAN INPUT</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">EvalGen：人改標準，只看 16 筆人評</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:90px; top:222px; width:640px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center; justify-content:space-between;"><div style="font-size:15px; font-weight:700; color:#1C2431;">LLM 自動產生標準，不問使用者</div><div style="flex-shrink:0; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">差別 ①</div></div>
+  <div style="position:absolute; left:90px; top:290px; width:640px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center;"><div style="font-size:15px; font-weight:700; color:#1C2431;">每條標準產生候選斷言</div></div>
+  <div style="position:absolute; left:90px; top:358px; width:640px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center;"><div style="font-size:15px; font-weight:700; color:#1C2431;">用全部標好的輸出（醫療 84 筆、產品 100 筆）</div></div>
+  <div style="position:absolute; left:90px; top:426px; width:640px; height:48px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:0px 18px; display:flex; align-items:center; justify-content:space-between;"><div style="font-size:15px; font-weight:700; color:#FFFFFF;">解最佳化：誤判失敗率在門檻內、涵蓋所有標準的最小集合</div><div style="flex-shrink:0; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#1F2A3A; background-color:#FFFFFF;">差別 ②</div></div>
+  <div style="position:absolute; left:60px; top:494px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">醫療管線：SPADE 多一條檢查語氣中立的斷言，又把欄位檢查拆得比需要更細；產品管線有一條專找「絕不再買」「失望」這類字眼的 Python 函式。</div>
+
+  <div style="position:absolute; left:870px; top:222px; width:640px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center; justify-content:space-between;"><div style="font-size:15px; font-weight:700; color:#1C2431;">LLM 建議標準，使用者增刪改</div><div style="flex-shrink:0; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">差別 ①</div></div>
+  <div style="position:absolute; left:870px; top:290px; width:640px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center;"><div style="font-size:15px; font-weight:700; color:#1C2431;">每條標準產生候選斷言</div></div>
+  <div style="position:absolute; left:870px; top:358px; width:640px; height:48px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center;"><div style="font-size:15px; font-weight:700; color:#1C2431;">只用 16 筆評過的輸出，不是全部 80 到 100 筆</div></div>
+  <div style="position:absolute; left:870px; top:426px; width:640px; height:48px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:0px 18px; display:flex; align-items:center; justify-content:space-between;"><div style="font-size:15px; font-weight:700; color:#FFFFFF;">每條標準挑最一致、誤判失敗率在門檻內的一條</div><div style="flex-shrink:0; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#1F2A3A; background-color:#FFFFFF;">差別 ②</div></div>
+  <div style="position:absolute; left:840px; top:494px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">醫療三條：字數、六個欄位都在、沒有個資（前兩條程式、最後一條 LLM）；產品四條：沒有負評（LLM）、沒有連結、Markdown 格式、字數限制。</div>
+
+  <div style="position:absolute; left:60px; top:560px; width:700px; height:204px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">SPADE：醫療 5 條、產品 9 條</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">醫療：覆蓋率 0.33，一致程度 48.29%；<br>產品：覆蓋率 0.49，一致程度 54.35%。<br>產品管線的門檻要從 10% 放寬到 40% 才找得到解。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">誤判失敗率：醫療 0.10、產品 0.39。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:560px; width:700px; height:204px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">EvalGen：醫療 3 條、產品 4 條</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">醫療：覆蓋率 0.33，一致程度 48.29%，打平；<br>產品：覆蓋率 0.73，一致程度 66.46%。<br>「沒有負評」改用 LLM 驗證描述是否完全正面。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">誤判失敗率和 SPADE 相同：醫療 0.10、產品 0.39。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩邊都出自作者團隊，SPADE 是基線；替 EvalGen 定標準、評 16 筆的是作者自己。只有兩條管線，作者在限制一節也承認。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M410 270V288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M410 338V356" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M410 406V424" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1190 270V288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1190 338V356" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1190 406V424" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p07">
+  <div class="label"><span class="n">07 / 13</span><span>使用者研究怎麼做</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">九位從業者，最多 40 分鐘邊用邊說</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 6 節：透過 Twitter 招募，全程在 Zoom 上；任務是用 GPT-3.5-Turbo 從推文抽出實體（NER），參與者想改任務或 prompt 都可以</div>
+
+  <div style="position:absolute; left:100px; top:170px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">ZOOM &#183; 一場 45 分鐘到 1 小時 15 分鐘</div>
+  <div style="position:absolute; left:180px; top:240px; width:260px; height:60px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#4B5866;">暖身 · 5 分鐘</div>
+  <div style="position:absolute; left:444px; top:240px; width:260px; height:60px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#4B5866;">示範 · 幾分鐘</div>
+  <div style="position:absolute; left:708px; top:240px; width:260px; height:60px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">操作 · 最多 40 分鐘</div>
+  <div style="position:absolute; left:972px; top:240px; width:260px; height:60px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#4B5866;">訪談 · 最多 10 分鐘</div>
+  <div style="position:absolute; left:1236px; top:240px; width:260px; height:60px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">7 點量表</div>
+
+  <div style="position:absolute; left:190px; top:342px; width:240px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#1C2431;">BEAT 1</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center; line-height:1.55;">建立關係，<br>問背景與 LLM 經驗</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">研究者先開口</div>
+  </div>
+  <div style="position:absolute; left:454px; top:342px; width:240px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#1C2431;">BEAT 2</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center; line-height:1.55;">介紹推文 NER 管線，示範看輸出、<br>開 EvalGen、寫斷言、看表格</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">介面有疑問隨時可問</div>
+  </div>
+  <div style="position:absolute; left:718px; top:342px; width:240px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#2E7B4F;">BEAT 3</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center; line-height:1.55;">遠端控制研究者的螢幕，<br>做出一組斷言，邊做邊說想法</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">只看建斷言的過程</div>
+  </div>
+  <div style="position:absolute; left:982px; top:342px; width:240px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#1C2431;">BEAT 4</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center; line-height:1.55;">開放式問題：怎麼看這種產生<br>方式、覺得一致嗎、為什麼</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">再追問難在哪裡</div>
+  </div>
+  <div style="position:absolute; left:1246px; top:342px; width:240px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#1C2431;">BEAT 5</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center; line-height:1.55;">評「斷言和我的評分一致」，<br>1 是非常不同意、7 是非常同意</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">結果見表 2（第 10 卡）</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:520px; width:470px; height:236px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">招募：前九位合格的人</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">在 Twitter 徵求對這個問題有興趣的人，<br>挑前九位寫過程式、做過 LLM 管線的；<br>有軟體工程師、機器學習科學家、<br>新創公司主管與獨立顧問。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說他們最能對照自己現有的工作流程。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:520px; width:470px; height:236px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">任務：推文 NER，可以改</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">抽最多 3 個知名實體、各寫一句描述，<br>要查得到、用 Markdown 條列、不抽 hashtag。<br>選它是因為常見、推文短不必捲動，<br>也有很多人研究過。</div>
+    <div style="font-size:13px; color:#8A93A0;">3 人改了 prompt，1 人改成情感分析（第 7.1 節）。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:520px; width:470px; height:236px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">分析：開放與主軸編碼</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">記下想法與情緒，也錄下逐字稿；<br>先逐句編碼，再在每個人之內歸成主題，<br>最後跨參與者合併、重新整理。<br>研究經 IRB 核准，參與者自願參加。</div>
+    <div style="font-size:13px; color:#8A93A0;">結果寫成主題與參與者代號，不算百分比。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：五段的長短是示意；論文寫出的時間只有暖身 5 分鐘、操作最多 40 分鐘、訪談最多 10 分鐘，以及整場 45 分鐘到 1 小時 15 分鐘。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M100 320H1500" stroke="#D5DAE1" stroke-width="2"></path>
+    <circle cx="310" cy="320" r="9" fill="#9AA3AE" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="574" cy="320" r="9" fill="#9AA3AE" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="838" cy="320" r="9" fill="#2E7B4F" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="1102" cy="320" r="9" fill="#9AA3AE" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="1366" cy="320" r="9" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="3"></circle>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p08">
+  <div class="label"><span class="n">08 / 13</span><span>參與者的典型流程</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">九人走的路大同小異，三人又回頭改標準</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 7.1 節的八個步驟，人數照原文：第 3 步只有選「先評分」的兩人走，最後 9 人中 3 人又打開精靈，回到第 2 步</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　看一眼輸出</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">100 筆輸出的表格，<br>確認乍看合理</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　打開 EvalGen</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">6 人自動產生、1 人先寫一條，<br>2 人先評分（P4、P9）</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　先評分</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">評 5 到 10 筆，2 到 4 個倒讚</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">只有 P4、P9</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　修改標準</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">刪一些建議、加 1 到 2 條；<br>評估類型多半照建議</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 5　邊等邊評</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">有人連續評 10 分鐘，<br>有人評 10 筆就停</div>
+  </div>
+
+  <div style="position:absolute; left:1212px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 6　看報告卡</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">每人看幾分鐘；只有 P9<br>一開始不懂那兩個比例</div>
+  </div>
+  <div style="position:absolute; left:924px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 7　跑全部 100 筆</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">回主畫面按執行，<br>看結果表（圖 3）</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:300px; width:400px; font-size:14px; color:#6B7380; line-height:1.6;">一輪是從打開精靈到看完表格。<br>第 3 步只有選「先評分」的人走；<br>第 8 步不是新畫面，而是重開一輪：<br>這個介面裡不能回頭加標準（第 10 卡）。</div>
+  <div style="position:absolute; left:494px; top:358px; font-size:13px; font-weight:700; color:#4B5866;">Step 8　9 人中 3 人回到第 2 步；過半說時間夠就想再迭代</div>
+
+  <div style="position:absolute; left:60px; top:462px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:484px; font-size:20px; font-weight:700; color:#1C2431;">三個和後面有關的地方</div>
+
+  <div style="position:absolute; left:60px; top:526px; width:470px; height:222px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">入口：6 人自動、2 人先評分</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">6 人按自動產生，1 人先寫一條再自動產生，<br>P4、P9 先評分；<br>先評分的兩人，評完也都按了自動產生。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">第 9 卡：先評分的人覺得有用，P2 事後建議先看 20 筆。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:526px; width:470px; height:222px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">評估類型多半照建議</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">刪掉一些建議、加 1 到 2 條自己的；<br>評估類型多半不改，即使建議不合理，<br>例如用 LLM 算字數，不過這很少見。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">只有 P9 起初不懂覆蓋率與誤判失敗率，解釋後就懂。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:526px; width:470px; height:222px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">3 人回頭，過半想再迭代</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">9 人中 3 人又打開精靈，<br>回到第 2 步改標準與斷言；<br>其他人因為滿意或累了而停下。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">過半說時間夠就想再迭代；加新標準只能重開一輪。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：八步與人數依第 7.1 節；9 人都用了提供的任務，3 人改了 prompt，1 人改成情感分析。回流線是整理者的畫法，對應第 8 步。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c08" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M1207 342L1195 350L1207 358Z" fill="#9AA3AE"></path>
+    <path d="M1478 210C1530 210 1530 350 1480 350" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M922 350H481V264" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="6 5" marker-end="url(#ag-c08)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p09">
+  <div class="label"><span class="n">09 / 13</span><span>當成起點：喜歡的與想要的</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">當成起點很好用，但每一步都要能改</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 7.2 節：參與者對 EvalGen 各個環節的反應。P8 的說法是：希望 AI 做掉大約八成，出錯的地方留個逃生口讓人接手</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:240px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">環節</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">參與者喜歡的</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">想要的掌控</div>
+  </div>
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:80px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">標準建議</div><div style="font-size:12.5px; color:#8A93A0;">第 7.2.1 節</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>9 人中 8 人覺得建議正是想要的（P3 除外）；<br>P4 說想斷言時常卡住，這解了卡關</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>P3：有些建議不合理，例如回應延遲、<br>長期穩定度；能自己選哪些才重要</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:290px; width:1480px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:grid; grid-template-columns:240px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#2E7B4F;">先評分</div><div style="font-size:12.5px; color:#8A93A0;">第 7.2.2 節</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>P4、P9 覺得很有用；P9 評分時<br>找到了 prompt 裡沒寫的規則</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>沒先評分的有人後悔；<br>P2：應該強制每人先看至少 20 個例子</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:370px; width:1480px; height:80px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">邊等邊評</div><div style="font-size:12.5px; color:#8A93A0;">第 7.2.3 節</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>除了 P7 都覺得值得；<br>好幾人回頭改分，很高興可以改</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>三位（P6、P7、P8）想逐條評分；<br>P7 想看評分被拿去做什麼</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:450px; width:1480px; height:80px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">報告卡</div><div style="font-size:12.5px; color:#8A93A0;">第 7.2.4 節</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>喜歡多個候選、挑最一致的；<br>找不到好斷言，就刪掉那條標準</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>P5、P6、P7、P8 想看逐條的一致程度；<br>P2、P5 想自己換候選；P1、P7 想多評</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:530px; width:1480px; height:80px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">表格檢視</div><div style="font-size:12.5px; color:#8A93A0;">第 7.2.5 節</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>第一次看到都很有興趣；P2 說它建立信任，<br>P5 比起 Jupyter 更喜歡這張表</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>P6 想改 prompt 就自動重算；只有一人<br>從覆蓋率驗，其他人逐欄找錯殺</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:632px; width:470px; height:188px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">標準建議：解了寫作卡關</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">9 人中 8 人覺得建議正是想要的；<br>P7 起初嫌 7 條太多，刪完才發現<br>建議已涵蓋他要的全部標準。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">P3 不怪 EvalGen，強調能掌控要選哪些。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:632px; width:470px; height:188px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">只按好壞，腦中要記全部標準</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">P6、P7、P8 很難一邊記住所有標準、<br>一邊整體評分；P5、P6、P7、P8<br>想看每條標準各自的一致程度。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者在第 8.1 節也提議改成逐條評分。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:632px; width:470px; height:188px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">想自己挑、自己寫</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">P2、P5 想把選中的程式斷言換成別的候選；<br>找不到好斷言的標準，參與者想自己寫；<br>P1、P7 覺得評得不夠，想回去多評。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">報告卡上不能改，回主畫面後才能在節點裡改。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：代號與人數照第 7.2 節，「喜歡的／想要的」兩欄是整理者的分法。第 7.2.4 節說報告卡挑的是誤判失敗率 20% 內覆蓋率最高的。</div>
+</div></div>
+</section>
+<section class="page" id="p10">
+  <div class="label"><span class="n">10 / 13</span><span>標準漂移的兩條回頭路</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">要評分得先有標準，標準卻是評出來的</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 7.3、7.3.1 節：參與者邊評邊改標準，作者叫它標準漂移；兩種漂移各有一條回頭的路，在 EvalGen 裡走起來的代價不同</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　寫下標準</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">EvalGen 建議，<br>人增刪改</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　依標準評分</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">一筆一筆按好或壞</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　看到更多輸出</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">輸出的樣子，<br>比寫標準時想像的多</div>
+  </div>
+  <div style="position:absolute; left:930px; top:210px; font-size:12.5px; font-weight:500; color:#C8501F;">看到新「類型」的壞輸出</div>
+  <div style="position:absolute; left:782px; top:270px; font-size:12.5px; font-weight:500; color:#2E7B4F;">標準不合輸出的樣子</div>
+
+  <div style="position:absolute; left:636px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#2E7B4F;">漂移二　重新詮釋</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">把既有標準改得貼近輸出<br>P2、P5、P6、P8、P9</div>
+  </div>
+  <div style="position:absolute; left:924px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#C8501F;">漂移一　加新標準</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">看到新類型的壞輸出就想加<br>P2、P5、P6、P8、P9</div>
+  </div>
+
+  <div style="position:absolute; left:1230px; top:160px; width:310px; height:240px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:20px 22px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.1em; color:#8A93A0;">CATCH-22</div>
+    <div style="font-size:17px; font-weight:700; color:#1C2431; line-height:1.45;">要評分，得先說出標準；<br>要說出標準，得先評分</div>
+    <div style="font-size:13.5px; color:#2B3340; line-height:1.6;">評分時還不確定自己的標準，<br>語氣帶著疑問：「大概吧」「好吧」<br>（P2、P5、P7、P8、P9）；<br>作者說這是信心低的主因。</div>
+    <div style="font-size:12.5px; color:#8A93A0; line-height:1.6;">作者的主張：定標準和評分要一起進行。</div>
+  </div>
+
+  <div style="position:absolute; left:290px; top:358px; width:180px; text-align:right; font-size:12.5px; font-weight:500; color:#2E7B4F;">改定義，也回頭改先前的分</div>
+  <div style="position:absolute; left:300px; top:460px; font-size:12.5px; font-weight:500; color:#C8501F;">介面不能回頭加標準：要等候選跑完、跳過報告卡，重開一輪 EvalGen</div>
+
+  <div style="position:absolute; left:60px; top:496px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:516px; font-size:20px; font-weight:700; color:#1C2431;">兩個例子與表 2</div>
+
+  <div style="position:absolute; left:60px; top:558px; width:470px; height:228px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">專有名詞：全部改成大多數</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">P2、P8 的標準原本是實體都是專有名詞，<br>有一個不是就評壞；<br>看到各筆數量不一，兩人都想改成大多數是。<br>P9 則慶幸能在定案前先對輸出給回饋。</div>
+    <div style="font-size:13px; color:#8A93A0;">第二種漂移：重新詮釋既有的標準。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:558px; width:470px; height:228px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">hashtag：拿掉 # 還算不算</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">P7 看到有的輸出留著 #justdoit，<br>有的沒有 #，卻寫出 Nike 這個實體；<br>他開始重想標準的邊界，P5 也一樣。<br>P5 和 P9 對這條標準的讀法也不同（第 11 卡）。</div>
+    <div style="font-size:13px; color:#8A93A0;">P7 的感想：沒看到之前，很難知道。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:558px; width:470px; height:228px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">表 2：評分從 1 到 6</div>
+    <div style="display:flex; gap:4px;">
+      <div style="width:42px; height:44px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; flex-direction:column; align-items:center; justify-content:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:10.5px; color:#8A93A0;">P1</div><div style="font-size:16px; font-weight:700; color:#1C2431;">6</div></div>
+      <div style="width:42px; height:44px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; flex-direction:column; align-items:center; justify-content:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:10.5px; color:#8A93A0;">P2</div><div style="font-size:16px; font-weight:700; color:#1C2431;">5</div></div>
+      <div style="width:42px; height:44px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; flex-direction:column; align-items:center; justify-content:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:10.5px; color:#8A93A0;">P3</div><div style="font-size:16px; font-weight:700; color:#1C2431;">3</div></div>
+      <div style="width:42px; height:44px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; flex-direction:column; align-items:center; justify-content:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:10.5px; color:#8A93A0;">P4</div><div style="font-size:16px; font-weight:700; color:#1C2431;">4</div></div>
+      <div style="width:42px; height:44px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; flex-direction:column; align-items:center; justify-content:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:10.5px; color:#8A93A0;">P5</div><div style="font-size:16px; font-weight:700; color:#1C2431;">5</div></div>
+      <div style="width:42px; height:44px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; flex-direction:column; align-items:center; justify-content:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:10.5px; color:#8A93A0;">P6</div><div style="font-size:16px; font-weight:700; color:#1C2431;">3</div></div>
+      <div style="width:42px; height:44px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; flex-direction:column; align-items:center; justify-content:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:10.5px; color:#8A93A0;">P7</div><div style="font-size:16px; font-weight:700; color:#1C2431;">1</div></div>
+      <div style="width:42px; height:44px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; flex-direction:column; align-items:center; justify-content:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:10.5px; color:#8A93A0;">P8</div><div style="font-size:16px; font-weight:700; color:#1C2431;">2</div></div>
+      <div style="width:42px; height:44px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; flex-direction:column; align-items:center; justify-content:center;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:10.5px; color:#8A93A0;">P9</div><div style="font-size:16px; font-weight:700; color:#1C2431;">5</div></div>
+    </div>
+    <div style="font-size:14px; color:#2B3340; line-height:1.6;">「斷言和我的評分一致」的 7 點量表；<br>圖說寫不一，正文寫兩極。</div>
+    <div style="font-size:13px; color:#8A93A0;">信心低的主因：評分時還不確定自己的標準。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩種漂移與例子依第 7.3.1 節，迴圈的畫法是整理者的。P8 還有兩次為了和先前的評分一致而給壞分，作者說這不利於對齊。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M902 236H1057V298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M769 262V298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M634 350H481V264" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c10)"></path>
+    <path d="M1057 402V452H36V210H58" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c10)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p11">
+  <div class="label"><span class="n">11 / 13</span><span>同一條斷言，兩種讀法</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">同一條斷言，對 P9 對齊，對 P5 不對齊</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 7.3.3 節：所有參與者都有「輸出裡不能有 hashtag 實體」這條標準，但讀法不同；P5 與 P9 拿到的是同一條程式斷言</div>
+
+  <div style="position:absolute; left:450px; top:140px; width:700px; height:52px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:rgba(255,255,255,0.6);">同一條程式斷言</div><div style="font-size:16px; font-weight:700; color:#FFFFFF;">輸出裡有 # 字元，就判不通過</div></div>
+
+  <div style="position:absolute; left:60px; top:214px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">PARTICIPANT P5</div>
+  <div style="position:absolute; left:60px; top:236px; font-size:20px; font-weight:700; color:#1C2431;">hashtag 裡的實體，整個不要抽</div>
+  <div style="position:absolute; left:840px; top:214px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">PARTICIPANT P9</div>
+  <div style="position:absolute; left:840px; top:236px; font-size:20px; font-weight:700; color:#1C2431;">照樣抽出實體，只是不能寫出 #</div>
+  <div style="position:absolute; left:800px; top:214px; width:0px; height:586px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:280px; font-size:12.5px; color:#8A93A0;">輸出（示意）</div>
+  <div style="position:absolute; left:440px; top:280px; width:80px; text-align:center; font-size:12.5px; color:#8A93A0;">P5 評</div>
+  <div style="position:absolute; left:540px; top:280px; width:90px; text-align:center; font-size:12.5px; color:#8A93A0;">斷言</div>
+  <div style="position:absolute; left:650px; top:280px; width:110px; text-align:center; font-size:12.5px; color:#8A93A0;">對得上嗎</div>
+  <div style="position:absolute; left:840px; top:280px; font-size:12.5px; color:#8A93A0;">輸出（示意）</div>
+  <div style="position:absolute; left:1220px; top:280px; width:80px; text-align:center; font-size:12.5px; color:#8A93A0;">P9 評</div>
+  <div style="position:absolute; left:1320px; top:280px; width:90px; text-align:center; font-size:12.5px; color:#8A93A0;">斷言</div>
+  <div style="position:absolute; left:1430px; top:280px; width:110px; text-align:center; font-size:12.5px; color:#8A93A0;">對得上嗎</div>
+
+  <div style="position:absolute; left:60px; top:302px; width:360px; height:44px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13.5px; color:#2B3340;">- #Nike: 運動品牌</div>
+  <div style="position:absolute; left:440px; top:309px; width:80px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">壞</div>
+  <div style="position:absolute; left:540px; top:309px; width:90px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#FFFFFF;">不通過</div>
+  <div style="position:absolute; left:650px; top:309px; width:110px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#2E7B4F;">✓ 抓到</div>
+
+  <div style="position:absolute; left:60px; top:354px; width:360px; height:44px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13.5px; color:#2B3340;">- Nike: 運動品牌</div>
+  <div style="position:absolute; left:440px; top:361px; width:80px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">壞</div>
+  <div style="position:absolute; left:540px; top:361px; width:90px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">通過</div>
+  <div style="position:absolute; left:650px; top:361px; width:110px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#C8501F;">✗ 漏抓</div>
+
+  <div style="position:absolute; left:60px; top:406px; width:360px; height:44px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13.5px; color:#2B3340;">- Sheryl Sandberg: 企業家</div>
+  <div style="position:absolute; left:440px; top:413px; width:80px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">好</div>
+  <div style="position:absolute; left:540px; top:413px; width:90px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">通過</div>
+  <div style="position:absolute; left:650px; top:413px; width:110px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#2E7B4F;">✓ 放行</div>
+
+  <div style="position:absolute; left:840px; top:302px; width:360px; height:44px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13.5px; color:#2B3340;">- #Nike: 運動品牌</div>
+  <div style="position:absolute; left:1220px; top:309px; width:80px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">壞</div>
+  <div style="position:absolute; left:1320px; top:309px; width:90px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#FFFFFF;">不通過</div>
+  <div style="position:absolute; left:1430px; top:309px; width:110px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#2E7B4F;">✓ 抓到</div>
+
+  <div style="position:absolute; left:840px; top:354px; width:360px; height:44px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13.5px; color:#2B3340;">- Nike: 運動品牌</div>
+  <div style="position:absolute; left:1220px; top:361px; width:80px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">好</div>
+  <div style="position:absolute; left:1320px; top:361px; width:90px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">通過</div>
+  <div style="position:absolute; left:1430px; top:361px; width:110px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#2E7B4F;">✓ 放行</div>
+
+  <div style="position:absolute; left:840px; top:406px; width:360px; height:44px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13.5px; color:#2B3340;">- Sheryl Sandberg: 企業家</div>
+  <div style="position:absolute; left:1220px; top:413px; width:80px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">好</div>
+  <div style="position:absolute; left:1320px; top:413px; width:90px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">通過</div>
+  <div style="position:absolute; left:1430px; top:413px; width:110px; height:30px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#2E7B4F;">✓ 放行</div>
+
+  <div style="position:absolute; left:60px; top:472px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">P5 要的是 hashtag 裡的實體不要出現；只查 # 字元，<br>抓不到拿掉 #、照樣寫出 Nike 的輸出。候選都這樣讀，評再多筆也一樣。</div>
+  <div style="position:absolute; left:840px; top:472px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">P9 要的正是輸出裡不能出現 #；同一條斷言和他的每一個評分都對得上，報告卡上它就是一致的。</div>
+
+  <div style="position:absolute; left:60px; top:570px; width:700px; height:184px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">P5：評再多也救不回</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">所有候選都用同一種讀法，怎麼評都一樣不一致；<br>P3、P5、P7、P9 都碰過評分好像沒有作用的困惑。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">作者說這也是標準漂移：P5 評了幾筆輸出，才把這條標準想清楚。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:570px; width:700px; height:184px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">P9：同一條斷言剛好對上</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">這條簡單的程式斷言和他的評分一致；<br>換一個人，同一條斷言的一致程度就不同。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">作者：對齊不只是效能問題，沒說出口的標準可能主觀、甚至彼此矛盾。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三筆輸出與兩人的評分是整理者依第 7.3.3 節的情境寫的示意，不是論文的資料；兩人的讀法與那條斷言照原文。</div>
+</div></div>
+</section>
+<section class="page" id="p12">
+  <div class="label"><span class="n">12 / 13</span><span>程式斷言對 LLM 斷言</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">程式斷言想自己看，LLM 斷言難以信任</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 7.4 節：參與者兩種都要，P4、P6 也喜歡能改 EvalGen 建議的類型；但兩種斷言，他們建立、驗證與信任的方式不同</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:240px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">面向</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">程式斷言</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">LLM 斷言</div>
+  </div>
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:90px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">適合的標準</div><div style="font-size:12.5px; color:#8A93A0;">第 7.4.1 節</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>格式檢查（例如是不是 Markdown）、計數、<br>包含或排除特定字詞</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>模糊的標準（P6、P8）；<br>一時想不出 Python 函式，就交給它（P2）</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:300px; width:1480px; height:90px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">怎麼確認實作</div><div style="font-size:12.5px; color:#8A93A0;">第 7.4.2 節</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>想看每個候選的程式碼、自己挑（P2、P5、P7）；<br>十行左右以內會讀，更長的只看結果（P7）</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>多個候選、挑最一致的流程，大致受歡迎；<br>但比程式斷言難改</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:390px; width:1480px; height:90px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">評分怎麼用</div><div style="font-size:12.5px; color:#8A93A0;">第 7.4.2、7.4.3 節</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>依看過的輸出，調整寫法的花俏程度（P7）；<br>匯出成單元測試或 Python 檔（P4、P6）</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>把標好的輸出放進 prompt 當例子（P3、P5）；<br>拿評分與倒讚理由產生候選（P3、P4、P5、P7）</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:480px; width:1480px; height:90px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:0px 0px 8px 8px; display:grid; grid-template-columns:240px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#C8501F;">信任與上線</div><div style="font-size:12.5px; color:#8A93A0;">第 7.4.4、8.2 節</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>不一致時比較明顯，也容易改；<br>可以放在管線的關鍵路徑上</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>比較難信任（P2、P5、P6、P8、P9）；<br>懷疑能不能上線監控（P3、P6、P8）</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:606px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">兩種都要，各有用處</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">所有參與者都表示兩種都需要。<br>P8 偏好 LLM 斷言：輸出格式出乎預期時，<br>它比較寬容；程式檢查的是精確的限制。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者說對程式斷言的偏好，可能只適用於會寫程式的人。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:606px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">程式斷言：給我看程式就好</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">P5 心裡已經有想好的實作，<br>直接看程式碼驗證比較快；P7 則看長度，<br>十行左右以內會讀，更長的只看結果。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">P4、P6 想把程式斷言匯出成單元測試或 Python 檔。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:606px; width:470px; height:200px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">LLM 斷言：上線之後怎麼辦</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">P8 很懷疑 LLM 當驗證器能在正式環境運作；<br>P9 問評估要怎麼長期維護，<br>是不是得把整個流程重跑一次。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者建議向其他人、甚至終端使用者持續收評分。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：四個面向是整理者的分法，內容與代號照第 7.4 節；「可以放在關鍵路徑上」取自第 8.2 節。</div>
+</div></div>
+</section>
+<section class="page" id="p13">
+  <div class="label"><span class="n">13 / 13</span><span>結論：驗證是持續的工作</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">驗證評估器，是一直做下去的工作</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 8、9 節：標準會隨輸出改變，評估器也得跟著重評、重挑；上面三條原則由整理者歸納，下面五個方向來自作者</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">01　標準和評分一起迭代</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">標準不能先定死，<br>再拿去評</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">參與者看了輸出才說得出標準，<br>也會回頭改先前的分；想加一條新標準，<br>EvalGen 卻要等候選跑完、重開一輪。<br>評估助手要讓人隨時加標準、改定義，<br>改完再請人重評。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 先定死標準，再請人標註<br>✓ 邊評邊改，改完重評</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">02　兩種斷言分開對待</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">程式給人讀，<br>LLM 用評分校準</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">程式斷言讓人直接讀程式、自己挑候選，<br>匯出成單元測試，放在關鍵路徑上擋壞輸出；<br>LLM 斷言用人評過的好壞例子校準，<br>再持續向團隊、甚至終端使用者收評分。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 兩種斷言走同一套挑選流程<br>✓ 依類型給不同的掌控</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">03　驗證沒有完成的一天</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">輸出一變，<br>就要再驗一次</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">換模型會帶來 prompt 漂移，標準也跟著漂。<br>上線後要請人評新的輸出、自動調整斷言；<br>多人一起評時要處理評分者之間的分歧，<br>新斷言也該像 pull request 一樣有人審查。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">作者的問題：驗證驗證者，<br>會不會永遠是進行中的工作？</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; font-size:20px; font-weight:700; color:#1C2431;">作者點名的方向（不排順序）</div>
+  <div style="position:absolute; left:60px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">第 8.1 節</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">逐條標準評分</div>
+  </div>
+  <div style="position:absolute; left:360px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">第 8.1 節</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">評分 prompt 放好壞例子</div>
+  </div>
+  <div style="position:absolute; left:660px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">第 8.2 節</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">多人評分，處理分歧</div>
+  </div>
+  <div style="position:absolute; left:960px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">第 8.2 節</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">斷言像 PR 一樣審查</div>
+  </div>
+  <div style="position:absolute; left:1260px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">第 8.3 節</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">多步管線端到端對齊</div>
+  </div>
+  <div style="position:absolute; left:60px; top:722px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">第 8.3 節還點名兩件事：不只是是非題的監控（例如看字數的分布），以及依斷言的結果自動改 prompt。限制有兩個：離線評估只有兩條管線；使用者研究樣本小、時間不夠多次迭代，也沒有涵蓋部署階段。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">硬規則：三條原則是整理者歸納的，不是論文的條列；五個方向依第 8.1 到 8.3 節，原文沒有排順序。</div>
+</div></div>
+</section>
+  <div class="foot">整理自 arXiv · Shreya Shankar、J.D. Zamfirescu-Pereira、Björn Hartmann、Aditya G. Parameswaran、Ian Arawjo（UC Berkeley、Université de Montréal），2024-04-18：<a href="https://arxiv.org/abs/2404.12272">https://arxiv.org/abs/2404.12272</a>。這些圖卡是學習用的重新整理，不是原文的逐句翻譯；觀點與著作權屬於原作者。<a href="index.html">回到圖卡＋教材版</a> · <a href="../../">回首頁</a></div>
+</div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fit() {
+    var frames = document.querySelectorAll('.frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('load', fit);
+  fit();
+})();
+</script>
+</body>
+</html>
