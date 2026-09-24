@@ -145,6 +145,42 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "mipro-optimizer",
+      "path": "articles/mipro-optimizer/index.html",
+      "title": "MIPRO：多階段 LM 程式只有最後一個分數，也能一起調每個模組的指令與示範",
+      "summary": "Stanford 等團隊在 2024 年研究多階段 LM 程式的 prompt 最佳化：沒有各模組的標籤、也沒有梯度，只有最終的評估指標，要怎麼調每個模組的指令與 few-shot 示範。作者把問題拆成「提案」與「分功勞」兩個難處，各提出三種策略，組成 MIPRO 等幾個最佳化器，在七個任務上比較，並整理出何時該調示範、何時該調指令的經驗法則。這份整理逐章重述方法與表 2 的結果，交代數字的出處與原文前後不一致的地方，每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "arXiv · Krista Opsahl-Ong、Michael J Ryan、Josh Purtell、David Broman、Christopher Potts、Matei Zaharia、Omar Khattab（Stanford University、Basis、KTH Royal Institute of Technology、UC Berkeley）",
+        "url": "https://arxiv.org/abs/2406.11695",
+        "date": "2024-06-17"
+      },
+      "date": "2026-09-24",
+      "tags": [
+        "prompt-optimization",
+        "dspy",
+        "llm-pipelines",
+        "bayesian-optimization",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 5,
+        "kind": "選讀",
+        "section": "Optimization",
+        "lecture": "Optimization",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/mipro-optimizer/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "memgpt-virtual-context",
       "path": "articles/memgpt-virtual-context/index.html",
       "title": "MemGPT：把脈絡視窗當記憶體管理，讓 LLM 自己把記憶換進換出",
