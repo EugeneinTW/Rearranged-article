@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Test-Time Compute（Snell et al. 2024） · 圖解卡</title>
+<meta name="description" content="UC Berkeley 與 Google DeepMind 在 2024 年的論文，研究讓語言模型在推論時多花算力的兩種做法：對過程獎勵模型（PRM）做搜尋，以及讓模型循序修訂自己的答案。作者發現哪種做法有效要看題目對模型多難，依難度分配算力的 compute-optimal 策略比 best-of-N 最多省 4 倍；在 FLOPs 對等下，作者說簡單與中等的題目、或推論量小的情境，測試時算力勝過放大約 14 倍的模型，最難的題與推論量大的情境則還是放大模型比較有效。每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="test-time-compute, inference-scaling, process-reward-model, llm-reasoning, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2408.03314">
+<meta name="date" content="2026-09-24">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+:root { color-scheme: light; --bg: #F4F5F7; --line: #E5E9EE; --ink: #1C2431; --mute: #8A93A0; --orange: #C8501F; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: #C8501F; } a:hover { color: #9E3E16; }
+a:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.wrap { max-width: 1600px; margin: 0 auto; padding-block: 24px 48px; padding-inline: 16px; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; padding: 6px 4px 18px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; letter-spacing: 0.12em; color: var(--mute); }
+.head nav { display: flex; flex-wrap: wrap; gap: 6px 14px; letter-spacing: 0.04em; }
+.head nav a { color: var(--mute); text-decoration: none; font-weight: 600; }
+.head nav a:hover { color: var(--orange); }
+.page { margin-bottom: 36px; scroll-margin-top: 16px; }
+.label { display: flex; align-items: baseline; gap: 14px; padding: 0 4px 8px; font-size: 13px; color: var(--mute); }
+.label .n { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-weight: 600; font-size: 12px; letter-spacing: 0.1em; color: var(--orange); }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--line); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; }
+.foot { padding: 12px 4px 0; font-size: 12px; color: var(--mute); line-height: 1.7; }
+@media print {
+  @page { size: 1600px 900px; margin: 0; }
+  body { background: #FFFFFF; }
+  .wrap { max-width: none; padding: 0; }
+  .head, .label, .foot { display: none; }
+  .page { margin: 0; page-break-after: always; }
+  .frame { border: none; border-radius: 0; height: auto !important; }
+  .frame > div { transform: none !important; }
+}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><span>Test-Time Compute（Snell et al. 2024） · 圖解卡 · 13 張 · 連續閱讀版</span><nav class="site" aria-label="導覽"><a href="../../">首頁</a><a href="index.html">圖卡＋教材版</a></nav><nav aria-label="跳頁"><a href="#p01" title="封面">01</a><a href="#p02" title="依難度決定算力花在哪">02</a><a href="#p03" title="兩個旋鈕：提案分布與驗證器">03</a><a href="#p04" title="兩種估難度的方法">04</a><a href="#p05" title="PRM 的標籤怎麼來">05</a><a href="#p06" title="beam search 與 lookahead">06</a><a href="#p07" title="搜尋的結果看難度">07</a><a href="#p08" title="修訂模型的訓練資料">08</a><a href="#p09" title="修訂鏈與兩層挑選">09</a><a href="#p10" title="循序與平行怎麼切">10</a><a href="#p11" title="FLOPs 的匯率">11</a><a href="#p12" title="什麼時候比放大模型划算">12</a><a href="#p13" title="結論：先估難度再分配">13</a></nav></div>
+<section class="page" id="p01">
+  <div class="label"><span class="n">01 / 13</span><span>封面</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.14em; color:#8A93A0;">TEST-TIME COMPUTE &#183; 圖解卡 &#183; 16:9 &#183; 13 張</div>
+  <div style="position:absolute; left:60px; top:110px; width:840px; font-size:60px; font-weight:700; color:#1C2431; line-height:1.3; letter-spacing:0.01em;">算力花在哪，<br>看題目對模型多難。</div>
+  <div style="position:absolute; left:60px; top:296px; width:840px; font-size:20px; color:#6B7380; line-height:1.7;">整理自 arXiv 論文〈Scaling LLM <span style="white-space:nowrap">Test-Time</span> Compute Optimally can be More Effective than Scaling Model Parameters〉（2024-08-06，Snell、Lee、Xu、Kumar，UC Berkeley、Google DeepMind；ICLR 2025）。推論時多花的算力，哪一種花法有效，要看題目對模型多難。</div>
+  <div style="position:absolute; left:60px; top:486px; display:flex; align-items:center; gap:36px;">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#C8501F;"></div>
+      <div style="font-size:15px; color:#2B3340;">幫不上忙或被鑽漏洞</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#2E7B4F;"></div>
+      <div style="font-size:15px; color:#2B3340;">有效的算力用法</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#1F2A3A;"></div>
+      <div style="font-size:15px; color:#2B3340;">模型本身／終點</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div>
+      <div style="font-size:15px; color:#2B3340;">中性節點</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; top:536px; width:840px; font-size:13px; color:#8A93A0; line-height:1.6;">整組共用同一套語意色：橘是測試時算力幫不上忙、或搜尋鑽了驗證器漏洞的地方，綠是有效的用法與結果，深藍是模型本身與終點。</div>
+  <div style="position:absolute; left:60px; top:606px; width:840px; box-sizing:border-box; border-left:3px solid #2E7B4F; padding:4px 0px 4px 18px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.08em; color:#8A93A0;">兩個旋鈕，一個分配原則</div>
+    <div style="font-size:17px; color:#1C2431; line-height:1.7;">改提案分布：看著前幾次的答案再寫 &#183; 用驗證器：PRM 逐步打分與搜尋 &#183; 依難度挑用法</div>
+    <div style="font-size:14px; color:#6B7380; line-height:1.6;">資料集是 MATH，模型是 <span style="white-space:nowrap">PaLM 2-S*</span>；FLOPs 對等的比較對象，是參數約多 14 倍的預訓練模型。</div>
+  </div>
+  <div style="position:absolute; left:960px; top:110px; width:580px; box-sizing:border-box; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 34px; display:flex; flex-direction:column;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">本組 &#183; 13 頁</div>
+    <div style="margin-top:8px; display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">01</div><div style="font-size:16px; color:#1C2431;">封面</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">02</div><div style="font-size:16px; color:#1C2431;">依難度決定算力花在哪</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">03</div><div style="font-size:16px; color:#1C2431;">兩個旋鈕：提案分布與驗證器</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">04</div><div style="font-size:16px; color:#1C2431;">兩種估難度的方法</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">05</div><div style="font-size:16px; color:#1C2431;">PRM 的標籤怎麼來</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">06</div><div style="font-size:16px; color:#1C2431;">beam search 與 lookahead</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">07</div><div style="font-size:16px; color:#1C2431;">搜尋的結果看難度</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">08</div><div style="font-size:16px; color:#1C2431;">修訂模型的訓練資料</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">09</div><div style="font-size:16px; color:#1C2431;">修訂鏈與兩層挑選</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">10</div><div style="font-size:16px; color:#1C2431;">循序與平行怎麼切</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">11</div><div style="font-size:16px; color:#1C2431;">FLOPs 的匯率</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">12</div><div style="font-size:16px; color:#1C2431;">什麼時候比放大模型划算</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#2E7B4F;">13</div><div style="font-size:16px; color:#1C2431;">結論：先估難度再分配</div></div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">來源：arxiv.org/abs/2408.03314 —— 本組為學習用重述，數字依 arXiv v1，虛擬碼與示意圖為教學用精簡版。</div>
+</div></div>
+</section>
+<section class="page" id="p02">
+  <div class="label"><span class="n">02 / 13</span><span>依難度決定算力花在哪</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">多出來的算力該花在哪，要看題目多難</div>
+  <div style="position:absolute; left:60px; top:92px; width:1480px; font-size:15px; color:#6B7380;">第 1 節：<span style="white-space:nowrap">best-of-N</span> 之外，還能改提案分布或對驗證器搜尋；哪一種有效，同時看題目與 base 模型。三個出口是整理者把第 5 到 7 節的結論歸成三組</div>
+
+  <div style="position:absolute; left:60px; top:286px; width:230px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">一道題＋N 次生成的預算</div>
+  <div style="position:absolute; left:400px; top:276px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:17px; font-weight:700; color:#1C2431; line-height:1.35;">這題對這個 base 模型<br>有多難？</div>
+
+  <div style="position:absolute; left:790px; top:174px; font-size:13px; font-weight:700; color:#2E7B4F;">等級 1–2 &#183; 簡單</div>
+  <div style="position:absolute; left:790px; top:294px; font-size:13px; font-weight:700; color:#2E7B4F;">等級 3–4 &#183; 較難</div>
+  <div style="position:absolute; left:790px; top:414px; font-size:13px; font-weight:700; color:#C8501F;">等級 5 &#183; 最難</div>
+
+  <div style="position:absolute; left:940px; top:146px; width:600px; height:104px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:14px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">把預算給循序修訂</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">模型本來就寫得出像樣的答案，一次次修正最划算；搜尋用 <span style="white-space:nowrap">best-of-N</span> 就好，beam search 在這裡越搜越差</div>
+  </div>
+  <div style="position:absolute; left:940px; top:266px; width:600px; height:104px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:14px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">平行多試幾種解法，或對 PRM 做 beam search</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">要探索不同的高層解法：修訂時平行與循序各配一些，beam search 一致勝過 <span style="white-space:nowrap">best-of-N</span></div>
+  </div>
+  <div style="position:absolute; left:940px; top:386px; width:600px; height:104px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:10px; padding:14px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#C8501F;">多花測試時算力幾乎沒有用</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">幾種方法都沒有明顯的進展；FLOPs 對等時，把算力花在預訓練、放大模型比較有效</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:520px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">COMPUTE-OPTIMAL</div>
+    <div style="font-size:15px; color:#2B3340;">每個難度等級各挑最好的設定：搜尋用 16 次生成幾乎追上 <span style="white-space:nowrap">best-of-N</span> 的 64 次，修訂用 64 次勝過 256 次</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:600px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:624px; font-size:20px; font-weight:700; color:#1C2431;">三組各自的理由</div>
+  <div style="position:absolute; left:60px; top:666px; width:470px; height:160px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#2E7B4F;">簡單題：答案已在對的方向</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">只差修正，所以循序修訂最有效；圖 7 右在預算 128 時，簡單題全部循序最好。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">beam search 越搜越差，是在利用 PRM 的弱點。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:666px; width:470px; height:160px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#2E7B4F;">較難的題：要探索不同解法</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">平行抽樣像全域搜尋，能涵蓋不同的高層路線；等級 3、4 上 beam search 一致勝過 <span style="white-space:nowrap">best-of-N</span>。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">修訂時，最佳比例落在平行與循序之間。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:666px; width:470px; height:160px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#C8501F;">最難的題：算力改花在預訓練</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">等級 5 上沒有方法有明顯進展；FLOPs 對等時，只看很難的題，就該把預算給預訓練。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">作者說兩者目前不能一比一互換。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三組是整理者把五個難度等級歸成的簡化；正文把等級 3、4 叫「較難」，圖 3 的圖說叫「中等難度」。細節見第 4、7、10、12 卡。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+      <marker id="ao-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+    </defs>
+    <path d="M290 318L398 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M700 318H770" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M770 318V198H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c02)"></path>
+    <path d="M770 318H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c02)"></path>
+    <path d="M770 318V438H938" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c02)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p03">
+  <div class="label"><span class="n">03 / 13</span><span>兩個旋鈕：提案分布與驗證器</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">兩個獨立的旋鈕：改提案分布、用驗證器挑</div>
+  <div style="position:absolute; left:60px; top:92px; width:1480px; font-size:15px; color:#6B7380;">第 2 節：輸入端在 prompt 加上 token，改答案從哪裡抽；輸出端抽出候選，再用驗證器打分、挑選或搜尋。原文說這是研究裡兩條獨立的軸</div>
+
+  <div style="position:absolute; left:60px; top:166px; font-size:13px; font-weight:700; color:#6B7380;">驗證器</div>
+  <div style="position:absolute; left:60px; top:526px; font-size:13px; font-weight:700; color:#6B7380;">多數決</div>
+  <div style="position:absolute; left:180px; top:578px; font-size:13px; font-weight:700; color:#6B7380;">base 模型</div>
+  <div style="position:absolute; left:944px; top:578px; font-size:13px; font-weight:700; color:#6B7380;">修訂模型</div>
+  <div style="position:absolute; left:180px; top:606px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.1em; color:#8A93A0;">Y = 怎麼挑答案 &#183; X = 答案從哪裡抽</div>
+
+  <div style="position:absolute; left:180px; top:170px; width:400px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:20px 22px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">BASE &#215; 驗證器</div>
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">對 PRM 搜尋</div>
+    <div style="font-size:14px; color:#6B7380; line-height:1.5;"><span style="white-space:nowrap">best-of-N</span> weighted、beam search、lookahead；<br>提案分布維持 base 模型</div>
+    <div style="margin-top:auto; align-self:flex-start; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">第 5 節</div>
+  </div>
+  <div style="position:absolute; left:596px; top:170px; width:400px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:20px 22px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">修訂 &#215; 驗證器</div>
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">修訂鏈＋ORM 兩層挑</div>
+    <div style="font-size:14px; color:#6B7380; line-height:1.5;">鏈內挑一次、跨鏈再挑一次；<br>這個 ORM 的前文放入修訂歷史</div>
+    <div style="margin-top:auto; align-self:flex-start; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">第 6 節</div>
+  </div>
+  <div style="position:absolute; left:180px; top:366px; width:400px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #D5DAE1; border-radius:10px; padding:20px 22px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">BASE &#215; 多數決</div>
+    <div style="font-size:20px; font-weight:700; color:#6B7380;">多數決：當成基線</div>
+    <div style="font-size:14px; color:#6B7380; line-height:1.5;">平行抽 N 個，取出現最多次的答案；圖 3、圖 4 裡的 Majority 線</div>
+    <div style="margin-top:auto; align-self:flex-start; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">基線</div>
+  </div>
+  <div style="position:absolute; left:596px; top:366px; width:400px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:20px 22px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">修訂 &#215; 多數決</div>
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">修訂鏈＋多數決</div>
+    <div style="font-size:14px; color:#6B7380; line-height:1.5;">所有鏈的所有答案放在一起投票（附錄 B、I）</div>
+    <div style="margin-top:auto; align-self:flex-start; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">第 6 節</div>
+  </div>
+
+  <div style="position:absolute; left:1080px; top:170px; width:460px; height:396px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-size:18px; font-weight:700; color:#1C2431;">怎麼讀這張圖</div>
+    <div style="display:flex; gap:14px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#2E7B4F; margin-top:2px;">01</div><div style="font-size:15px; color:#2B3340; line-height:1.6;">兩條軸是第 2 節自己的說法：改提案分布和用驗證器，是研究裡兩條獨立的軸。</div></div>
+    <div style="display:flex; gap:14px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#2E7B4F; margin-top:2px;">02</div><div style="font-size:15px; color:#2B3340; line-height:1.6;">改提案分布有兩類：RL 式微調（STaR、<span style="white-space:nowrap">ReST-EM</span>）不加 token，自我修訂把前面的嘗試放進 prompt。</div></div>
+    <div style="display:flex; gap:14px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#2E7B4F; margin-top:2px;">03</div><div style="font-size:15px; color:#2B3340; line-height:1.6;">這篇的提案端用自我修訂；<br>左下的多數決是基線：不改提案、不用驗證器。</div></div>
+    <div style="display:flex; gap:14px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#2E7B4F; margin-top:2px;">04</div><div style="font-size:15px; color:#2B3340; line-height:1.6;">作者的比喻是 MCMC：一個簡單的提案分布，加上一個評分函數。</div></div>
+    <div style="margin-top:auto; font-size:13px; color:#8A93A0; line-height:1.6;">還沒試的組合：PRM 樹搜尋加上修訂（第 8 節的方向）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:640px; width:470px; height:180px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">直接 prompt 改錯沒有用</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">現成模型在推理題上自我修正多半無效；<br>作者照 Qu 等人的做法，微調出會迭代修訂的模型。</div>
+    <div style="font-size:13px; color:#8A93A0;">修訂模型的訓練見第 8 卡。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:640px; width:470px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">PRM 讓搜尋一步一步做</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">PRM 對每一個中間步驟預測對不對，不只看最後答案，才能在解的空間做樹搜尋。</div>
+    <div style="font-size:13px; color:#8A93A0;">PRM 的訓練見第 5 卡。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:640px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">兩條軸可以相乘</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">第 6 節用修訂模型當提案分布，再用 ORM 或多數決挑答案，就是右邊兩格。</div>
+    <div style="font-size:13px; color:#8A93A0;">兩條軸都動時，評分器也要重訓。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩條軸取自第 2 節；把多數決標成基線、四格對應的章節，是整理者的畫法。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M150 560V162" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M160 566H1012" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p04">
+  <div class="label"><span class="n">04 / 13</span><span>兩種估難度的方法</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">難度有兩種估法：看標準答案，或看驗證器</div>
+  <div style="position:absolute; left:60px; top:92px; width:1480px; font-size:15px; color:#6B7380;">第 3.2 節：每題抽 2048 個解算一個難度分數，按五分位分成五級；每個等級在一折題目上挑最好的設定，再到另一折量。兩種估法只差在分數怎麼算</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">ORACLE DIFFICULTY</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">oracle：拿標準答案算 pass@1</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">PREDICTED DIFFICULTY</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">predicted：拿 PRM 的分數取平均</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:230px; top:222px; width:360px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">一道題：抽 2048 個解</div>
+  <div style="position:absolute; left:230px; top:306px; width:360px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">逐一對標準答案</div><div style="margin-top:2px; font-size:12.5px; color:#6B7380;">答對的比例＝這題的 pass@1</div></div></div>
+  <div style="position:absolute; left:230px; top:404px; width:360px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">按五分位分成五級</div><div style="margin-top:2px; font-size:12.5px; color:#6B7380;">等級 1 最簡單、等級 5 最難</div></div></div>
+  <div style="position:absolute; left:60px; top:494px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">部署時拿不到標準答案，oracle 只能在實驗裡用；第 7 節和大模型比較時也用它。</div>
+
+  <div style="position:absolute; left:1010px; top:222px; width:360px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">同樣那 2048 個解</div>
+  <div style="position:absolute; left:1010px; top:306px; width:360px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">PRM 對最後答案打分</div><div style="margin-top:2px; font-size:12.5px; color:#6B7380;">分數取平均，不看標準答案</div></div></div>
+  <div style="position:absolute; left:1010px; top:404px; width:360px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">同樣按五分位分五級</div><div style="margin-top:2px; font-size:12.5px; color:#6B7380;">附錄 C：趨勢和 oracle 等級相似</div></div></div>
+  <div style="position:absolute; left:840px; top:494px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">不需要標準答案，但每題先抽 2048 個解，本身就要花推論算力；作者在實驗裡沒有把這筆成本算進去。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">oracle：最準，但部署時拿不到</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">pass@1 要用標準答案檢查。作者發現，這種依模型而定的等級，<br>比 MATH 自帶的人工難度標籤更能預測測試時算力的效果。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">引言寫難度在第 4 節，實際定義在第 3.2 節。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">predicted：用得到，但要花算力</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">圖 4、圖 8 裡，兩種等級的 <span style="white-space:nowrap">compute-optimal</span> 曲線大致重疊；搜尋在高預算時，predicted 的好處變小。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">更便宜的估法：訓練模型直接預測難度（第 8 節的方向）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：分組之後兩邊做法相同：每個等級在一折題目上挑最好的設定、在另一折上量，交換後取平均（兩折交叉驗證）。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M410 272V304" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M410 370V402" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1190 272V304" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1190 370V402" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p05">
+  <div class="label"><span class="n">05 / 13</span><span>PRM 的標籤怎麼來</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">PRM 的每一步分數，來自 16 次 rollout</div>
+  <div style="position:absolute; left:60px; top:92px; width:1480px; font-size:15px; color:#6B7380;">第 5.1 節、附錄 D：PRM800k 對 PaLM 2 無效，改用 Monte Carlo rollout 估每一步之後答對的機率，當成軟標籤；不需要人工標註</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　抽解</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">每題從 base 模型抽 16 個解，<br>用換行切成步驟</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　rollout</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">從每一步接著寫到底，<br>同一個模型重複 16 次</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　軟標籤</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">這一步之後答對的比例</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">不用人工標註</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　訓練 PRM</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">二元分類、交叉熵；<br>挑驗證 loss 最低的</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　測試時打分</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">取最後一步的分數；<br>同答案加總後挑最高</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:300px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">PRM 的分數</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">每一步給 0 到 1：在 base 模型自己的抽樣策略下，從這一步接著寫、最後答對的機率，也就是 <span style="white-space:nowrap">reward-to-go</span> 的價值估計。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:380px; width:1480px; height:64px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866; letter-spacing:0.08em;">附錄 D 的設定</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">AdamW、<span style="white-space:nowrap">lr 3e-5</span>、batch 128、dropout 0.05；丟掉沒有可解析最後答案的樣本；驗證集是 PRM800k 訓練分割裡 10% 的題目。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:480px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:504px; font-size:20px; font-weight:700; color:#1C2431;">三個比較的結果（第 5.1 節、附錄 E、F）</div>
+
+  <div style="position:absolute; left:60px; top:546px; width:470px; height:190px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">PRM800k 對 PaLM 2 無效</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">人工標註、解由 <span style="white-space:nowrap">GPT-4</span> 寫。用它訓練的 PRM，連 <span style="white-space:nowrap">best-of-N</span> 這種簡單的策略都能輕易利用它。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者推測是 <span style="white-space:nowrap">GPT-4</span> 與 PaLM 2 之間的分布轉移。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:546px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">最後一步勝過 min 與 prod</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">三種逐步彙整裡，只取最後一步最好；先前的研究是取最小值最好，作者認為差在軟的 MC 標籤。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">跨答案再用 <span style="white-space:nowrap">best-of-N</span> weighted：同一個答案的分數加總。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:546px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">PRM 勝過 ORM</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">只取最後一步，等於把 PRM 當 ORM 用；它卻仍勝過 ORM，而且差距隨樣本數變大。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者猜逐步訓練在這裡主要是一種表徵學習。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：PRM 預測的是 <span style="white-space:nowrap">PaLM 2-S*</span> 這個 base 模型自己的 <span style="white-space:nowrap">reward-to-go</span>；用在修訂模型的輸出上效果變差，只好另訓 ORM（第 9 卡）。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M1345 262L1345 296" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p06">
+  <div class="label"><span class="n">06 / 13</span><span>beam search 與 lookahead</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">beam search 每一步只留 PRM 最看好的</div>
+  <div style="position:absolute; left:60px; top:92px; width:1480px; font-size:15px; color:#6B7380;">第 5.2 節、圖 2：N 個 beam、beam 寬 M；每一步用 PRM 打分，只留 N/M 個，各再展開 M 個，最多 40 輪；最後的 N 個候選用 <span style="white-space:nowrap">best-of-N</span> weighted 挑</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:440px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 16px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#8A93A0;">01</div><div><div style="font-size:15px; font-weight:700; color:#1C2431;">抽 N 個第一步</div><div style="margin-top:3px; font-size:12.5px; color:#6B7380;">從 <span style="white-space:nowrap">few-shot</span> 的 base 模型抽</div></div></div>
+  <div style="position:absolute; left:60px; top:234px; width:440px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 16px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#8A93A0;">02</div><div><div style="font-size:15px; font-weight:700; color:#1C2431;">PRM 打分</div><div style="margin-top:3px; font-size:12.5px; color:#6B7380;">每一步的 <span style="white-space:nowrap">reward-to-go</span> 估計</div></div></div>
+  <div style="position:absolute; left:60px; top:318px; width:440px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 16px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#8A93A0;">03</div><div><div style="font-size:15px; font-weight:700; color:#1C2431;">只留分數最高的 N/M 個</div><div style="margin-top:3px; font-size:12.5px; color:#6B7380;">其餘的前綴直接剪掉</div></div></div>
+  <div style="position:absolute; left:60px; top:402px; width:440px; height:70px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:10px 16px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#2E7B4F;">04</div><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">每個各展開 M 個下一步</div><div style="margin-top:3px; font-size:12.5px; color:#6B7380;">又是 N 個前綴，回到 02 再做一輪</div></div></div>
+  <div style="position:absolute; left:60px; top:490px; width:440px; font-size:13px; color:#6B7380; line-height:1.6;">迴圈做到解寫完或擴展 40 輪為止。lookahead 只改 02：<br>先用溫度 0 往前寫 k 步，再取結尾的 PRM 分數。</div>
+
+  <div style="position:absolute; left:900px; top:150px; width:320px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.04em; color:rgba(255,255,255,0.65);">QUESTION</div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">題目 q：N＝4、M＝2</div></div></div>
+
+  <div style="position:absolute; left:600px; top:236px; width:200px; height:50px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.04em; color:#2E7B4F;">第 1 步</div><div style="font-size:14px; font-weight:700; color:#2E7B4F;">分數高，留下</div></div></div>
+  <div style="position:absolute; left:840px; top:236px; width:200px; height:50px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.04em; color:#8A93A0;">第 1 步</div><div style="font-size:14px; color:#6B7380;">剪掉</div></div></div>
+  <div style="position:absolute; left:1080px; top:236px; width:200px; height:50px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.04em; color:#2E7B4F;">第 1 步</div><div style="font-size:14px; font-weight:700; color:#2E7B4F;">分數高，留下</div></div></div>
+  <div style="position:absolute; left:1320px; top:236px; width:200px; height:50px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.04em; color:#8A93A0;">第 1 步</div><div style="font-size:14px; color:#6B7380;">剪掉</div></div></div>
+
+  <div style="position:absolute; left:580px; top:326px; width:150px; height:56px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.04em; color:#8A93A0;">第 2 步</div><div style="font-size:13px; color:#6B7380;">剪掉</div></div></div>
+  <div style="position:absolute; left:740px; top:326px; width:150px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.04em; color:#2E7B4F;">第 2 步</div><div style="font-size:13px; font-weight:700; color:#2E7B4F;">留下</div></div></div>
+  <div style="position:absolute; left:1060px; top:326px; width:150px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.04em; color:#2E7B4F;">第 2 步</div><div style="font-size:13px; font-weight:700; color:#2E7B4F;">留下</div></div></div>
+  <div style="position:absolute; left:1220px; top:326px; width:150px; height:56px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.04em; color:#8A93A0;">第 2 步</div><div style="font-size:13px; color:#6B7380;">剪掉</div></div></div>
+
+  <div style="position:absolute; left:660px; top:426px; width:150px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.04em; color:#8A93A0;">寫完的解</div><div style="font-size:13px; font-weight:700; color:#1C2431;">候選 1</div></div></div>
+  <div style="position:absolute; left:820px; top:426px; width:150px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.04em; color:#8A93A0;">寫完的解</div><div style="font-size:13px; font-weight:700; color:#1C2431;">候選 2</div></div></div>
+  <div style="position:absolute; left:980px; top:426px; width:150px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.04em; color:#8A93A0;">寫完的解</div><div style="font-size:13px; font-weight:700; color:#1C2431;">候選 3</div></div></div>
+  <div style="position:absolute; left:1140px; top:426px; width:150px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.04em; color:#8A93A0;">寫完的解</div><div style="font-size:13px; font-weight:700; color:#1C2431;">候選 4</div></div></div>
+  <div style="position:absolute; left:1320px; top:430px; width:220px; font-size:13px; color:#6B7380; line-height:1.6;">N＝4 個候選，最後再用<br><span style="white-space:nowrap">best-of-N</span> weighted 挑一個</div>
+  <div style="position:absolute; left:580px; top:500px; width:960px; font-size:13px; color:#6B7380; line-height:1.6;">每一層都是「留 N/M＝2 個、各展開 M＝2 個」，所以每一步都維持 N＝4 個前綴；被剪掉的前綴不再展開。</div>
+
+  <div style="position:absolute; left:60px; top:590px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;"><span style="white-space:nowrap">best-of-N</span> weighted：不分步</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">直接抽 N 個完整的解，依 PRM 對最後答案的分數，同一個答案加總後挑一個。</div>
+    <div style="font-size:13px; color:#8A93A0;">它也是 beam search 最後一步的挑法。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:590px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">lookahead：評分前先試寫 k 步</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">每一步先用溫度 0 往前寫最多 k 步，<br>拿結尾的 PRM 分數當這一步的分數；<br>k＝0 就是 beam search。</div>
+    <div style="font-size:13px; color:#8A93A0;">是 MCTS 拿掉隨機探索的特例。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:590px; width:470px; height:200px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">成本：lookahead 要 N×(k+1)</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">一次生成＝抽一個答案。<span style="white-space:nowrap">best-of-N</span> 與 beam search 的預算是 N；lookahead 每一步多抽 k 步，成本乘上 k+1。</div>
+    <div style="font-size:13px; color:#8A93A0;">第 7 卡的比較都用這個算法。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：樹是整理者依圖 2 與四個步驟畫的示意；N＝4、M＝2 是為了畫圖選的，灰色虛線框是被剪掉的步驟（原圖用紅色）。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M274 222L286 222L280 231Z" fill="#9AA3AE"></path>
+    <path d="M274 306L286 306L280 315Z" fill="#9AA3AE"></path>
+    <path d="M274 390L286 390L280 399Z" fill="#9AA3AE"></path>
+    <path d="M960 200L700 234" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1030 200L940 234" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1090 200L1180 234" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1160 200L1420 234" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M680 286L655 324" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M720 286L815 324" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1160 286L1135 324" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1200 286L1295 324" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M795 382L735 424" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M835 382L895 424" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1115 382L1055 424" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1155 382L1215 424" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p07">
+  <div class="label"><span class="n">07 / 13</span><span>搜尋的結果看難度</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">搜尋越用力，簡單題反而越差</div>
+  <div style="position:absolute; left:60px; top:92px; width:1480px; font-size:15px; color:#6B7380;">第 5.3 節、圖 3：beam search（M＝4）對 <span style="white-space:nowrap">best-of-N</span> weighted，預算 4、16、64、256；圖上沒有標數字，格子裡只寫原文描述的走勢</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">題目</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">beam search：預算越多</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;"><span style="white-space:nowrap">best-of-N</span>：預算越多</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">作者的解釋</div>
+  </div>
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">全部題目</div><div style="font-size:13px; color:#8A93A0;">圖 3 左，各等級彙總</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="2.5" stroke-linejoin="round" style="flex-shrink:0;"><path d="M12 4l9 16H3z"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">預算小時明顯勝出；預算一大優勢消失，常落到 <span style="white-space:nowrap">best-of-N</span> 之下</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2E7B4F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">穩定上升，高預算時追上並常常超過</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>搜尋在利用 PRM 的預測；<br>lookahead 在同預算下多半最差</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:306px; width:1480px; height:96px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#C8501F;">等級 1–2 &#183; 簡單</div><div style="font-size:13px; color:#8A93A0;">驗證器多半判得對</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C8501F" stroke-width="3" stroke-linecap="round" style="flex-shrink:0;"><path d="M6 6l12 12M18 6L6 18"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">預算越大，表現反而越差</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2E7B4F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">沒有這個現象</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">再用力最佳化，只會放大驗證器學到的假特徵</div>
+  </div>
+  <div style="position:absolute; left:60px; top:402px; width:1480px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#2E7B4F;">等級 3–4</div><div style="font-size:13px; color:#8A93A0;">正文叫較難，圖說叫中等</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2E7B4F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">一致勝過 <span style="white-space:nowrap">best-of-N</span></div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="2.5" stroke-linejoin="round" style="flex-shrink:0;"><path d="M12 4l9 16H3z"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">落後 beam search</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">base 模型不太會抽到對的答案，搜尋能引導它</div>
+  </div>
+  <div style="position:absolute; left:60px; top:498px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">等級 5 &#183; 最難</div><div style="font-size:13px; color:#8A93A0;">所有方法</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="2.5" stroke-linejoin="round" style="flex-shrink:0;"><path d="M12 4l9 16H3z"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">沒有明顯的進展</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="2.5" stroke-linejoin="round" style="flex-shrink:0;"><path d="M12 4l9 16H3z"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">沒有明顯的進展</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;">原文沒有解釋；第 8 節把難題上的小收益列為限制</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">過度最佳化長這樣</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">搜尋讓模型在結尾寫出重複、沒資訊的步驟（圖 29），<br>或一兩步就結束；最強的 lookahead 因此最差。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">附錄 M 附了每一步的 PRM 分數。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">依難度挑設定：16 次追上 64 次</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">每個難度等級挑最好的搜尋設定，預算低時幾乎追上 <span style="white-space:nowrap">best-of-N</span>，只用最多四分之一的算力（圖 4）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">oracle 與 predicted 等級的曲線大致重疊。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">高預算時，predicted 變弱</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">用 predicted 難度時，高預算下的好處有一部分消失；用 oracle 難度則仍持續進步。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">搜尋設定要同時看預算與題目。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：✓／✗／△ 與列的配色是整理者依原文的描述標的；等級 3、4 在正文叫「較難」、在圖 3 的圖說叫「中等難度」。</div>
+</div></div>
+</section>
+<section class="page" id="p08">
+  <div class="label"><span class="n">08 / 13</span><span>修訂模型的訓練資料</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">修訂模型要學的，是把相近的錯解改對</div>
+  <div style="position:absolute; left:60px; top:92px; width:1480px; font-size:15px; color:#6B7380;">第 6.1 節、附錄 H：<span style="white-space:nowrap">on-policy</span> 的多輪 rollout 太貴，作者每題平行抽 64 個答案，再事後拼成「錯解…錯解 → 正確解」的訓練軌跡</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　平行抽 64 個</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">每題、較高的溫度；<br>彼此獨立，不是多輪對話</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　過濾</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">以無效解結尾的答案丟掉</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">不能解析就丟</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　前文放幾個錯解</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">0 到 4 均勻抽；錯解<br>不夠 4 個就降低上限</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　挑錯解</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">最後一個挑編輯距離<br>最近的，其餘隨機抽</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　SFT</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">只學最後的正確解；<br>AdamW、<span style="white-space:nowrap">lr 1e-5</span></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:300px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:14px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">一條訓練軌跡</div>
+    <div style="flex-shrink:0; padding:7px 14px; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; font-size:14px; font-weight:700; color:#4B5866;">錯解（隨機）</div>
+    <div style="flex-shrink:0; font-size:16px; color:#9AA3AE;">→</div>
+    <div style="flex-shrink:0; padding:7px 14px; border-radius:6px; background-color:#FFFFFF; border:1px solid #D5DAE1; font-size:14px; font-weight:700; color:#4B5866;">錯解（隨機）</div>
+    <div style="flex-shrink:0; font-size:16px; color:#9AA3AE;">→</div>
+    <div style="flex-shrink:0; padding:7px 14px; border-radius:6px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; font-size:14px; font-weight:700; color:#2E7B4F;">錯解（和正確解最像）</div>
+    <div style="flex-shrink:0; font-size:16px; color:#9AA3AE;">→</div>
+    <div style="flex-shrink:0; padding:7px 14px; border-radius:6px; background-color:#1F2A3A; font-size:14px; font-weight:700; color:#FFFFFF;">正確解：要學的那一段</div>
+    <div style="font-size:13px; color:#6B7380;">前文可以有 0 到 4 個錯解</div>
+  </div>
+  <div style="position:absolute; left:60px; top:378px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">錯解的數量從 0 到 4 均勻抽，不到 4 個時把上限降下來；SFT 只學最後的正確解。第 2 格的過濾是一道程式的閘，不合格的答案不會進任何一條軌跡。</div>
+
+  <div style="position:absolute; left:60px; top:470px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:494px; font-size:20px; font-weight:700; color:#1C2431;">三個訓練上的觀察（第 6.1 節、附錄 H、K）</div>
+
+  <div style="position:absolute; left:60px; top:536px; width:470px; height:210px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">錯解要和正確解相近</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">相關的錯解，才教得會「看出錯、就地修改」；和正確解無關的錯解，會讓模型學成無視前文、從頭重寫。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">字元編輯距離不完美，但作者說夠用。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:536px; width:470px; height:210px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">checkpoint 挑在過擬合之後</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">驗證 loss 開始上升很久之後的 checkpoint 更會修訂；<br>拼出來的驗證集，對修訂模型是 <span style="white-space:nowrap">off-policy</span> 的資料。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">最後選剛過擬合之後不久的那一個。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:536px; width:470px; height:210px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">再用 <span style="white-space:nowrap">ReST-EM</span> 最佳化，反而變差</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">每題 64 條最長 5 步的修訂軌跡，再拿答對的資料微調；結果循序修訂越多，表現下降越多（附錄 K）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者推測線上資料放大了修訂資料裡的假相關。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：事後拼裝的做法，照作者引用的一篇即將發表的工作；Qu 等人原本用 <span style="white-space:nowrap">on-policy</span> 的多輪 rollout，作者的基礎設施跑不起。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M481 262L481 296" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4"></path>
+    <path d="M1345 262L1345 296" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p09">
+  <div class="label"><span class="n">09 / 13</span><span>修訂鏈與兩層挑選</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">修訂會把對的改錯，所以最後要挑一次</div>
+  <div style="position:absolute; left:60px; top:92px; width:1480px; font-size:15px; color:#6B7380;">第 6.1 節、附錄 I：預算分成幾條修訂鏈同時跑，每條鏈循序修訂；鏈內先挑一次、跨鏈再挑一次。多數決則把所有答案一起投</div>
+
+  <div style="position:absolute; left:560px; top:150px; width:480px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">一題＋預算 N：P 條鏈 × 每條修訂 S 次</div><div style="margin-top:3px; font-size:12.5px; color:rgba(255,255,255,0.75);">P 與 S 的比例依難度挑（第 10 卡）</div></div></div>
+
+  <div style="position:absolute; left:80px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">鏈 1 &#183; 修訂 S 次</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">每次看著最近 4 個答案再寫一次</div></div>
+  <div style="position:absolute; left:460px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">鏈 2 &#183; 修訂 S 次</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">pass@1 隨修訂次數逐步上升</div></div>
+  <div style="position:absolute; left:840px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">鏈 3 &#183; 修訂 S 次</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">也可能把前文裡對的答案改錯</div></div>
+  <div style="position:absolute; left:1220px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">鏈 P &#183; 修訂 S 次</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">各鏈彼此獨立，可以平行跑</div></div>
+
+  <div style="position:absolute; left:560px; top:440px; width:480px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">挑答案：鏈內挑一次，跨鏈再挑一次</div><div style="margin-top:3px; font-size:12.5px; color:rgba(255,255,255,0.75);">ORM 做兩輪 <span style="white-space:nowrap">best-of-N</span> weighted；多數決則全部一起投</div></div></div>
+
+  <div style="position:absolute; left:60px; top:530px; width:1480px; height:64px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F; letter-spacing:0.08em;">為什麼要挑</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">約 38% 的正確答案，會在下一次修訂被改回錯的：訓練時前文全是錯解，測試時前文卻可能已經有對的答案。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:620px; width:470px; height:186px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">鏈越長，pass@1 越高</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">前文截斷到最近 4 個答案，就能一直修下去；每一步的 pass@1 逐步上升，超過訓練時的 4 步還在升（圖 6 左）。</div>
+    <div style="font-size:13px; color:#8A93A0;">每題取 4 條長 64 的修訂軌跡平均。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:620px; width:470px; height:186px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">同樣 N 次，循序勝過平行</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">修訂 N 次對上平行抽 N 個初始答案，用驗證器或多數決挑都是循序較好，圖說寫的是小幅勝出（圖 6 右）。</div>
+    <div style="font-size:13px; color:#8A93A0;">ORM 不放修訂歷史時，循序也仍小勝。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:620px; width:470px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">評分器要跟著換</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">base 輸出上訓的 PRM，用在修訂模型的輸出效果較差；<br>作者另訓了前文放修訂歷史的 ORM（附錄 J）。</div>
+    <div style="font-size:13px; color:#8A93A0;">多數決不分層：鏈短或鏈少時，分層會挑不準。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：畫四條鏈是示意；鏈數與每條的長度在跑之前就依比例定好，所以用實線框。挑答案的兩種做法見附錄 I。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c09" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M680 216L230 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M760 216L610 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M840 216L990 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M920 216L1370 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M230 386L680 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M610 386L760 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M990 386L840 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+    <path d="M1370 386L920 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c09)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p10">
+  <div class="label"><span class="n">10 / 13</span><span>循序與平行怎麼切</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">同一個預算，平行與循序怎麼切</div>
+  <div style="position:absolute; left:60px; top:92px; width:1480px; font-size:15px; color:#6B7380;">第 6.2 節、圖 5、圖 7：以預算 16 次生成為例，可以切成 16 條各寫一次的鏈、4 條各修訂 4 次的鏈，或 1 條修訂 16 次的鏈</div>
+
+  <div style="position:absolute; left:60px; top:140px; display:flex; gap:28px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div>一格＝一次生成（一個答案）</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:24px; height:14px; border-radius:4px; background-color:#FFFFFF; border:1.5px solid #9AA3AE; box-sizing:border-box;"></div>外框＝一條鏈，框內由左到右依序修訂</div>
+    <div style="color:#8A93A0;">比例＝循序 ÷ 平行，也就是圖 7 的橫軸</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:196px; width:110px; display:flex; flex-direction:column; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">全部平行</div><div style="font-size:12.5px; color:#8A93A0;">16 條 × 1 次</div></div>
+  <div style="position:absolute; left:180px; top:196px; width:1320px; height:44px; display:flex; justify-content:space-between;">
+    <div style="width:75px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; display:flex; align-items:center; justify-content:center;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+    <div style="width:75px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; display:flex; align-items:center; justify-content:center;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+    <div style="width:75px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; display:flex; align-items:center; justify-content:center;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+    <div style="width:75px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; display:flex; align-items:center; justify-content:center;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+    <div style="width:75px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; display:flex; align-items:center; justify-content:center;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+    <div style="width:75px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; display:flex; align-items:center; justify-content:center;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+    <div style="width:75px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; display:flex; align-items:center; justify-content:center;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+    <div style="width:75px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; display:flex; align-items:center; justify-content:center;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+    <div style="width:75px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; display:flex; align-items:center; justify-content:center;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+    <div style="width:75px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; display:flex; align-items:center; justify-content:center;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+    <div style="width:75px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; display:flex; align-items:center; justify-content:center;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+    <div style="width:75px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; display:flex; align-items:center; justify-content:center;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+    <div style="width:75px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; display:flex; align-items:center; justify-content:center;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+    <div style="width:75px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; display:flex; align-items:center; justify-content:center;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+    <div style="width:75px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; display:flex; align-items:center; justify-content:center;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+    <div style="width:75px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; display:flex; align-items:center; justify-content:center;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+  </div>
+  <div style="position:absolute; left:180px; top:248px; width:1320px; font-size:13px; color:#6B7380;">16 條互相獨立的嘗試：像全域搜尋，每一條都可以走完全不同的高層解法</div>
+
+  <div style="position:absolute; left:60px; top:296px; width:110px; display:flex; flex-direction:column; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">平衡</div><div style="font-size:12.5px; color:#8A93A0;">4 條 × 4 次</div></div>
+  <div style="position:absolute; left:180px; top:296px; width:1320px; height:44px; display:flex; justify-content:space-between;">
+    <div style="width:315px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; padding:0px 6px; display:flex; align-items:center; justify-content:space-between;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+    <div style="width:315px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; padding:0px 6px; display:flex; align-items:center; justify-content:space-between;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+    <div style="width:315px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; padding:0px 6px; display:flex; align-items:center; justify-content:space-between;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+    <div style="width:315px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; padding:0px 6px; display:flex; align-items:center; justify-content:space-between;"><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div><div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div></div>
+  </div>
+  <div style="position:absolute; left:180px; top:348px; width:1320px; font-size:13px; color:#6B7380;">√N 條鏈 × 每條 √N 次：第 6.2 節舉的平衡例子，平行與循序各拿一部分預算</div>
+
+  <div style="position:absolute; left:60px; top:396px; width:110px; display:flex; flex-direction:column; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">全部循序</div><div style="font-size:12.5px; color:#8A93A0;">1 條 × 16 次</div></div>
+  <div style="position:absolute; left:180px; top:396px; width:1320px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:6px; padding:0px 6px; display:flex; align-items:center; justify-content:space-between;">
+    <div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div>
+    <div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div>
+    <div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div>
+    <div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div>
+    <div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div>
+    <div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div>
+    <div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div>
+    <div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div>
+    <div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div>
+    <div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div>
+    <div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div>
+    <div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div>
+    <div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div>
+    <div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div>
+    <div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div><div style="font-size:14px; color:#9AA3AE;">›</div>
+    <div style="width:61px; height:30px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div>
+  </div>
+  <div style="position:absolute; left:180px; top:448px; width:1320px; font-size:13px; color:#6B7380;">1 條鏈修訂 16 次：像局部修正，每一次都在改進前一個答案；前文只留最近 4 個</div>
+
+  <div style="position:absolute; left:60px; top:492px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; letter-spacing:0.08em;">哪一種最好</div>
+    <div style="font-size:15px; color:#2B3340;">看難度：簡單題全部循序最好；較難的題，最佳比例落在兩個極端之間（圖 7 右：預算 128、用驗證器挑答案）</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:580px; width:470px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">平行像全域搜尋</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">每個候選可以走不同的高層路線；<br>難題需要這種探索，所以難題的最佳比例不會是全部循序。</div>
+    <div style="font-size:13px; color:#8A93A0;">附錄 B：改用多數決挑答案，趨勢相似。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:580px; width:470px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">循序像局部修正</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">每次看著先前的答案修改；答案已經在對的方向上時最有效，所以簡單題全押循序最好。</div>
+    <div style="font-size:13px; color:#8A93A0;">用多數決時，簡單題對比例幾乎不敏感。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:580px; width:470px; height:186px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">依難度挑比例：64 次勝過 256 次</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">每個難度等級挑最好的比例（圖 8）；高預算時平行趨平，<span style="white-space:nowrap">compute-optimal</span> 繼續進步，最多省 4 倍。</div>
+    <div style="font-size:13px; color:#8A93A0;">oracle 與 predicted 難度都做得到。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：預算 16 與三種切法是整理者的示意；圖 7 左掃過多種預算與比例，右圖固定在預算 128，兩張都沒有標數字。</div>
+</div></div>
+</section>
+<section class="page" id="p11">
+  <div class="label"><span class="n">11 / 13</span><span>FLOPs 的匯率</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">同樣的 FLOPs，放大模型或多花推論</div>
+  <div style="position:absolute; left:60px; top:92px; width:1480px; font-size:15px; color:#6B7380;">第 7 節：預訓練 X≈6N×預訓練 token、推論 Y≈2N×推論 token。參數放大 M 倍兩者都乘 M；同樣的總量留給原模型，推論可以乘上 M＋3(M−1)÷R</div>
+
+  <div style="position:absolute; left:60px; top:140px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div>預訓練 FLOPs</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FFFFFF; border:1.5px solid #9AA3AE; box-sizing:border-box;"></div>推論：greedy 解碼一次</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF6F0; border:1px solid #B4D5C0; box-sizing:border-box;"></div>多出來的推論：測試時算力</div>
+    <div style="color:#8A93A0;">長度是整理者以 R＝0.79、M＝14 算的示意比例</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:210px; width:116px; display:flex; flex-direction:column; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">放大 14 倍</div><div style="font-size:12.5px; color:#8A93A0;">參數乘 14</div></div>
+  <div style="position:absolute; left:180px; top:206px; width:1045px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">預訓練 &#183; 14X（約 79%）</div>
+  <div style="position:absolute; left:1225px; top:206px; width:275px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">推論 &#183; 14Y（約 21%）</div>
+  <div style="position:absolute; left:180px; top:286px; font-size:13px; color:#8A93A0;">參數乘 14、資料量不變：預訓練與推論（大模型 greedy 解碼一次）的 FLOPs 都乘 14，總量是 14(X＋Y)</div>
+
+  <div style="position:absolute; left:60px; top:350px; width:116px; display:flex; flex-direction:column; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">原模型</div><div style="font-size:12px; color:#8A93A0;">＋測試時算力</div></div>
+  <div style="position:absolute; left:180px; top:346px; width:75px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#4B5866;">X</div>
+  <div style="position:absolute; left:255px; top:346px; width:20px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #9AA3AE;"></div>
+  <div style="position:absolute; left:275px; top:346px; width:1225px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">測試時算力：推論乘上約 63 倍，含原本的一份（約 94%）</div>
+  <div style="position:absolute; left:236px; top:406px; font-size:12px; color:#8A93A0;">↑ 原本的推論 Y</div>
+  <div style="position:absolute; left:180px; top:432px; font-size:13px; color:#8A93A0;">原模型的預訓練只佔約 6%；同樣的總 FLOPs，推論能用掉其餘約 94%</div>
+
+  <div style="position:absolute; left:60px; top:470px; width:1480px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F; letter-spacing:0.08em;">R 決定倍數</div>
+    <div style="font-size:15px; color:#2B3340;">R 越大，倍數越小：R＝0.16、0.79、22 時約 258、63、16 倍（整理者以 M＝14 算），正好是圖 9 虛線的 2⁸、2⁶、2⁴</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:560px; width:470px; height:210px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">兩條 FLOPs 的近似</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">預訓練約 6 × 參數 × 預訓練 token（Hoffmann 等人）；<br>推論約 2 × 參數 × 推論 token（Sardana 與 Frankle）。</div>
+    <div style="font-size:13px; color:#8A93A0;">大模型那一邊，推論算的是 greedy 解碼一次。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:560px; width:470px; height:210px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">只放大參數，資料不變</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">和 LLaMA 系列相同的做法；資料與參數一起放大的 <span style="white-space:nowrap">compute-optimal</span> 預訓練，作者留給未來。</div>
+    <div style="font-size:13px; color:#8A93A0;">所以比的是參數約多 14 倍的模型。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:560px; width:470px; height:210px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">R 越大，能換到的越少</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">R＝推論 token ÷ 預訓練 token。<br>大規模上線服務 R 遠大於 1，推論只能乘約 M 倍；<br>自我改進的流程 R 遠小於 1，換到的最多。</div>
+    <div style="font-size:13px; color:#8A93A0;">所以結論跟著用途變（第 12 卡）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩條組成條是整理者以 R＝0.79、M＝14 代入第 7 節的式子算的示意；論文只給式子、約 14 倍與三個 R 值，沒有畫這張圖。</div>
+</div></div>
+</section>
+<section class="page" id="p12">
+  <div class="label"><span class="n">12 / 13</span><span>什麼時候比放大模型划算</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">簡單題划算，難題與高推論負載划不來</div>
+  <div style="position:absolute; left:60px; top:92px; width:1480px; font-size:15px; color:#6B7380;">圖 1 右：FLOPs 對等下，小模型加測試時算力相對於參數約多 14 倍的模型，準確度改善了幾 %；正值＝測試時算力勝，負值＝放大模型勝</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:240px repeat(6, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">推論負載</div>
+    <div style="grid-column:span 3; padding:0px 22px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">循序修訂（上半張圖）</div>
+    <div style="grid-column:span 3; padding:0px 22px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866; border-left:1.5px solid #D5DAE1;">對 PRM 搜尋（下半張圖）</div>
+  </div>
+  <div style="position:absolute; left:60px; top:200px; width:1480px; height:36px; box-sizing:border-box; background-color:#F7F8FA; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(6, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:13px; color:#8A93A0;">推論 token ÷ 預訓練 token</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">簡單</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">中等</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">困難</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380; border-left:1.5px solid #D5DAE1;">簡單</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">中等</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">困難</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:236px; width:1480px; height:92px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(6, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">R 遠小於 1</div><div style="font-size:13px; color:#8A93A0; line-height:1.45;">R＝0.16 · 例如自我改進的流程</div></div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2E7B4F;">+21.6%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2E7B4F;">+27.8%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2E7B4F;">+11.8%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2E7B4F; border-left:1.5px solid #D5DAE1;">+19.1%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#C8501F;">−5.6%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#6B7380;">0.0%</div>
+  </div>
+  <div style="position:absolute; left:60px; top:328px; width:1480px; height:92px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(6, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">R 約等於 1</div><div style="font-size:13px; color:#8A93A0; line-height:1.45;">R＝0.79</div></div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2E7B4F;">+16.7%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2E7B4F;">+3.5%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#C8501F;">−11.9%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2E7B4F; border-left:1.5px solid #D5DAE1;">+2.2%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#C8501F;">−35.6%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#C8501F;">−35.3%</div>
+  </div>
+  <div style="position:absolute; left:60px; top:420px; width:1480px; height:92px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(6, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">R 遠大於 1</div><div style="font-size:13px; color:#8A93A0; line-height:1.45;">R＝22 · 例如大規模上線服務</div></div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2E7B4F;">+5.4%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#C8501F;">−24.3%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#C8501F;">−37.2%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2E7B4F; border-left:1.5px solid #D5DAE1;">+2.0%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#C8501F;">−30.6%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#C8501F;">−52.9%</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:530px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">作者的讀法（圖 9）：只看很難的題（等級 4、5）或推論量大時，把預算給預訓練常常比較有效；多數是等級 1、2、3（有時 4）或推論需求低時，用測試時算力比較好。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:186px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">簡單題：六格全正</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">不論修訂或搜尋、推論負載高低，簡單題都是測試時算力勝，最少 +2.0%，最多 +21.6%。</div>
+    <div style="font-size:13px; color:#8A93A0;">在模型能力範圍內，多想一下就補得上。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:186px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">推論量大時，中難題全輸</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">R 遠大於 1 時，中等與困難題的四格全是負的；搜尋在困難題最低，−52.9%。</div>
+    <div style="font-size:13px; color:#8A93A0;">等級 5 上，搜尋本來就幾乎沒有進展。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">同一格比，修訂都比搜尋高</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">九組比較裡差最多的，是 R 約等於 1 的中等題：修訂 +3.5%，搜尋 −35.6%。</div>
+    <div style="font-size:13px; color:#8A93A0;">這是整理者的比較；原文只說兩者趨勢相似。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：數字照抄圖 1 印出的值；圖 1 的簡單、中等、困難三組怎麼從五個難度等級分出來，原文沒有說明；R 值是依第 7 節的文字對上的。</div>
+</div></div>
+</section>
+<section class="page" id="p13">
+  <div class="label"><span class="n">13 / 13</span><span>結論：先估難度再分配</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">先估難度，再決定算力花在哪</div>
+  <div style="position:absolute; left:60px; top:92px; width:1480px; font-size:15px; color:#6B7380;">第 8 節：效果和題目對 base 模型的難度高度相關，依難度分配把效率提升 2 到 4 倍；難題上的收益都很小，估難度本身也要花算力</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:360px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">01　先估難度</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">同一份算力，<br>花法要看題目</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">簡單題給循序修訂，<br>較難的題平行探索或做 beam search，<br>最難的題，多花也沒用。<br>難度可以看標準答案，也可以看驗證器。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 每一題都用同一種做法<br>✓ 每個難度等級各挑最好的設定</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:360px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">02　兩個旋鈕分開調</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">改提案分布、用驗證器挑，<br>是兩條獨立的軸</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">修訂模型改的是答案從哪裡來，<br>PRM 與搜尋改的是怎麼挑；<br>兩者都要針對能力微調，<br>也都會被分布轉移或過度最佳化拖累。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 搜尋越用力越好<br>✓ 驗證器判得準的題，<span style="white-space:nowrap">best-of-N</span> 就夠</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:360px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">03　和預訓練不是一比一</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">推論量小、題目不難時，<br>測試時算力勝過放大模型</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">FLOPs 對等下，簡單與中等題、R 小的情境，<br>選測試時算力；很難的題、R 大的服務，<br>選放大模型。<br>長期來看，預訓練的 FLOPs 可能變少、推論的變多。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 多花推論算力，總能取代放大模型<br>✓ 先看題目難度與推論量，再決定</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:570px; font-size:20px; font-weight:700; color:#1C2431;">作者點名的五個方向（不排順序）</div>
+  <div style="position:absolute; left:60px; top:610px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">01</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">PRM 樹搜尋＋修訂</div>
+  </div>
+  <div style="position:absolute; left:360px; top:610px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">02</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">批評再修訂等其他技巧</div>
+  </div>
+  <div style="position:absolute; left:660px; top:610px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">03</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">在難題上有效的新方法</div>
+  </div>
+  <div style="position:absolute; left:960px; top:610px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">04</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">更快地估計難度</div>
+  </div>
+  <div style="position:absolute; left:1260px; top:610px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">05</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">輸出蒸餾回 base 模型</div>
+  </div>
+  <div style="position:absolute; left:60px; top:702px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">前三格來自第 8 節的「再改進測試時算力的擴展」，第四格來自「快速估計難度」，第五格來自「交錯測試時與訓練時的算力」：目標是一個在開放式自然語言上運作的自我改進迴圈。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三條原則是整理者歸納的；五個方向是作者在第 8 節點名的，原文沒有排順序，所以不畫箭頭。</div>
+</div></div>
+</section>
+  <div class="foot">整理自 arXiv · Charlie Snell、Jaehoon Lee、Kelvin Xu、Aviral Kumar（UC Berkeley、Google DeepMind），2024-08-06：<a href="https://arxiv.org/abs/2408.03314">https://arxiv.org/abs/2408.03314</a>。這些圖卡是學習用的重新整理，不是原文的逐句翻譯；觀點與著作權屬於原作者。<a href="index.html">回到圖卡＋教材版</a> · <a href="../../">回首頁</a></div>
+</div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fit() {
+    var frames = document.querySelectorAll('.frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('load', fit);
+  fit();
+})();
+</script>
+</body>
+</html>

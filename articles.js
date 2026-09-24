@@ -1,6 +1,42 @@
 window.ARTICLES = {
   "articles": [
     {
+      "slug": "test-time-compute",
+      "path": "articles/test-time-compute/index.html",
+      "title": "測試時算力的最佳分配：多想一下有沒有用，要看題目對模型多難",
+      "summary": "UC Berkeley 與 Google DeepMind 在 2024 年的論文，研究讓語言模型在推論時多花算力的兩種做法：對過程獎勵模型（PRM）做搜尋，以及讓模型循序修訂自己的答案。作者發現哪種做法有效要看題目對模型多難，依難度分配算力的 compute-optimal 策略比 best-of-N 最多省 4 倍；在 FLOPs 對等下，作者說簡單與中等的題目、或推論量小的情境，測試時算力勝過放大約 14 倍的模型，最難的題與推論量大的情境則還是放大模型比較有效。每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "arXiv · Charlie Snell、Jaehoon Lee、Kelvin Xu、Aviral Kumar（UC Berkeley、Google DeepMind）",
+        "url": "https://arxiv.org/abs/2408.03314",
+        "date": "2024-08-06"
+      },
+      "date": "2026-09-24",
+      "tags": [
+        "test-time-compute",
+        "inference-scaling",
+        "process-reward-model",
+        "llm-reasoning",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 5,
+        "kind": "必讀",
+        "section": "Optimization",
+        "lecture": "Optimization",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/test-time-compute/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "single-agent-systems",
       "path": "articles/single-agent-systems/index.html",
       "title": "Single-agent Systems：別急著拆成多個 agent，一個夠強的可能就夠",
