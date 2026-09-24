@@ -1,6 +1,42 @@
 window.ARTICLES = {
   "articles": [
     {
+      "slug": "single-agent-systems",
+      "path": "articles/single-agent-systems/index.html",
+      "title": "Single-agent Systems：別急著拆成多個 agent，一個夠強的可能就夠",
+      "summary": "OpenHands 部落格 2024 年的觀點文章：多代理系統正熱，作者 Graham Neubig 以打造軟體開發 agent 的經驗，替單一代理說話。從 agent 的三個元件、CodeR 的五個角色、多代理的三個麻煩，到怎麼把模型、工具與 prompt 合成一個，以及多代理仍然該用的情況，每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "OpenHands Blog · Graham Neubig",
+        "url": "https://openhands.dev/blog/dont-sleep-on-single-agent-systems",
+        "date": "2024-09-26"
+      },
+      "date": "2026-09-24",
+      "tags": [
+        "multi-agent-systems",
+        "single-agent",
+        "agents",
+        "openhands",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 5,
+        "kind": "選讀",
+        "section": "Memory & Multi-Agent Systems",
+        "lecture": "Multi-Agent Systems",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/single-agent-systems/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "react-reasoning-acting",
       "path": "articles/react-reasoning-acting/index.html",
       "title": "ReAct：讓語言模型邊想邊做，推理與行動交錯寫進同一條軌跡",
