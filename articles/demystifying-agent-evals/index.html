@@ -1,0 +1,2139 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Demystifying Evals for AI Agents</title>
+<meta name="description" content="Anthropic 2026 年初的工程文章：agent 會跑很多輪、改變環境，評估它要有 task、trial、grader、transcript、outcome 與 harness。從三種 grader、capability 與 regression、四類 agent 怎麼評、pass@k 與 pass^k，到從零建起 eval 的九步路線圖與其他方法的搭配，每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="agent-evaluation, llm-as-a-judge, agents, anthropic, cs329z">
+<meta name="source" content="https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents">
+<meta name="date" content="2026-09-24">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Theme: tech-modern 變體「測試報告語意色」
+   藍 = 主色 / 綠 = pass / 琥珀 = 注意 / 紅 = fail
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --paper: #ffffff;
+  --paper-soft: #f3f5f8;
+  --paper-shadow: #dde2e8;
+  --ink: #121821;
+  --ink-soft: #3b4450;
+  --ink-mute: #6b7481;
+  --primary: #1e56a8;
+  --primary-deep: #143a72;
+  --primary-bg: #e6eef9;
+  --accent: #157a52;
+  --accent-deep: #0d5236;
+  --accent-bg: #e1f3e9;
+  --warm: #b8620e;
+  --warm-deep: #7d4108;
+  --warm-bg: #fbeddc;
+  --danger: #b83228;
+  --danger-bg: #f9e3e0;
+  --stone: #5a6370;
+  --stone-bg: #eceff3;
+  --code-bg: #0f1720;
+  --code-ink: #e6edf3;
+  --code-mute: #8b98a8;
+  --code-blue: #7cc4ff;
+  --code-green: #7ee2b8;
+  --code-amber: #ffc46b;
+
+  --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-cjk: 'Noto Sans TC', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --content-width: 780px;
+  --wide-width: 1100px;
+  --gutter: 24px;
+}
+
+/* ---------- reset & 排版 ---------- */
+* { box-sizing: border-box; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+body {
+  margin: 0; padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-cjk);
+  font-size: 18px;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: var(--content-width); margin: 0 auto; padding: 0 var(--gutter); }
+.wide { max-width: var(--wide-width); margin: 0 auto; padding: 0 var(--gutter); }
+section { padding-block: 64px; }
+section + section { border-top: 1px solid var(--paper-shadow); }
+
+h1, h2, h3, h4 { font-family: var(--font-cjk); font-weight: 700; text-wrap: balance; }
+h1 { font-size: 56px; line-height: 1.14; margin: 0 0 24px; font-weight: 800; }
+h2 { font-size: 36px; line-height: 1.25; margin: 0 0 18px; letter-spacing: -0.01em; }
+h2 .seg { display: inline-block; }
+h3 { font-size: 25px; line-height: 1.35; margin: 44px 0 14px; }
+h4 { font-size: 20px; line-height: 1.4; margin: 26px 0 10px; }
+p { margin: 0 0 18px; }
+ul, ol { padding-left: 26px; margin: 0 0 18px; }
+li { margin-bottom: 8px; }
+em { font-style: normal; color: var(--primary-deep); font-weight: 600; }
+strong { font-weight: 700; }
+a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+code {
+  font-family: var(--font-mono); font-size: 0.86em;
+  background: var(--stone-bg); color: var(--primary-deep);
+  padding: 2px 6px; border-radius: 4px;
+}
+.mono { font-family: var(--font-mono); }
+
+/* ---------- Hero ---------- */
+.hero {
+  padding-block: 84px 60px;
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-soft) 100%);
+  border-bottom: 2px solid var(--primary-deep);
+  position: relative;
+}
+.hero::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: linear-gradient(90deg,
+    var(--primary) 0%, var(--primary) 25%,
+    var(--accent) 25%, var(--accent) 50%,
+    var(--warm) 50%, var(--warm) 75%,
+    var(--danger) 75%, var(--danger) 100%);
+}
+.hero-meta {
+  display: flex; flex-wrap: wrap; gap: 10px 22px;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  margin-bottom: 32px;
+}
+.hero-meta span::before { content: "—"; margin-right: 10px; color: var(--paper-shadow); }
+.hero-meta span:first-child::before { content: ""; margin: 0; }
+.hero h1 { font-size: 60px; font-weight: 800; word-break: keep-all; }
+.hero h1 .accent {
+  display: block; margin-top: 12px;
+  font-size: 0.55em; font-weight: 600; line-height: 1.3;
+  color: var(--primary-deep);
+}
+.hero .lede { font-size: 22px; max-width: 720px; }
+.hero-keystat {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 28px; margin: 44px 0 0; padding-top: 34px;
+  border-top: 1px dashed var(--paper-shadow);
+}
+.hero-keystat dt {
+  font-family: var(--font-sans);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--ink-mute); margin-bottom: 6px;
+}
+.hero-keystat dd {
+  margin: 0; font-family: var(--font-mono);
+  font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1;
+}
+.hero-keystat dd small { font-family: var(--font-cjk); font-size: 14px; color: var(--ink-mute); font-weight: 400; margin-left: 6px; }
+
+/* ---------- Chapter / lede / eyebrow ---------- */
+.chapter {
+  font-family: var(--font-mono);
+  font-size: 12.5px; color: var(--primary);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 0 0 10px;
+}
+.chapter::before { content: "§ "; color: var(--paper-shadow); margin-right: 4px; }
+.lede {
+  font-size: 22px; line-height: 1.6; color: var(--ink-soft);
+  margin: 0 0 28px; font-weight: 400;
+}
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--primary); margin: 0 0 14px;
+}
+
+/* ---------- Pull quote ---------- */
+.pullquote {
+  margin: 48px -16px; padding: 32px 40px;
+  font-family: var(--font-cjk);
+  font-size: 27px; line-height: 1.5; font-weight: 600;
+  color: var(--primary-deep);
+  border-left: 5px solid var(--primary);
+  background: linear-gradient(90deg, var(--primary-bg) 0%, transparent 100%);
+}
+.pullquote.bronze {
+  color: var(--accent-deep); border-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-bg) 0%, transparent 100%);
+}
+.pullquote.terra {
+  color: var(--warm-deep); border-color: var(--warm);
+  background: linear-gradient(90deg, var(--warm-bg) 0%, transparent 100%);
+}
+.pullquote cite {
+  display: block; margin-top: 16px; font-style: normal; font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  letter-spacing: 0.06em;
+}
+.pullquote cite::before { content: "— "; }
+
+/* ---------- English quote ---------- */
+.quote-en {
+  margin: 28px 0;
+  font-family: var(--font-sans); font-style: italic;
+  font-size: 21px; line-height: 1.5; color: var(--ink);
+  padding-left: 20px; border-left: 3px solid var(--accent);
+}
+.quote-en .zh {
+  display: block; margin-top: 10px;
+  font-family: var(--font-cjk); font-style: normal;
+  font-size: 15px; color: var(--ink-soft); line-height: 1.6;
+}
+
+/* ---------- Story ---------- */
+.story {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 14px;
+  padding: 38px 44px; margin: 48px 0;
+  position: relative;
+}
+.story::before {
+  content: "❝"; position: absolute; top: -6px; left: 24px;
+  font-size: 72px; color: var(--warm); line-height: 1;
+  font-family: var(--font-sans);
+}
+.story .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.18em;
+  color: var(--warm); margin-bottom: 10px; padding-left: 42px;
+}
+.story h4 { margin: 0 0 16px; font-size: 22px; color: var(--warm-deep); }
+.story p { margin-bottom: 14px; font-size: 17px; line-height: 1.7; }
+.story p:last-child { margin-bottom: 0; }
+
+/* ---------- Explain ---------- */
+.explain {
+  background: var(--primary-bg);
+  border-left: 4px solid var(--primary);
+  border-radius: 4px;
+  padding: 26px 30px; margin: 36px 0;
+  font-family: var(--font-cjk); position: relative;
+}
+.explain.bronze { background: var(--accent-bg); border-color: var(--accent); }
+.explain.terra { background: var(--warm-bg); border-color: var(--warm); }
+.explain.stone { background: var(--stone-bg); border-color: var(--stone); }
+.explain .label {
+  position: absolute; top: -12px; left: 16px;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.15em; padding: 4px 12px;
+  border-radius: 3px; text-transform: uppercase;
+}
+.explain.bronze .label { background: var(--accent); }
+.explain.terra .label { background: var(--warm); }
+.explain.stone .label { background: var(--stone); }
+.explain h4 { margin: 4px 0 12px; font-size: 19px; color: var(--primary-deep); }
+.explain.bronze h4 { color: var(--accent-deep); }
+.explain.terra h4 { color: var(--warm-deep); }
+.explain.stone h4 { color: var(--ink); }
+.explain p { font-size: 16.5px; }
+.explain p:last-child { margin-bottom: 0; }
+.explain ul, .explain ol { margin: 8px 0 0; padding-left: 22px; }
+.explain li { margin-bottom: 6px; font-size: 16px; }
+.explain code { background: rgba(255,255,255,0.75); }
+
+/* ---------- Stat grid ---------- */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.stat-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 28px 24px; text-align: center;
+  border-top: 4px solid var(--primary);
+}
+.stat-card.bronze { border-color: var(--accent); }
+.stat-card.terra { border-color: var(--warm); }
+.stat-card.danger { border-color: var(--danger); }
+.stat-card .big {
+  font-family: var(--font-mono);
+  font-size: 46px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1; margin-bottom: 10px;
+}
+.stat-card.bronze .big { color: var(--accent-deep); }
+.stat-card.terra .big { color: var(--warm-deep); }
+.stat-card.danger .big { color: var(--danger); }
+.stat-card .big small { font-family: var(--font-cjk); font-size: 16px; opacity: 0.75; margin-left: 4px; font-weight: 500; }
+.stat-card .label {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.stat-card .note { margin-top: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.55; }
+
+/* ---------- Compare table ---------- */
+.table-scroll { overflow-x: auto; margin: 36px 0; }
+.compare {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-cjk); font-size: 15.5px;
+  background: var(--paper-soft);
+  border-radius: 10px; overflow: hidden;
+  min-width: 560px;
+}
+.compare th, .compare td {
+  padding: 15px 18px; text-align: left;
+  border-bottom: 1px solid var(--paper-shadow);
+  vertical-align: top; line-height: 1.6;
+}
+.compare th {
+  background: var(--primary-deep); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+}
+.compare tr:last-child td { border-bottom: none; }
+.compare td:first-child { font-weight: 700; color: var(--primary-deep); width: 24%; }
+.compare .id { font-family: var(--font-mono); font-size: 13px; display: block; color: var(--ink-mute); font-weight: 500; margin-bottom: 2px; }
+.compare .yes { color: var(--accent-deep); font-weight: 700; }
+.compare .no { color: var(--danger); font-weight: 700; }
+
+/* ---------- Value cards ---------- */
+.values {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.value-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 26px 24px;
+  border-top: 5px solid var(--primary);
+}
+.value-card:nth-child(2) { border-top-color: var(--accent); }
+.value-card:nth-child(3) { border-top-color: var(--warm); }
+.value-card:nth-child(4) { border-top-color: var(--primary-deep); }
+.value-card:nth-child(5) { border-top-color: var(--stone); }
+.value-card .num {
+  font-family: var(--font-mono);
+  font-size: 38px; font-weight: 700;
+  color: var(--primary); line-height: 1; margin-bottom: 12px;
+}
+.value-card:nth-child(2) .num { color: var(--accent); }
+.value-card:nth-child(3) .num { color: var(--warm); }
+.value-card:nth-child(4) .num { color: var(--primary-deep); }
+.value-card:nth-child(5) .num { color: var(--stone); }
+.value-card .tag {
+  display: inline-block; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--primary); margin-bottom: 10px;
+}
+.value-card:nth-child(2) .tag { color: var(--accent); }
+.value-card:nth-child(3) .tag { color: var(--warm); }
+.value-card:nth-child(4) .tag { color: var(--primary-deep); }
+.value-card h4 { margin: 0 0 10px; font-size: 19px; line-height: 1.4; }
+.value-card p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin: 0; }
+
+/* ---------- 擴充檢查卡（附成本標籤） ---------- */
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px; margin: 40px 0;
+}
+.card {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 12px;
+  padding: 24px 24px 22px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.card .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card h4 { margin: 0; font-size: 18.5px; line-height: 1.4; }
+.card p { margin: 0; font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); }
+.card .signal { font-family: var(--font-mono); font-size: 12.5px; color: var(--primary-deep); background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 6px; padding: 6px 10px; margin-top: 4px; overflow-x: auto; white-space: nowrap; }
+.pill {
+  flex: none; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px;
+}
+.pill.fast { background: var(--accent-bg); color: var(--accent-deep); }
+.pill.mid { background: var(--warm-bg); color: var(--warm-deep); }
+.pill.slow { background: var(--danger-bg); color: var(--danger); }
+
+/* ---------- Thought ---------- */
+.thought {
+  background: var(--accent-bg);
+  border-left: 4px solid var(--accent);
+  padding: 26px 30px; margin: 40px 0;
+  border-radius: 4px; position: relative;
+}
+.thought .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--accent-deep); margin-bottom: 10px;
+}
+.thought h4 { font-size: 19px; margin: 0 0 14px; color: var(--accent-deep); line-height: 1.45; }
+.thought p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin-bottom: 8px; }
+.thought .hint {
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px dashed rgba(13, 82, 54, 0.3);
+  font-size: 14px; color: var(--accent-deep);
+}
+.thought .hint::before { content: "建議方向："; font-weight: 700; }
+
+/* ---------- Code block ---------- */
+.codeblock { margin: 30px 0; }
+.codeblock .file {
+  display: inline-block; font-family: var(--font-mono);
+  font-size: 12px; color: var(--ink-mute);
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow); border-bottom: none;
+  border-radius: 8px 8px 0 0; padding: 7px 14px;
+}
+pre.code {
+  margin: 0; background: var(--code-bg); color: var(--code-ink);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65;
+  padding: 22px 24px; border-radius: 0 10px 10px 10px;
+  overflow-x: auto; tab-size: 2; white-space: pre;
+}
+pre.code.solo { border-radius: 10px; }
+pre.code .c { color: var(--code-mute); }
+pre.code .k { color: var(--code-blue); }
+pre.code .s { color: var(--code-green); }
+pre.code .a { color: var(--code-amber); font-weight: 700; }
+
+/* ---------- Flow（eval 迴圈圖） ---------- */
+.flow { display: flex; align-items: stretch; margin: 40px 0; }
+.flow-step {
+  flex: 1 1 0; min-width: 0;
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow);
+  border-radius: 10px; padding: 18px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.flow-step .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--primary); letter-spacing: 0.1em; }
+.flow-step strong { font-size: 17px; line-height: 1.3; }
+.flow-step span.d { font-size: 14px; line-height: 1.55; color: var(--ink-soft); }
+.flow-step.score { border-color: var(--accent); background: var(--accent-bg); }
+.flow-step.score .k { color: var(--accent-deep); }
+.flow-arrow { flex: none; width: 30px; position: relative; }
+.flow-arrow::before {
+  content: ""; position: absolute; top: 50%; left: 2px; right: 2px; height: 2px;
+  background: var(--primary); transform: translateY(-50%);
+}
+.flow-arrow::after {
+  content: ""; position: absolute; top: 50%; right: 4px; width: 9px; height: 9px;
+  border-top: 2px solid var(--primary); border-right: 2px solid var(--primary);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+/* ---------- Cascade（編號步驟） ---------- */
+.cascade { display: flex; flex-direction: column; gap: 14px; margin: 32px 0; }
+.cascade-step {
+  display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px;
+}
+.cascade-step .n {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-mono); font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.cascade-step .t { font-size: 16.5px; line-height: 1.65; }
+.cascade-step .t strong { display: block; margin-bottom: 2px; }
+
+/* ---------- Checklist ---------- */
+.checklist { list-style: none; padding: 0; margin: 32px 0; display: flex; flex-direction: column; gap: 12px; }
+.checklist li {
+  display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px; margin: 0;
+  font-size: 16.5px; line-height: 1.65;
+}
+.checklist .box {
+  width: 24px; height: 24px; margin-top: 3px;
+  border: 2px solid var(--accent); border-radius: 6px; background: var(--paper);
+}
+.checklist strong { display: block; }
+.checklist small { display: block; color: var(--ink-soft); font-size: 15px; }
+
+/* ---------- Glossary ---------- */
+.glossary { background: var(--primary-deep); color: var(--paper); padding-block: 64px; }
+.glossary h2 { color: var(--paper); margin-top: 0; }
+.glossary .eyebrow { color: var(--accent-bg); }
+.glossary .lede { color: var(--paper); opacity: 0.8; }
+.glossary-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 26px; margin: 42px 0 0;
+}
+.term { border-top: 2px solid var(--accent); padding-top: 16px; }
+.term:nth-child(3n+2) { border-color: var(--warm); }
+.term:nth-child(3n+3) { border-color: var(--paper); }
+.term dt {
+  font-family: var(--font-mono);
+  font-size: 14px; font-weight: 700;
+  color: var(--accent-bg); letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+.term .zh-name { font-family: var(--font-cjk); font-size: 16px; font-weight: 600; color: var(--paper); margin-bottom: 8px; display: block; }
+.term dd { margin: 0; font-family: var(--font-cjk); font-size: 14.5px; line-height: 1.65; color: rgba(255, 255, 255, 0.8); }
+
+/* ---------- TOC ---------- */
+.toc {
+  position: fixed; right: 24px; top: 50%; transform: translateY(-50%); z-index: 10;
+  font-family: var(--font-sans); font-size: 12px;
+  background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 10px;
+  padding: 18px 20px; max-width: 236px;
+  box-shadow: 0 4px 18px rgba(18, 24, 33, 0.08);
+}
+.toc h5 { margin: 0 0 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-mute); }
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc -1; }
+.toc li { margin-bottom: 6px; counter-increment: toc; font-size: 12px; line-height: 1.45; display: flex; gap: 8px; }
+.toc li::before { content: counter(toc, decimal-leading-zero); font-family: var(--font-mono); color: var(--ink-mute); font-size: 10.5px; padding-top: 2px; }
+.toc a { color: var(--ink-soft); text-decoration: none; }
+.toc a:hover { color: var(--primary); }
+@media (max-width: 1340px) { .toc { display: none; } }
+
+/* ---------- Footer ---------- */
+footer {
+  padding-block: 48px 64px;
+  background: var(--paper-soft);
+  text-align: center;
+  font-family: var(--font-cjk);
+  font-size: 13.5px; color: var(--ink-mute);
+}
+footer p { margin: 0 0 8px; }
+footer .credit { font-family: var(--font-sans); }
+footer .disclaimer { margin-top: 14px; font-size: 12px; opacity: 0.75; max-width: 640px; margin-inline: auto; }
+
+/* ---------- 響應式 ---------- */
+@media (max-width: 768px) {
+  body { font-size: 17px; }
+  .hero { padding-block: 56px 42px; }
+  .hero h1 { font-size: 36px; }
+  .hero .lede { font-size: 18px; }
+  h2 { font-size: 27px; }
+  h3 { font-size: 22px; }
+  section { padding-block: 46px; }
+  .lede { font-size: 19px; }
+  .pullquote { font-size: 21px; margin: 34px 0; padding: 24px; }
+  .story { padding: 30px 24px; }
+  .stat-card .big { font-size: 36px; }
+  .flow { flex-direction: column; }
+  .flow-arrow { width: auto; height: 30px; }
+  .flow-arrow::before { top: 2px; bottom: 2px; left: 50%; right: auto; width: 2px; height: auto; transform: translateX(-50%); }
+  .flow-arrow::after { top: auto; bottom: 4px; left: 50%; right: auto; transform: translateX(-50%) rotate(135deg); }
+  .compare td:first-child { width: auto; }
+}
+
+/* ---------- 列印 ---------- */
+@media print {
+  .toc { display: none; }
+  body { font-size: 12pt; }
+  .hero, .glossary {
+    color: var(--ink) !important; background: white !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .glossary h2, .glossary .term dt, .glossary .lede, .glossary .term .zh-name { color: var(--ink) !important; }
+  .glossary .term dd { color: var(--ink-soft) !important; }
+  pre.code { background: #f3f5f8 !important; color: #121821 !important; border: 1px solid #ccd; white-space: pre-wrap; }
+  pre.code .c, pre.code .k, pre.code .s, pre.code .a { color: inherit !important; }
+  section { page-break-inside: avoid; }
+}
+
+/* ---------- 整合版：模式列、圖卡帶、燈箱 ---------- */
+.modebar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; padding: 10px var(--gutter); background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--paper-shadow); font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.modebar .brand { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.modebar .left { display: flex; align-items: center; gap: 14px; }
+.modebar .homelink { font-size: 12px; font-weight: 600; color: var(--ink-mute); text-decoration: none; }
+.modebar .homelink:hover { color: var(--primary); text-decoration: underline; }
+.modebar .switch { display: flex; gap: 6px; }
+.modebar button { font: inherit; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.modebar button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+.modebar button:focus-visible, .cardlabel .zoom:focus-visible, .lightbox .close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.modebar .canvaslink { font-size: 12px; color: var(--ink-mute); }
+.cardband { max-width: 1600px; margin: 4px auto 40px; padding: 0 var(--gutter); }
+.cardlabel { display: flex; align-items: baseline; gap: 14px; padding: 0 2px 8px; font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.cardlabel .n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--warm); }
+.cardlabel .zoom { margin-left: auto; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--paper-shadow); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; font-size: 16px; color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(18, 24, 33, 0.86); display: none; align-items: center; justify-content: center; padding: 24px; }
+.lightbox.open { display: flex; }
+.lightbox .frame { border: none; border-radius: 8px; max-width: none; width: auto; flex: none; }
+.lightbox .close { position: absolute; top: 14px; right: 18px; font: inherit; font-family: var(--font-sans); font-size: 13px; color: #FFFFFF; background: transparent; border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.faq { margin: 36px 0 8px; padding: 0; }
+.faq > div { padding: 18px 0; border-top: 1px solid var(--paper-shadow); }
+.faq > div:last-child { border-bottom: 1px solid var(--paper-shadow); }
+.faq dt { margin: 0 0 6px; font-weight: 700; font-size: 17px; color: var(--ink); }
+.faq dt::before { content: "問"; display: inline-block; margin-right: 10px; padding: 1px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; color: #FFFFFF; background: var(--primary); vertical-align: 2px; }
+.faq dd { margin: 0; font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+body.mode-cards section .prose { display: none; }
+body.mode-cards section.nocard { display: none; }
+body.mode-cards section { padding-block: 44px; }
+body.mode-cards .toc li.nocard { display: none; }
+@media (max-width: 768px) { .cardband { margin-bottom: 32px; } .modebar { font-size: 12px; } }
+@media print {
+  .modebar, .lightbox, .cardlabel .zoom { display: none !important; }
+  body.mode-cards section .prose { display: block !important; }
+  body.mode-cards section.nocard { display: block !important; }
+  section { page-break-inside: auto; }
+  .cardband, .story, .explain, .thought, .stat-grid, .values, .cards, .table-scroll { page-break-inside: avoid; }
+  .frame { height: auto !important; border: none; border-radius: 0; }
+  .frame > div { transform: none !important; zoom: 0.44; }
+}
+
+</style>
+</head>
+<body>
+<div class="modebar">
+  <div class="left"><a class="homelink" href="../../">← 首頁</a><span class="brand">Agent Evals · 圖卡 + 教材</span></div>
+  <div class="switch" role="group" aria-label="閱讀模式">
+    <button type="button" data-mode="full" aria-pressed="true">圖卡＋詳解</button>
+    <button type="button" data-mode="cards" aria-pressed="false">只看圖卡</button>
+  </div>
+  <a class="canvaslink" href="cards.html">圖卡連續閱讀版</a>
+</div>
+<nav class="toc" aria-label="目錄">
+  <h5>目錄</h5>
+  <ol>
+    <li class="nocard"><a href="#prologue">判官之外的基礎建設</a></li>
+    <li><a href="#eval-anatomy">一次評估的組成</a></li>
+    <li><a href="#why-evals">為什麼要建 eval</a></li>
+    <li><a href="#graders">三種 grader</a></li>
+    <li><a href="#capability-regression">能力與回歸評估</a></li>
+    <li><a href="#coding-conversational">寫程式與對話的 agent</a></li>
+    <li><a href="#research-computer-use">研究與操作電腦的 agent</a></li>
+    <li><a href="#non-determinism">pass@k 與 pass^k</a></li>
+    <li><a href="#roadmap-start">路線圖與起步</a></li>
+    <li><a href="#task-quality">好的 task</a></li>
+    <li><a href="#harness-graders">harness 與 grader</a></li>
+    <li><a href="#maintain">讀 transcript 與維護</a></li>
+    <li><a href="#holistic">和其他方法搭配</a></li>
+    <li class="nocard"><a href="#takeaways">結論與動手做</a></li>
+    <li class="nocard"><a href="#glossary">名詞速查</a></li>
+  </ol>
+</nav>
+<header class="hero">
+  <div class="container">
+    <div class="hero-meta">
+      <span>Anthropic Engineering · 2026-01-09</span>
+      <span>工程實務指南</span>
+      <span>作者 Mikaela Grace、Jeremy Hadfield、Rodrigo Olivares、Jiri De Jonghe</span>
+    </div>
+    <p class="eyebrow">Agent Evals · 圖卡＋教材整合版</p>
+    <h1>Demystifying Evals for AI Agents<span class="accent">讓 agent 好用的能力 也讓它難以評估</span></h1>
+    <p class="lede">agent 會跑很多輪、呼叫工具、改變環境，同樣的能力也讓它難評估：錯誤會一路累積，好的解法也可能超出題目的想像。Anthropic 這篇工程文章整理了他們和客戶在實際部署裡用得通的做法，從一次評估由哪些零件組成、三種 grader、四類 agent 各怎麼評、pass@k 與 pass^k，到從零建起 eval 的九步路線圖，以及它和生產監控、人工審閱等方法怎麼搭配。本頁分十五章重述。每章開頭先放一張圖解卡講重點，往下是詳細作法；想速讀就切到「只看圖卡」。</p>
+    <dl class="hero-keystat">
+      <div><dt>起步的 task 數</dt><dd>20–50<small>個</small></dd></div>
+      <div><dt>grader 的種類</dt><dd>3<small>種</small></dd></div>
+      <div><dt>路線圖，第 0 到 8 步</dt><dd>9<small>步</small></dd></div>
+      <div><dt>每次 75%，連過三次</dt><dd>≈42<small>%</small></dd></div>
+    </dl>
+  </div>
+</header>
+
+<section id="prologue" data-toc="判官之外的基礎建設" class="nocard">
+  <div class="container">
+    <p class="chapter">Prologue · 整理者的引言</p>
+    <h2><span class="seg">判官之外，</span><span class="seg">還要題庫、</span><span class="seg">harness 與路線圖</span></h2>
+    <p class="lede">這一講談 LLM 當判官，也談評估的基礎建設。判官只是評分的一環；題目怎麼出、環境怎麼搭、分數怎麼讀、從哪裡開始，這篇一路講到底。</p>
+    <p>這篇是 Stanford CS 329Z 第 8 週的必讀，屬於 Evaluation for Agentic Systems 分區的〈LLM-as-Judge &amp; Evaluation Infrastructure〉那一講。那一講的題目有：三種 grader、judge 的 prompt 怎麼設計、判官已知的偏誤、pairwise 與 pointwise 兩種比法、非確定性的指標（pass@k 對 pass^k）、harness 的設計，以及 Anthropic 的八步路線圖，也就是這一篇。同一講的另兩篇必讀是 MT-Bench 論文（Zheng 等人）與 AutoMetrics（Ryan 等人），選讀是 AutoLibra。</p>
+    <p>整理者對照講題與原文，這篇負責的是工程上的整套做法：三種 grader 各自的長短、pass@k 與 pass^k、harness 怎麼搭、路線圖怎麼走。判官已知的偏誤，這篇沒有展開；pairwise 比較只在模型 grader 的做法清單裡出現一次。這兩題要看同一講的其他讀物，本頁不替原文補寫。另外，講題說「八步」，原文的編號是從第 0 步到第 8 步，本頁照原文寫成九步。</p>
+    <p>原文是 Anthropic 工程部落格 2026 年 1 月 9 日的文章，由 Mikaela Grace、Jeremy Hadfield、Rodrigo Olivares、Jiri De Jonghe 執筆。作者說，這些做法來自 Anthropic 內部的工作，以及和走在 agent 開發前沿的客戶合作的經驗。因為是公司部落格，文中關於自家產品與模型的說法（Claude Code、Claude.ai、Claude for Chrome、Opus 4.5），以及它轉述的客戶案例，本頁都寫成「作者說」。</p>
+    <p>整理者的補充：本站整理過的〈<a href="../effective-agents/">Building effective agents</a>〉是這篇開頭引用的前作，〈<a href="../context-engineering/">Effective context engineering for AI agents</a>〉出自同一個部落格，OpenAI 的〈<a href="../eval-skills/">Testing Agent Skills Systematically with Evals</a>〉則是用 eval 測 agent skill 的相近題目；本頁不用它們的內容擴寫。</p>
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>先把六個名詞對齊</h4>
+      <ul>
+        <li><strong>eval（評估）</strong>：給 AI 一個輸入，再用一段評分邏輯判斷它的輸出算不算成功；本篇談的是開發時自動跑、不需要真實使用者的那一種。</li>
+        <li><strong>agent</strong>：會跑很多輪、自己呼叫工具、改變環境狀態、依中間結果調整做法的模型系統。</li>
+        <li><strong>grader（評分器）</strong>：替 agent 表現的某個面向打分的邏輯，可以是程式、另一個模型，或人。</li>
+        <li><strong>transcript</strong>：一次執行的完整紀錄，含輸出、工具呼叫、推理與中間結果；也叫 trace 或 trajectory。</li>
+        <li><strong>harness</strong>：把東西跑起來的那一層系統。原文分兩種：跑 eval 的 evaluation harness，和讓模型能當 agent 的 agent harness。</li>
+        <li><strong>regression（退步）</strong>：以前做得到的事，改了東西之後做不到了。</li>
+      </ul>
+    </div>
+    <div class="explain stone">
+      <span class="label">閱讀提醒</span>
+      <h4>本頁的章節順序</h4>
+      <p>本頁照原文的順序走，分十五章：先講一次評估的組成與為什麼要做（第 1、2 章），再講三種 grader、capability 與 regression、四類 agent 怎麼評、非確定性怎麼看（第 3 到 7 章），接著是九步路線圖（第 8 到 11 章）與其他方法的搭配（第 12 章），最後是結論與附錄的框架清單。文中的 SWE-bench 分數是寫作當時的數字。</p>
+    </div>
+    <div class="pullquote">
+      判官只是評分的一環；題目出得清不清楚、環境乾不乾淨、有沒有人讀 transcript，決定分數值不值得信。
+      <cite>序章核心觀念</cite>
+    </div>
+  </div>
+</section>
+
+<section id="eval-anatomy" data-toc="一次評估的組成">
+  <div class="container head">
+    <p class="chapter">Chapter 01 · Introduction · The structure of an evaluation</p>
+    <h2><span class="seg">agent 會改變環境，</span><span class="seg">評估要看最後的狀態</span></h2>
+    <p class="lede">一次 eval 就是給一個輸入，再用評分邏輯判斷輸出。agent 會跑很多輪、改動環境，所以評估多了幾個零件：task、trial、grader、transcript、outcome，以及跑這一切的 harness。</p>
+    
+  </div>
+  <div class="cardband" id="card-02"><div class="cardlabel"><span class="n">圖卡 02 / 13</span><span class="t">一次評估由哪些零件組成</span><button type="button" class="zoom" data-card="02">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">一個 task 跑好幾次，每次留下過程與結果</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">原文的八個定義與圖 2：evaluation harness 同時跑一組 task，每個 task 跑好幾次 trial，grader 讀 transcript 與 outcome 打分；被評的是 agent harness 加模型</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:440px; height:370px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:10px;"></div>
+  <div style="position:absolute; left:80px; top:164px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;"><span style="letter-spacing:0.12em">EVALUATION HARNESS</span> &#183; 跑整組 eval</div>
+  <div style="position:absolute; left:80px; top:192px; width:400px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">suite：客服（一組 task 共享一個目標）</div>
+  <div style="position:absolute; left:80px; top:242px; width:400px; height:58px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; padding:0px 14px; display:flex; align-items:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">task：處理一筆退款</div><div style="font-size:12.5px; color:#6B7380;">定義好的輸入，加上怎樣才算成功</div></div></div>
+  <div style="position:absolute; left:80px; top:310px; width:400px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">task：取消訂單</div>
+  <div style="position:absolute; left:80px; top:360px; width:400px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">task：升級處理（escalation）</div>
+  <div style="position:absolute; left:80px; top:410px; width:400px; height:58px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; border-radius:6px; padding:0px 14px; display:flex; align-items:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">harness 的工作</div><div style="font-size:12.5px; color:#6B7380;">給指示與工具、同時跑 task、記錄每一步、打分、彙整</div></div></div>
+  <div style="position:absolute; left:80px; top:482px; width:400px; font-size:13px; color:#6B7380; line-height:1.5;">三個 task 是原文客服 suite 的例子</div>
+
+  <div style="position:absolute; left:505px; top:248px; width:66px; text-align:center; font-size:12.5px; color:#8A93A0;">展開</div>
+
+  <div style="position:absolute; left:580px; top:150px; width:500px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:17px; font-weight:700; color:#FFFFFF;">展開一個 task：四個部分</div>
+  <div style="position:absolute; left:580px; top:198px; width:500px; height:322px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:12px 22px; display:flex; flex-direction:column; justify-content:center; gap:9px;">
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">1</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">輸入與成功標準</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">TASK</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">一道題：定義好的輸入加上成功標準；<br>也叫 problem 或 test case</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">2</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">grader</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">GRADERS</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">替某個面向打分；可以掛好幾個，<br>每個含多條 assertion（也叫 check）</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">3</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">trial</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">TRIALS</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">一次嘗試；模型每次輸出不同，<br>所以同一題要跑好幾次</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">4</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">transcript 與 outcome</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">RECORD · STATE</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">每次 trial 留下兩樣：完整的紀錄，<br>以及環境最後的狀態</div></div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:1140px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;"><span style="letter-spacing:0.12em">WHO</span> &#183; 誰寫、誰讀、誰跑</div>
+  <div style="position:absolute; left:1140px; top:178px; width:400px; height:76px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#FFFFFF;">agent harness ＋ 模型</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">處理輸入、調度工具呼叫：寫出 transcript，也改變環境</div></div>
+  <div style="position:absolute; left:1140px; top:280px; width:400px; height:76px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#2E7B4F;">grader</div><div style="font-size:12.5px; color:#6B7380;">讀 transcript 或 outcome 的一部分，給出分數</div></div>
+  <div style="position:absolute; left:1140px; top:382px; width:400px; height:76px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">evaluation harness</div><div style="font-size:12.5px; color:#6B7380;">同時跑 task、記錄每一步、打分、彙整結果</div></div>
+  <div style="position:absolute; left:1140px; top:474px; width:400px; font-size:13px; color:#6B7380; line-height:1.5;">評「一個 agent」，評的是 agent harness 和模型一起；<br>作者說 Claude Code 就是一個 agent harness</div>
+  <div style="position:absolute; left:1092px; top:194px; width:40px; text-align:center; font-size:12.5px; color:#8A93A0;">寫</div>
+  <div style="position:absolute; left:1092px; top:296px; width:40px; text-align:center; font-size:12.5px; color:#2E7B4F;">讀</div>
+  <div style="position:absolute; left:1092px; top:398px; width:40px; text-align:center; font-size:12.5px; color:#8A93A0;">跑</div>
+
+  <div style="position:absolute; left:60px; top:574px; width:470px; height:184px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">agent 說訂好了，不算數</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">訂機票的 agent 在 transcript 最後說「已經訂好了」；<br>outcome 是 SQL 資料庫裡有沒有那筆訂位。</div>
+    <div style="font-size:13px; color:#8A93A0;">grader 查 outcome，查的是環境，不是 agent 的話。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:574px; width:470px; height:184px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">transcript 是整段紀錄</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">輸出、工具呼叫、推理、中間結果都在裡面；<br>用 Anthropic API 時，就是跑完時整個 messages 陣列。</div>
+    <div style="font-size:13px; color:#8A93A0;">也叫 trace 或 trajectory。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:574px; width:470px; height:184px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">模型會超出題目的想像</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">作者說 Opus 4.5 在 τ2-bench 找到政策的漏洞：<br>照題目算失敗，其實替使用者找到更好的解。</div>
+    <div style="font-size:13px; color:#8A93A0;">所以不能只比對預期的步驟（第 11 卡）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：依原文的定義清單與圖 2 重畫；客服 suite 的三個 task 是原文的例子，退款 task 的 grader 見第 06 卡。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+      <marker id="an-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M482 271H576" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1138 216H1084" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c02)"></path>
+    <path d="M1082 318H1136" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c02)"></path>
+    <path d="M1138 420H1084" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>作者開頭先講評估帶來什麼。好的評估讓團隊比較有把握地出貨；沒有評估，團隊很容易陷進被動的循環：問題要到上線後才發現，修好一個又冒出另一個。評估讓問題與行為上的變化在影響使用者之前就被看見，它的價值也會在 agent 的整個生命週期裡累積。</p>
+    <p>難處在 agent 本身。原文引用自家的〈Building effective agents〉：agent 跑很多輪，一路呼叫工具、改變狀態、依中間結果調整做法。讓 agent 有用的自主、聰明與彈性，正是讓它難評估的地方。</p>
+    <p>eval 的定義很單純：它是替 AI 系統做的測試，給一個輸入，再對輸出套用評分邏輯，量它成不成功。這篇只談開發期間就能自動跑、不需要真實使用者的評估。單輪的評估最直接：一個 prompt、一個回應、一段評分邏輯，早期的 LLM 主要就是這樣評；能力變強之後，多輪的評估越來越常見。原文的第一張圖把兩者並排：</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>面向</th><th>單輪評估</th><th>agent 評估</th></tr></thead>
+        <tbody>
+          <tr><td>給什麼</td><td>一個 prompt 加資料：「{動物}有幾根腳趾？」，動物＝貓</td><td>工具、環境、task：替我的 app 寫一個 MCP server</td></tr>
+          <tr><td>中間發生什麼</td><td>模型回一次</td><td>agent loop：讀檔、查文件、改檔、跑測試，環境跟著被更新</td></tr>
+          <tr><td>怎麼評</td><td>比對回應：回應等於 18</td><td>跑一批測試，確認 MCP server 真的能動</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>agent 的評估又更複雜。它在很多輪裡使用工具、改動環境的狀態、邊做邊調整，所以一個錯誤可能一路傳下去、越滾越大。前沿模型也可能找出靜態 eval 沒想到的解法。</p>
+    <div class="story">
+      <div class="label">關鍵觀念 · 一</div>
+      <h4>照題目算是失敗，其實替使用者找到更好的解</h4>
+      <p>作者說，Opus 4.5 在 τ2-bench 一道訂機票的題目上，發現了政策裡的一個漏洞，用它解決了問題。照 eval 原本的寫法，這算「失敗」；實際上，它替使用者找到了更好的方案。</p>
+      <p>這個例子說明 agent 的評估為什麼不能只比對預期的步驟：模型的創意可能超出出題者的想像。第 10 章會回到這一點：評 agent 做出了什麼，不評它走了哪條路。這個連結是整理者加的。</p>
+    </div>
+    <p>作者在建 agent 評估時用下面八個定義。第 02 卡把它們畫成一張結構圖，表格是同一組名詞的文字版：</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>名詞</th><th>是什麼</th><th>原文的例子或補充</th></tr></thead>
+        <tbody>
+          <tr><td>task</td><td>一道測試：定義好的輸入加上成功標準；也叫 problem 或 test case</td><td>修掉一個「密碼欄空白就能繞過登入」的漏洞</td></tr>
+          <tr><td>trial</td><td>對一個 task 的一次嘗試</td><td>模型每次輸出不同，所以同一題跑好幾次 trial，結果才穩定</td></tr>
+          <tr><td>grader</td><td>替 agent 表現的某個面向打分的邏輯</td><td>一個 task 可以有好幾個 grader，每個含好幾條 assertion（也叫 check）</td></tr>
+          <tr><td>transcript</td><td>一次 trial 的完整紀錄：輸出、工具呼叫、推理、中間結果與其他互動；也叫 trace 或 trajectory</td><td>用 Anthropic API 時，就是 eval 跑完那一刻整個 messages 陣列</td></tr>
+          <tr><td>outcome</td><td>trial 結束時，環境裡的最終狀態</td><td>訂機票的 agent 在 transcript 最後說「已經訂好了」；outcome 是 SQL 資料庫裡到底有沒有那筆訂位</td></tr>
+          <tr><td>evaluation<br>harness</td><td>端到端跑 eval 的基礎設施</td><td>提供指示與工具、同時跑多個 task、記錄每一步、替輸出打分、彙整結果</td></tr>
+          <tr><td>agent<br>harness</td><td>讓模型能當 agent 的系統，也叫 scaffold：處理輸入、調度工具呼叫、回傳結果</td><td>評「一個 agent」時，評的是 harness 和模型一起。作者說 Claude Code 就是一個有彈性的 agent harness，他們透過 Agent SDK 用它的核心元件，做出長時間運作的 agent harness</td></tr>
+          <tr><td>evaluation<br>suite</td><td>為了量某些能力或行為而設計的一組 task，通常共享一個大目標</td><td>客服的 suite 可能測退款、取消與升級處理</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="explain terra">
+      <span class="label">為什麼要分開</span>
+      <h4>transcript 是它說了什麼，outcome 是世界變成什麼樣</h4>
+      <p>agent 在 transcript 裡說「完成了」，不代表環境裡真的完成了。grader 可以讀 transcript 評過程，也可以查 outcome 評結果；兩者分開記，才分得出「做了但說錯」與「說了但沒做」。這段是整理者對訂機票例子的引申。</p>
+    </div>
+  </div>
+</section>
+
+<section id="why-evals" data-toc="為什麼要建 eval">
+  <div class="container head">
+    <p class="chapter">Chapter 02 · Why build evaluations?</p>
+    <h2><span class="seg">沒有 eval，</span><span class="seg">除錯只能等使用者抱怨</span></h2>
+    <p class="lede">早期靠手動測試、自己用與直覺就走得很遠；agent 上線、開始擴大之後，這套做法會斷掉。有了 eval，改動先對著幾百個情境跑過再出貨，換新模型也只要幾天。</p>
+    
+  </div>
+  <div class="cardband" id="card-03"><div class="cardlabel"><span class="n">圖卡 03 / 13</span><span class="t">沒有 eval，只能等抱怨</span><button type="button" class="zoom" data-card="03">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">把「agent 變差了」，變成查得到的訊號</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">早期靠手動測試、自己試用與直覺就走得很遠；agent 上線、開始擴大之後，沒有 eval 的團隊只能猜了再試，等使用者來抱怨</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 沒有 eval：被動地除錯</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 有 eval：改動先跑一輪</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:90px; top:208px; width:250px; height:54px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">使用者回報：變差了</div>
+  <div style="position:absolute; left:440px; top:208px; width:250px; height:54px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2B3340;">手動重現</div>
+  <div style="position:absolute; left:440px; top:318px; width:250px; height:54px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2B3340;">修 bug</div>
+  <div style="position:absolute; left:90px; top:318px; width:250px; height:54px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">希望別的地方沒壞</div>
+  <div style="position:absolute; left:100px; top:281px; width:105px; text-align:right; font-size:12.5px; color:#C8501F;">下一次抱怨</div>
+  <div style="position:absolute; left:315px; top:281px; width:150px; text-align:center; font-size:12.5px; color:#8A93A0;">被動的循環</div>
+
+  <div style="position:absolute; left:60px; top:400px; font-size:13px; font-weight:700; color:#C8501F;">少了 eval，團隊做不到的三件事</div>
+  <div style="position:absolute; left:60px; top:426px; width:224px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">分不出真退步和雜訊</div>
+  <div style="position:absolute; left:298px; top:426px; width:224px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">沒法先測幾百個情境</div>
+  <div style="position:absolute; left:536px; top:426px; width:224px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">量不出改善了多少</div>
+  <div style="position:absolute; left:60px; top:500px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">原文形容這是盲飛：除了猜了再試，沒有辦法確認。<br>斷點常出現在 agent 上線、開始擴大規模之後。</div>
+
+  <div style="position:absolute; left:1100px; top:200px; width:180px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">改了一版 agent</div>
+  <div style="position:absolute; left:1300px; top:262px; font-size:13px; font-weight:500; color:#2E7B4F;">每一版都再跑一輪</div>
+  <div style="position:absolute; left:1015px; top:300px; width:350px; height:50px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">跑整組 eval：幾百個情境</div>
+  <div style="position:absolute; left:895px; top:420px; width:170px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">有沒有退步？</div>
+  <div style="position:absolute; left:1105px; top:420px; width:170px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">有沒有進步？</div>
+  <div style="position:absolute; left:1315px; top:420px; width:170px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">延遲、成本變了嗎？</div>
+  <div style="position:absolute; left:895px; top:478px; font-size:13px; font-weight:500; color:#2E7B4F;">每題都有分數，和上一版比，就知道是哪裡變了</div>
+  <div style="position:absolute; left:840px; top:520px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">新模型推出時，有 eval 的團隊幾天內就知道強項、調好 prompt、升級；<br>沒有 eval 的團隊要測上好幾週。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#C8501F;">等使用者抱怨，才知道壞了</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">等抱怨、手動重現、修 bug、希望別處沒退步：<br>每一步都發生在問題碰到使用者之後。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說 Claude Code 也走過這一段，後來先替簡潔、檔案編輯這類窄範圍寫 eval。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F;">基準線和回歸測試，順便就有</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">同一批 task 上一直追延遲、token 用量、每個 task 的成本與錯誤率；<br>eval 也是產品與研究之間頻寬最大的溝通管道。</div>
+    <div style="font-size:13px; color:#8A93A0;">成本一開始就看得到，好處慢慢累積，所以容易被低估。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：原文沒有說一開始就一定要寫 eval；有的團隊一開始就寫，有的到了規模才補，作者說兩種都能讓開發變快，只是越晚補越難。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M340 235H438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M565 262V316" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M440 345H342" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M215 318V264" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c03)"></path>
+    <path d="M1190 250V298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1190 350V385H980V418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1190 350V418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1190 350V385H1400V418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1485 443H1515V225H1282" stroke="#2E7B4F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#an-c03)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>團隊剛開始做 agent 時，靠手動測試、自己內部先用（dogfooding）和直覺，可以走得出乎意料地遠。更嚴謹的評估甚至像是拖慢出貨的額外負擔。作者說，問題出在原型期之後：agent 上線、開始擴大規模，沒有 eval 的開發方式就開始撐不住。</p>
+    <p>斷點常常是這樣來的：使用者回報改版後 agent 變差了，團隊卻像在盲飛，除了猜一猜、試一試，沒有辦法確認。沒有 eval，除錯只能被動地跟在問題後面：</p>
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>等抱怨</strong>使用者先碰到問題，回報進來。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>手動重現</strong>從描述裡猜出條件，自己再跑一次。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>修 bug</strong>改 prompt、改工具或改流程。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>希望別的沒壞</strong>沒有辦法確認這次的修改，有沒有在別處造成退步。</div></div>
+    </div>
+    <p>作者列了三件團隊因此做不到的事：分不出真正的退步和雜訊；沒辦法在出貨前自動拿改動去跑幾百個情境；也量不出改善了多少。</p>
+    <p>作者說他們看過這個過程很多次，Claude Code 就是一例。它一開始靠 Anthropic 員工與外部使用者的回饋快速迭代；之後才加上 eval，先針對簡潔、檔案編輯這類範圍窄的地方，再擴到過度設計（over-engineering）這類比較複雜的行為。這些 eval 幫忙找出問題、引導改進、讓研究與產品的合作有焦點；再加上生產監控、A/B 測試、使用者研究等方法，Claude Code 在規模變大時還有訊號可以繼續改進。</p>
+    <p>寫 eval 在 agent 生命週期的任何階段都有用。早期，它逼產品團隊講清楚這個 agent 怎樣算成功；後期，它幫忙守住一致的品質門檻。作者轉述了兩個客戶的做法：</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>團隊</th><th>什麼時候開始</th><th>怎麼做</th></tr></thead>
+        <tbody>
+          <tr><td>Descript<br>（影片剪輯 agent）</td><td>原文沒有說；<br>從手動評分一路演進</td><td>成功的剪輯流程有三個面向：不要弄壞東西、做我要的事、做得好。從手動評分改成 LLM grader，標準由產品團隊定、定期由人校準；現在固定跑兩組題：品質基準與 regression 測試</td></tr>
+          <tr><td>Bolt</td><td>比較晚，agent 已經<br>被廣泛使用之後</td><td>3 個月內建出一套 eval 系統：跑 agent、用靜態分析評輸出、用瀏覽器 agent 測做出來的 app、用 LLM judge 評指令遵循這類行為</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>有的團隊一開始就寫 eval，有的到了規模、eval 成了改進 agent 的瓶頸才補。作者認為在開發初期特別有用，因為它把預期的行為明確寫下來：兩位工程師讀同一份最初的規格，對 AI 該怎麼處理邊界情況，可能有不同的理解；一組 eval 就把這種含糊消掉。不管什麼時候開始，eval 都會讓開發變快。</p>
+    <p>eval 也決定你能多快換上新模型。更強的模型推出時，沒有 eval 的團隊要花好幾週測試；有 eval 的團隊能很快判斷新模型的強項、調好 prompt，幾天內就升級。</p>
+    <div class="values">
+      <div class="value-card"><span class="tag">順便得到</span><h4>基準線與回歸測試</h4><p>eval 一旦存在，延遲、token 用量、每個 task 的成本、錯誤率，都能在同一批固定的 task 上一直追下去。</p></div>
+      <div class="value-card"><span class="tag">溝通管道</span><h4>產品與研究之間頻寬最大的一條線</h4><p>eval 定義了研究人員可以拿來最佳化的指標；產品要什麼，就寫成 task 與 grader。</p></div>
+      <div class="value-card"><span class="tag">複利</span><h4>成本在前，好處在後</h4><p>成本一開始就看得到，好處是慢慢累積的，所以這種會複利的價值很容易被忽略。</p></div>
+    </div>
+    <div class="pullquote">
+      沒有 eval 時，「agent 變差了」只是一句抱怨；有了 eval，它是一個能對到 task、能重跑的訊號。
+      <cite>整理自 Why build evaluations?</cite>
+    </div>
+  </div>
+</section>
+
+<section id="graders" data-toc="三種 grader">
+  <div class="container head">
+    <p class="chapter">Chapter 03 · How to evaluate AI agents · Types of graders</p>
+    <h2><span class="seg">三種 grader 各有長短，</span><span class="seg">要挑對組合</span></h2>
+    <p class="lede">程式快、便宜、可重現，但對有效的變化很脆弱；模型有彈性、抓得到細節，但判得不穩定、要校準；人是黃金標準，但又貴又慢。每個 task 的分數可以加權、要求全過，或兩者混著用。</p>
+    
+  </div>
+  <div class="cardband" id="card-04"><div class="cardlabel"><span class="n">圖卡 04 / 13</span><span class="t">三種 grader 的長處與代價</span><button type="button" class="zoom" data-card="04">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">三種 grader，各用一種代價換一種長處</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">agent 的評估通常把三種 grader 混著用，每一種只評 transcript 或 outcome 的一部分；替這份工作挑對 grader，是評估設計的核心</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:240px 520px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">grader</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">做法（原文列的）</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">長處</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">弱點</div>
+  </div>
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:116px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px 520px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">程式 grader</div><div style="font-size:13px; color:#8A93A0;">Code-based · 能用就先用</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; color:#2B3340; line-height:1.55;"><div>字串比對：完全相同、正規表示式、模糊比對<br>二元測試（<span style="white-space:nowrap">fail-to-pass</span>、<span style="white-space:nowrap">pass-to-pass</span>）、靜態分析<br>驗結果、驗工具呼叫、分析 transcript 的輪數與 token</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.55;"><div>快、便宜、客觀、可重現<br>容易除錯，能驗特定的條件</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.55;"><div>有效但不符預期模式的變化，<br>也會被判錯；缺少細膩，<br>主觀的任務評得有限</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:326px; width:1480px; height:116px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px 520px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">模型 grader</div><div style="font-size:13px; color:#8A93A0;">Model-based · 必要時才用</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; color:#2B3340; line-height:1.55;"><div>依 rubric 評分、自然語言寫的 assertion<br>兩兩比較（pairwise）、對照參考答案<br>多個判官取共識</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.55;"><div>有彈性、可擴展、抓得到細節，<br>處理得了開放式任務<br>與自由格式的輸出</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.55;"><div>不確定，同一份輸出可能判得不同；<br>比程式貴；<br>要和人工 grader 校準才準</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:442px; width:1480px; height:116px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px 520px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">人工 grader</div><div style="font-size:13px; color:#8A93A0;">Human · 審慎地用來驗證</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; color:#2B3340; line-height:1.55;"><div>領域專家審閱、群眾判斷、抽樣檢查<br>A/B 測試、標註者之間的一致度</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.55;"><div>黃金標準的品質，<br>符合專家使用者的判斷；<br>也用來校準模型 grader</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.55;"><div>貴、慢；<br>常要大規模地找得到<br>人類專家</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:582px; font-size:20px; font-weight:700; color:#1C2431;">一個 task 掛好幾個 grader 時，分數怎麼合</div>
+  <div style="position:absolute; left:60px; top:624px; width:470px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">加權：合起來過門檻</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">各 grader 的分數加權合計，<br>總分要到門檻才算通過。</div>
+    <div style="font-size:13px; color:#8A93A0;">整理者的讀法：一個面向差一點，別的可以補。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:624px; width:470px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">二元：全部都要過</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">task 上的每個 grader 都要通過，<br>有一個不過，這個 task 就算失敗。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文的定義：所有 grader 都必須通過。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:624px; width:470px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">混合：兩種一起用</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">原文只說可以混用，沒有規定怎麼混；<br>例如關鍵的 grader 必須過，其餘加權。</div>
+    <div style="font-size:13px; color:#8A93A0;">「例如」之後是整理者舉的例子。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：表格依原文的三張表整理，措辭是整理者的；第 11 卡是第 5 步建議的順序：能用程式就用程式，必要時才用模型，人工審慎地用來驗證。</div>
+</div></div></div>
+  <div class="container prose">
+    <p>作者說，現在大規模部署的 agent 常見幾種：寫程式的、做研究的、操作電腦的、對話的。它們分布在各行各業，卻能用相似的技巧評估；不需要從零發明一套評估，可以拿下面幾節驗證過的做法當基礎，再延伸到自己的領域。</p>
+    <p>評估 agent 通常混用三種 grader：用程式的、用模型的、用人的。每一種都只評 transcript 或 outcome 的一部分，所以評估設計裡很關鍵的一步，就是替這份工作挑對 grader。原文用三張表比較它們，下面把三張表併成一張：</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>grader</th><th>做法</th><th>長處</th><th>弱點</th></tr></thead>
+        <tbody>
+          <tr><td>程式</td><td>字串比對（完全相同、正規表示式、模糊比對）；二元測試（fail-to-pass、pass-to-pass）；靜態分析（lint、型別、安全）；驗證結果；驗證工具呼叫（用了哪些工具、參數）；分析 transcript（輪數、token 用量）</td><td>快、便宜、客觀、可重現、容易除錯，能驗特定的條件</td><td>有效但不完全符合預期模式的變化，也會被判錯；缺少細膩；較主觀的任務評得有限</td></tr>
+          <tr><td>模型</td><td>依 rubric 評分、自然語言寫的 assertion、兩兩比較（pairwise）、對照參考答案、多個判官取共識</td><td>有彈性、可擴展、抓得到細節，能處理開放式任務與自由格式的輸出</td><td>不確定，同一份輸出可能判得不同；比程式貴；要和人工 grader 校準才準</td></tr>
+          <tr><td>人工</td><td>領域專家審閱、群眾判斷、抽樣檢查、A/B 測試、標註者之間的一致度</td><td>黃金標準的品質，符合專家使用者的判斷，也用來校準模型 grader</td><td>貴、慢，常需要大規模地找得到人類專家</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>一個 task 掛了好幾個 grader 時，分數怎麼合起來有三種方式：加權（各 grader 的分數合計要過門檻）、二元（所有 grader 都要通過），或把兩者混著用。</p>
+    <div class="explain stone">
+      <span class="label">補充說明</span>
+      <h4>fail-to-pass 與 pass-to-pass</h4>
+      <p>這兩個詞出現在程式 grader 的做法裡，意思在第 5 章 SWE-bench Verified 的描述裡：原本失敗的測試要變成通過（fail-to-pass），原本通過的測試不能被弄壞（pass-to-pass），一個解法兩種都要做到才算過。這段對照是整理者接起來的。</p>
+    </div>
+    <div class="explain">
+      <span class="label">和這一講的關係</span>
+      <h4>模型 grader 就是 LLM 當判官</h4>
+      <p>這一講的主題 LLM-as-Judge，就是表裡的模型 grader。原文在路線圖的第 5 步（本頁第 10 章）給了幾條校準判官的做法：和專家對齊、允許回答 Unknown、一個面向交給一個獨立的判官。判官已知的偏誤與 pairwise 對 pointwise 的比較，要看同一講的 MT-Bench 論文。這段是整理者的對照。</p>
+    </div>
+  </div>
+</section>
+
+<section id="capability-regression" data-toc="能力與回歸評估">
+  <div class="container head">
+    <p class="chapter">Chapter 04 · Capability vs. regression evals</p>
+    <h2><span class="seg">capability 從低分爬，</span><span class="seg">regression 要接近滿分</span></h2>
+    <p class="lede">兩種評估問的問題不同：一個問「它能把什麼做好」，通過率從低處開始；一個問「以前會的還會嗎」，通過率應該接近 100%。前者爬上去之後，可以畢業成後者。</p>
+    
+  </div>
+  <div class="cardband" id="card-05"><div class="cardlabel"><span class="n">圖卡 05 / 13</span><span class="t">capability 與 regression</span><button type="button" class="zoom" data-card="05">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">capability 從低分往上爬，regression 守在接近滿分</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">兩種評估問的問題不同，分數的意思也不同；capability 的 task 通過率高了，就畢業成 regression，持續跑來抓漂移</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">CAPABILITY · QUALITY</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">capability：它能把什麼做好？</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">REGRESSION</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">regression：以前會的，現在還會嗎？</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:300px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:222px; width:700px; height:62px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 20px; display:flex; align-items:center;"><div><div style="font-size:16px; font-weight:700; color:#1C2431;">挑 agent 還做不好的 task</div><div style="margin-top:2px; font-size:13px; color:#6B7380;">刻意留一段可以爬的山：題目難，通過率從低處開始</div></div></div>
+  <div style="position:absolute; left:60px; top:311px; font-size:14px; font-weight:700; color:#4B5866;">通過率</div>
+  <div style="position:absolute; left:140px; top:306px; width:560px; height:30px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px;"></div>
+  <div style="position:absolute; left:140px; top:306px; width:120px; height:30px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px 0px 0px 6px;"></div>
+  <div style="position:absolute; left:272px; top:311px; font-size:13px; color:#2B3340;">起點：低</div>
+  <div style="position:absolute; left:140px; top:340px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">0</div>
+  <div style="position:absolute; left:640px; top:340px; width:60px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">100%</div>
+  <div style="position:absolute; left:60px; top:366px; font-size:14px; font-weight:500; color:#2E7B4F;">每次改 agent、每次換新模型，看通過率往上爬</div>
+  <div style="position:absolute; left:60px; top:400px; width:700px; height:48px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; border-radius:8px; padding:0px 20px; display:flex; align-items:center; font-size:15px; font-weight:700; color:#1C2431;">在問：這件事，它做得到嗎？</div>
+
+  <div style="position:absolute; left:840px; top:222px; width:700px; height:62px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 20px; display:flex; align-items:center;"><div><div style="font-size:16px; font-weight:700; color:#1C2431;">放 agent 以前就處理得了的 task</div><div style="margin-top:2px; font-size:13px; color:#6B7380;">整組都應該過；分數一掉，就是有東西壞了、要修</div></div></div>
+  <div style="position:absolute; left:840px; top:311px; font-size:14px; font-weight:700; color:#4B5866;">通過率</div>
+  <div style="position:absolute; left:920px; top:306px; width:560px; height:30px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px;"></div>
+  <div style="position:absolute; left:920px; top:306px; width:546px; height:30px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px 0px 0px 6px;"></div>
+  <div style="position:absolute; left:940px; top:311px; font-size:13px; color:#FFFFFF;">接近 100%</div>
+  <div style="position:absolute; left:920px; top:340px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">0</div>
+  <div style="position:absolute; left:1420px; top:340px; width:60px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">100%</div>
+  <div style="position:absolute; left:840px; top:366px; font-size:14px; color:#6B7380;">團隊在 capability 上爬山時，這一組也要一起跑</div>
+  <div style="position:absolute; left:840px; top:400px; width:700px; height:48px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; border-radius:8px; padding:0px 20px; display:flex; align-items:center; font-size:15px; font-weight:700; color:#1C2431;">在問：以前會的，現在還能穩定做到嗎？</div>
+
+  <div style="position:absolute; left:60px; top:472px; width:560px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 20px; display:flex; align-items:center; font-size:15px; font-weight:700; color:#1C2431;">capability 題組裡，通過率已經很高的 task</div>
+  <div style="position:absolute; left:760px; top:474px; width:80px; text-align:center; background-color:#FFFFFF; font-size:14px; font-weight:700; color:#2E7B4F;">畢業</div>
+  <div style="position:absolute; left:1020px; top:472px; width:520px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:0px 20px; display:flex; align-items:center; font-size:15px; font-weight:700; color:#2E7B4F;">移進 regression 題組，持續跑來抓漂移</div>
+  <div style="position:absolute; left:60px; top:542px; width:1480px; font-size:13px; color:#8A93A0;">同一批 task，原本問「做得到嗎」，畢業之後問「還能穩定做到嗎」；時機是 agent 上線、最佳化過之後。</div>
+
+  <div style="position:absolute; left:60px; top:590px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">兩組都要跑</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">團隊在 capability 評估上爬山的時候，<br>也要跑 regression，確認沒在別處弄壞東西。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文說 regression 的通過率應該接近 100%。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:590px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">畢業：從做得到，到穩定做到</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">通過率已經很高的 capability 評估，<br>變成一組持續跑的 regression 題組。</div>
+    <div style="font-size:13px; color:#8A93A0;">目的是抓住任何漂移。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:590px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">滿分的題組，給不出進步的訊號</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">第 7 步：接近 100% 的 eval 只抓得到退步；<br>越接近飽和，大進步也只讓分數小小地動。</div>
+    <div style="font-size:13px; color:#8A93A0;">結論的提醒：題目要對模型夠難（第 12 卡）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：通過率條是整理者的示意，原文只說 capability 從低通過率開始、regression 應該接近 100%；兩種題組都要跑，所以不用 ✗／✓。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="an-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M622 500H1016" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>capability 評估（也叫品質評估）問的是：這個 agent 能把哪些事做好？它應該從低的通過率開始，專挑 agent 還做不好的 task，給團隊一座可以往上爬的山。</p>
+    <p>regression 評估問的是：以前處理得了的 task，它現在還處理得了嗎？這一組的通過率應該接近 100%。它防的是退步：分數一掉，就表示有東西壞了、要修。團隊在 capability 評估上往上爬的時候，也要一起跑 regression 評估，確認這些改動沒有在別的地方造成問題。</p>
+    <p>兩者之間有一條路。agent 上線、最佳化過之後，通過率已經很高的 capability 評估可以「畢業」，變成一組持續跑的 regression 題組，用來抓任何漂移。同一批 task，原本量的是「這件事做得到嗎」，之後量的是「還能穩定做到嗎」。</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>面向</th><th>capability 評估</th><th>regression 評估</th></tr></thead>
+        <tbody>
+          <tr><td>問的問題</td><td>它能把什麼做好？</td><td>以前會的，現在還會嗎？</td></tr>
+          <tr><td>預期的通過率</td><td>從低處開始</td><td>接近 100%</td></tr>
+          <tr><td>題目怎麼挑</td><td>agent 還做不好的 task</td><td>agent 以前處理得了的 task，包括畢業上來的 capability task</td></tr>
+          <tr><td>分數的意思</td><td>往上爬，代表能力在進步</td><td>往下掉，代表有東西壞了</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="explain stone">
+      <span class="label">補充說明</span>
+      <h4>後面還會回到這兩種題組</h4>
+      <p>路線圖的第 7 步談 capability 評估的飽和：通過率接近 100% 的 eval 只能抓退步，看不出進步；第 8 步談先寫 eval 再開發，用的也是從低通過率開始的 capability 評估（本頁第 11 章）。這段交叉參照是整理者加的。</p>
+    </div>
+  </div>
+</section>
+
+<section id="coding-conversational" data-toc="寫程式與對話的 agent">
+  <div class="container head">
+    <p class="chapter">Chapter 05 · Evaluating coding agents · Evaluating conversational agents</p>
+    <h2><span class="seg">成功有好幾個面向，</span><span class="seg">就掛好幾種 grader</span></h2>
+    <p class="lede">寫程式的 agent 先用測試驗結果，再評 transcript；對話的 agent 還要評互動本身，常要另一個 LLM 扮演使用者。原文用兩份 YAML 示範一個 task 掛上多種 grader，也提醒實務上只用其中幾種。</p>
+    
+  </div>
+  <div class="cardband" id="card-06"><div class="cardlabel"><span class="n">圖卡 06 / 13</span><span class="t">一個 task 掛四種 grader</span><button type="button" class="zoom" data-card="06">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">agent 說退款辦好了，要四種 grader 各查一樣</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">原文的對話 agent 例子：一位不滿的客戶要退款。成功有好幾個面向，所以同一個 task 掛了四種 grader；對話本身要另一個 LLM 扮演客戶來跑</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:410px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:18px; font-weight:700; color:#FFFFFF;">一段模擬的客服對話</div>
+  <div style="position:absolute; left:60px; top:198px; width:410px; height:258px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:18px 24px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:13px; color:#8A93A0;">客戶（另一個 LLM 扮演）</div>
+    <div style="font-size:15px; color:#2B3340;">「等了兩週還沒退款，真的很火大。」</div>
+    <div style="font-size:13px; color:#8A93A0;">agent 查政策、驗身分、處理退款、寄確認信</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">agent：「退款已處理，確認信也寄出了。」</div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">說自己退好款了</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">說確認信寄出了</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">語氣聽起來很體貼</div></div>
+    <div style="font-size:13px; color:#8A93A0;">↑ 這幾句都是自述，不是證據</div>
+  </div>
+
+  <div style="position:absolute; left:580px; top:120px; font-size:20px; font-weight:700; color:#1C2431;">四種 grader（都寫在 task 定義裡，只查證據）</div>
+  <div style="position:absolute; left:580px; top:158px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">1</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">工單結案了嗎？退款處理了嗎？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">STATE_CHECK</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">查環境裡的最終狀態：tickets 是 resolved、refunds 是 processed，不看 agent 怎麼說</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:250px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">2</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">該呼叫的工具，都呼叫了嗎？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">TOOL_CALLS</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">verify_identity、process_refund（金額 ≤ 100）、send_confirmation 都要出現</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:342px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">3</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">10 輪之內結束了嗎？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">TRANSCRIPT</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">max_turns: 10；原文說成功的其中一個面向，就是不到 10 輪就完成</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:434px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">4</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">互動的品質夠好嗎？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">LLM_RUBRIC</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">三條 assertion：對客戶的不滿有同理心、解決方式講清楚、回答根據 fetch_policy 的結果</div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:545px; width:480px; height:130px; box-sizing:border-box; background-color:#1F2A3A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#FFFFFF;">判定：一個面向一個 grader</div>
+    <div style="font-size:14px; color:rgba(255,255,255,0.78); line-height:1.6;">狀態查結果、工具呼叫查過程、輪數查效率，<br>rubric 查互動本身；自述不在任何一道裡。</div>
+  </div>
+  <div style="position:absolute; left:580px; top:545px; width:960px; height:130px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">為什麼例子掛滿 grader</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">原文說這份和寫程式的那份例子，都是為了示範全部的 grader。實務上，對話 agent 多半用模型 grader<br>同時評溝通品質與目標達成，因為像回答問題這類 task，可能有好幾個「對」的解。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:695px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:716px; font-size:20px; font-weight:700; color:#1C2431;">寫程式與對話的 agent，實務上各自怎麼評</div>
+  <div style="position:absolute; left:60px; top:752px; font-size:16px; color:#2B3340;">① 寫程式：先用單元測試驗正確性，再用一份 LLM rubric 評整體程式品質；靜態分析、狀態、工具呼叫需要時才加。</div>
+  <div style="position:absolute; left:60px; top:784px; font-size:16px; color:#2B3340;">② 寫程式也要評 transcript：用啟發式的程式品質規則，加上有清楚 rubric 的模型 grader，評它怎麼呼叫工具、怎麼和使用者互動。</div>
+  <div style="position:absolute; left:60px; top:816px; font-size:16px; color:#2B3340;">③ 對話：常要另一個 LLM 扮演使用者；τ-Bench、τ2-Bench 就在零售客服、訂機票的情境裡，這樣模擬多輪互動。</div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左邊的對話是整理者編的示意；四種 grader 與它們查的內容取自原文的 YAML 例子（已精簡），兩份例子都另外追蹤輪數、token 與延遲。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M482 336L558 336" stroke="#9AA3AE" stroke-width="2" marker-end="url(#ag-c06)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p><strong>寫程式的 agent。</strong>它們寫程式、測試、除錯，在程式碼庫裡找路、執行指令，做的事很像一位開發者。作者說，好用的評估通常靠三樣東西：規格清楚的 task、穩定的測試環境、完整的測試。</p>
+    <p>確定性的 grader 很適合寫程式的 agent，因為軟體通常好評：程式能不能跑、測試有沒有過。兩個廣泛使用的基準都這樣做。SWE-bench Verified 拿熱門 Python 專案的 GitHub issue 當題目，用跑測試的方式評分：一個解法要修好原本失敗的測試，又不能弄壞既有的測試，才算通過；原文說 LLM 在這個 eval 上一年內從 40% 進步到超過 80%。Terminal-Bench 走另一條路，測端到端的技術任務，例如從原始碼編譯 Linux 核心、訓練一個機器學習模型。</p>
+    <p>有了一組驗證關鍵結果的通過或失敗測試之後，通常也值得評 transcript。啟發式的程式品質規則，可以評測試以外的程式品質；帶著清楚 rubric 的模型 grader，可以評 agent 怎麼呼叫工具、怎麼和使用者互動。原文用一個修補登入漏洞的 task 示範，下面是精簡改寫的版本：</p>
+    <div class="codeblock">
+      <span class="file">示意 · 寫程式 agent 的 task（依原文 YAML 精簡改寫，註解是整理者的）</span>
+<pre class="code"><span class="k">task</span>:
+  id: fix-auth-bypass            <span class="c"># 密碼欄空白時可以繞過登入，修掉它</span>
+  graders:
+    - type: <span class="s">deterministic_tests</span>  <span class="c"># 實務上的主力：單元測試驗正確性</span>
+      required: [test_empty_pw_rejected.py, test_null_pw_rejected.py]
+    - type: <span class="s">llm_rubric</span>           <span class="c"># 實務上的另一個：評整體程式品質</span>
+      rubric: prompts/code_quality.md
+    - type: <span class="s">static_analysis</span>      <span class="c"># 以下三種是示範，需要時才加</span>
+      commands: [ruff, mypy, bandit]
+    - type: <span class="s">state_check</span>          <span class="c"># 安全日誌裡要有一筆 auth_blocked</span>
+      expect: {security_logs: {event_type: auth_blocked}}
+    - type: <span class="s">tool_calls</span>           <span class="c"># 讀過 src/auth/ 底下的檔、改過檔、跑過測試</span>
+      required: [read_file, edit_file, run_tests]
+  <span class="k">tracked_metrics</span>:                <span class="c"># 不打分，只記錄</span>
+    transcript: [n_turns, n_toolcalls, n_total_tokens]
+    latency: [time_to_first_token, output_tokens_per_sec, time_to_last_token]</pre>
+    </div>
+    <p>作者特別說明，這個例子把能用的 grader 全部掛上去，是為了示範。實務上，寫程式的評估通常靠單元測試驗正確性，再用一份 LLM rubric 評整體的程式品質，其他 grader 與指標只在需要時才加。</p>
+    <p><strong>對話的 agent。</strong>它們在客服、銷售、教練這類領域和使用者互動。和傳統聊天機器人不同，它們會記住狀態、使用工具、在對話中途採取行動。寫程式與研究的 agent 也可能和使用者來回很多輪，但對話 agent 有一個獨特的難處：互動本身的品質就是評估的一部分。好的評估通常靠兩樣東西：可以驗證的最終狀態，以及同時涵蓋任務完成與互動品質的 rubric。和大部分 eval 不同，它們常需要第二個 LLM 來扮演使用者；作者說 Anthropic 的對齊稽核 agent（alignment auditing agents）也用這個方法，透過長時間、對抗性的對話對模型做壓力測試。</p>
+    <p>對話 agent 的成功可能有好幾個面向：工單解決了嗎（狀態檢查）、10 輪之內結束了嗎（transcript 的限制）、語氣恰當嗎（LLM rubric）。τ-Bench 與後繼的 τ2-Bench 兩個基準都納入了這種多面向：它們在零售客服、訂機票這類領域模擬多輪互動，由一個模型照設定好的人設扮演使用者，agent 在擬真的情境裡應對。原文的第二個例子是處理一位不滿客戶的退款：</p>
+    <div class="codeblock">
+      <span class="file">示意 · 對話 agent 的 grader（依原文 YAML 精簡改寫，assertion 譯成中文）</span>
+<pre class="code"><span class="k">graders</span>:
+  - type: <span class="s">llm_rubric</span>         <span class="c"># 互動本身的品質</span>
+    rubric: prompts/support_quality.md
+    assertions:
+      - <span class="s">"對客戶的不滿表現出同理心"</span>
+      - <span class="s">"把解決方式講清楚"</span>
+      - <span class="s">"回答根據 fetch_policy 工具的結果"</span>
+  - type: <span class="s">state_check</span>        <span class="c"># 環境裡的最終狀態</span>
+    expect: {tickets: resolved, refunds: processed}
+  - type: <span class="s">tool_calls</span>
+    required: [verify_identity, process_refund(amount &lt;= 100), send_confirmation]
+  - type: <span class="s">transcript</span>
+    max_turns: 10</pre>
+    </div>
+    <p>和寫程式的例子一樣，這個 task 掛上多種 grader 是為了示範。實務上，對話 agent 的評估通常用模型 grader 同時評溝通品質與目標達成，因為很多 task（例如回答一個問題）可能有好幾個「對」的解。</p>
+    <div class="explain bronze">
+      <span class="label">實作提示</span>
+      <h4>先寫出成功的面向，再替每個面向挑 grader</h4>
+      <p>兩份例子的共同做法是：把「成功」拆成幾個可以各自檢查的面向，再替每個面向找最便宜、夠可靠的 grader。結果在環境裡的，用狀態檢查；過程有硬規則的，用工具呼叫或輪數；互動品質這種主觀的，才交給 rubric。這段是整理者對兩個例子的歸納。</p>
+    </div>
+  </div>
+</section>
+
+<section id="research-computer-use" data-toc="研究與操作電腦的 agent">
+  <div class="container head">
+    <p class="chapter">Chapter 06 · Evaluating research agents · Computer use agents</p>
+    <h2><span class="seg">研究看來源，</span><span class="seg">操作電腦看狀態</span></h2>
+    <p class="lede">研究報告好不好要看任務，所以拆成有沒有來源、涵蓋夠不夠、來源可不可靠幾種檢查，再跟專家校準；操作電腦的 agent 要放進真的或沙盒環境跑，查它是不是真的把事情做成了。</p>
+    
+  </div>
+  <div class="cardband" id="card-07"><div class="cardlabel"><span class="n">圖卡 07 / 13</span><span class="t">研究看來源，操作電腦看狀態</span><button type="button" class="zoom" data-card="07">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">研究看來源撐不撐得住，操作電腦看狀態變了沒</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">兩類 agent 的成功，都不能只看它交出的文字：研究報告要對回檢索到的來源，操作電腦要到環境裡查，事情是不是真的發生了</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">RESEARCH AGENTS</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">研究：好不好要看任務，拆成幾種檢查</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">COMPUTER USE AGENTS</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">操作電腦：在環境裡跑，查結果真的發生了</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:190px; top:222px; width:440px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">研究報告：蒐集、綜合、分析之後的答案</div>
+  <div style="position:absolute; left:60px; top:304px; width:340px; height:70px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">有來源撐腰嗎</div><div style="font-size:12.5px; color:#6B7380;">groundedness：主張對得上檢索到的來源</div></div>
+  <div style="position:absolute; left:420px; top:304px; width:340px; height:70px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">該有的都有嗎</div><div style="font-size:12.5px; color:#6B7380;">coverage：好答案必須包含的關鍵事實</div></div>
+  <div style="position:absolute; left:60px; top:388px; width:340px; height:70px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">來源夠權威嗎</div><div style="font-size:12.5px; color:#6B7380;">source quality：不只是第一個搜到的</div></div>
+  <div style="position:absolute; left:420px; top:388px; width:340px; height:70px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">客觀題答對了嗎</div><div style="font-size:12.5px; color:#6B7380;">exact match：例如 X 公司第三季的營收</div></div>
+  <div style="position:absolute; left:60px; top:470px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">另外用 LLM 標出沒根據的主張與涵蓋的缺口，也評綜合得是否連貫、完整。</div>
+  <div style="position:absolute; left:60px; top:500px; width:700px; height:58px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center; gap:14px;">
+    <div style="flex-shrink:0; padding:4px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">三個難處</div>
+    <div style="font-size:13.5px; color:#2B3340; line-height:1.5;">專家可能意見不一；參考資料一直在變，標準答案跟著移動；<br>輸出越長、越開放，出錯的空間就越大</div>
+  </div>
+
+  <div style="position:absolute; left:970px; top:222px; width:440px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">agent 用截圖、點擊、鍵盤、捲動操作軟體</div>
+  <div style="position:absolute; left:860px; top:300px; width:680px; height:158px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #D5DAE1; border-radius:10px;"></div>
+  <div style="position:absolute; left:880px; top:311px; font-size:14px; font-weight:700; color:#1C2431;">放進真的或沙盒環境，跑完之後查</div>
+  <div style="position:absolute; left:880px; top:342px; width:640px; height:30px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:13.5px; color:#2B3340;">WebArena：網址與頁面狀態對不對</div>
+  <div style="position:absolute; left:880px; top:378px; width:640px; height:30px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:13.5px; font-weight:700; color:#2E7B4F;">會改資料的 task 查後端：訂單真的成立，不只是確認頁出現了</div>
+  <div style="position:absolute; left:880px; top:414px; width:640px; height:30px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:13.5px; color:#2B3340;">OSWorld：檔案系統、應用程式設定、資料庫內容、UI 元件屬性</div>
+  <div style="position:absolute; left:840px; top:470px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">瀏覽器 agent 另有一個取捨：token 用量對延遲</div>
+  <div style="position:absolute; left:840px; top:500px; width:340px; height:58px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">讀 DOM：快，但吃 token</div><div style="font-size:12.5px; color:#6B7380;">例：請 Claude 摘要維基百科</div></div></div>
+  <div style="position:absolute; left:1200px; top:500px; width:340px; height:58px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">看截圖：慢，但省 token</div><div style="font-size:12.5px; color:#6B7380;">例：在 Amazon 找新的筆電包</div></div></div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">研究的 rubric，要常跟專家校準</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">什麼算完整、有來源、甚至正確，要看任務：<br>市場掃描、併購前的盡職調查、科學報告，標準都不同。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">BrowseComp 的題目在整個網路上撈針：容易驗證，很難解。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">連選對工具都要評</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">作者說 Claude for Chrome 的 eval，就在檢查 agent 有沒有<br>依情境選對 DOM 或截圖，瀏覽器任務因此做得更快、更準。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">WebArena 測瀏覽器上的任務，OSWorld 擴大到整個作業系統。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩類並排是整理者的畫法，原文各是一節、沒有互相比較；檢查項目與基準的例子都取自原文，所以不用 ✗／✓。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M410 272V288H230V302" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M410 288H590V302" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M1190 272V298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p><strong>做研究的 agent。</strong>它們蒐集、綜合、分析資訊，最後交出一個答案或一份報告。寫程式的 agent 有單元測試給出通過或失敗的二元訊號；研究的品質卻只能相對於任務來判斷。什麼算「完整」、「來源充分」，甚至什麼算「正確」，都要看情境：市場掃描、併購前的盡職調查、科學報告，各自需要不同的標準。</p>
+    <p>作者列了研究評估獨有的三個難處：專家可能對一份綜合夠不夠完整意見不一；參考內容一直在變，標準答案也跟著移動；輸出越長、越開放，出錯的空間就越大。像 BrowseComp 這樣的基準，測的是 agent 能不能在整個開放網路上大海撈針：題目刻意設計成容易驗證、但很難解。</p>
+    <p>建立研究 agent 評估的一個策略，是把幾種 grader 組合起來：</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>檢查</th><th>查什麼</th></tr></thead>
+        <tbody>
+          <tr><td>有據檢查<br>（groundedness）</td><td>報告裡的主張，有檢索到的來源撐腰</td></tr>
+          <tr><td>涵蓋檢查<br>（coverage）</td><td>先定義一個好答案必須包含的關鍵事實，再逐條核對</td></tr>
+          <tr><td>來源品質檢查<br>（source quality）</td><td>參考的來源夠權威，不只是第一個搜到的</td></tr>
+          <tr><td>完全比對<br>（exact match）</td><td>有客觀正解的題目，例如「X 公司第三季的營收是多少」</td></tr>
+          <tr><td>LLM grader</td><td>標出沒有根據的主張與涵蓋的缺口，也評開放式的綜合是否連貫、完整</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>因為研究品質有主觀的成分，作者說用 LLM 的 rubric 要經常拿專家的人工判斷校準，才評得準。</p>
+    <p><strong>操作電腦的 agent。</strong>它們和人用同一個介面操作軟體：截圖、滑鼠點擊、鍵盤輸入、捲動，而不是透過 API 或執行程式碼。只要有圖形介面的應用程式都能用，從設計工具到老舊的企業軟體。評估的做法，是把 agent 放進真實或沙盒環境，讓它使用軟體，再檢查它有沒有達成預期的結果。</p>
+    <p>原文舉了兩個基準。WebArena 測瀏覽器上的任務，用網址與頁面狀態檢查 agent 有沒有走到對的地方；會修改資料的任務，還要驗證後端的狀態，例如確認訂單真的成立了，而不只是出現了確認頁面。OSWorld 把範圍擴大到整個作業系統，任務結束後由評估腳本檢查各種產物：檔案系統的狀態、應用程式的設定、資料庫的內容、UI 元件的屬性。</p>
+    <p>瀏覽器 agent 還有一個取捨：token 用量和延遲。</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>互動方式</th><th>速度</th><th>token</th><th>原文的例子</th></tr></thead>
+        <tbody>
+          <tr><td>讀 DOM</td><td>快</td><td>用得多</td><td>請 Claude 摘要維基百科時，直接取 DOM 裡的文字比較有效率</td></tr>
+          <tr><td>看截圖</td><td>慢</td><td>比較省</td><td>在 Amazon 找新的筆電包時，截圖比較有效率，因為取出整個 DOM 很吃 token</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>作者說，他們替 Claude for Chrome 做了 eval，專門檢查 agent 在每個情境有沒有選對工具，讓瀏覽器上的任務做得更快、也更準確。</p>
+    <div class="explain stone">
+      <span class="label">整理者的觀察</span>
+      <h4>兩類的共同點：查說法背後的東西</h4>
+      <p>研究 agent 的報告寫得再流暢，有據檢查仍要對回檢索到的來源；操作電腦的 agent 走到確認頁，後端檢查仍要確認訂單真的存在。兩類都不以 agent 交出的文字或畫面為準，這和第 1 章 transcript 與 outcome 的區分是同一件事。原文沒有把兩節並列，這是整理者的對照。</p>
+    </div>
+  </div>
+</section>
+
+<section id="non-determinism" data-toc="pass@k 與 pass^k">
+  <div class="container head">
+    <p class="chapter">Chapter 07 · How to think about non-determinism in evaluations for agents</p>
+    <h2><span class="seg">要一次成功還是每次成功，</span><span class="seg">指標不一樣</span></h2>
+    <p class="lede">同一個 task 這次過了，下次可能不過。pass@k 問 k 次裡至少成功一次的機率，k 越大越高；pass^k 問 k 次全部成功的機率，k 越大越低。</p>
+    
+  </div>
+  <div class="cardband" id="card-08"><div class="cardlabel"><span class="n">圖卡 08 / 13</span><span class="t">pass@k 與 pass^k</span><button type="button" class="zoom" data-card="08">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">k 越大，pass@k 越高，pass^k 越低</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">同一個 task 每次跑的結果不一樣：pass@k 是 k 次裡至少成功一次的機率，pass^k 是 k 次全部成功的機率；兩條線從同一點出發</div>
+
+  <div style="position:absolute; left:60px; top:136px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>pass@k：k 次裡至少一次成功</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>pass^k：k 次全部成功</div>
+    <div style="color:#8A93A0;">點的位置依原文圖 3 目測</div>
+  </div>
+
+  <div style="position:absolute; left:180px; top:190px; width:900px; height:1px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:272px; width:900px; height:1px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:355px; width:900px; height:1px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:437px; width:900px; height:1px; background-color:#EEF1F5;"></div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <polyline points="180,279 280,213 380,196 480,192 580,190 680,190 780,190 880,190 980,190 1080,190" stroke="#6B7380" stroke-width="1.5" fill="none"></polyline>
+    <polyline points="180,279 280,344 380,392 480,427 580,453 680,472 780,485 880,493 980,502 1080,507" stroke="#6B7380" stroke-width="1.5" stroke-dasharray="5 4" fill="none"></polyline>
+  </svg>
+
+  <div style="position:absolute; left:190px; top:160px; font-size:12px; color:#8A93A0;">↑ 成功率（%）</div>
+  <div style="position:absolute; left:122px; top:181px; width:40px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">100</div>
+  <div style="position:absolute; left:122px; top:264px; width:40px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">75</div>
+  <div style="position:absolute; left:122px; top:346px; width:40px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">50</div>
+  <div style="position:absolute; left:122px; top:429px; width:40px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">25</div>
+  <div style="position:absolute; left:122px; top:511px; width:40px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">0</div>
+  <div style="position:absolute; left:160px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">1</div>
+  <div style="position:absolute; left:260px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">2</div>
+  <div style="position:absolute; left:360px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">3</div>
+  <div style="position:absolute; left:460px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">4</div>
+  <div style="position:absolute; left:560px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">5</div>
+  <div style="position:absolute; left:660px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">6</div>
+  <div style="position:absolute; left:760px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">7</div>
+  <div style="position:absolute; left:860px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">8</div>
+  <div style="position:absolute; left:960px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">9</div>
+  <div style="position:absolute; left:1060px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">10</div>
+  <div style="position:absolute; left:880px; top:552px; width:200px; text-align:right; font-size:12px; color:#8A93A0;">試跑次數 k →</div>
+
+  <div style="position:absolute; left:271px; top:204px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:371px; top:187px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:471px; top:183px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:571px; top:181px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:671px; top:181px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:771px; top:181px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:871px; top:181px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:971px; top:181px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1071px; top:181px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+
+  <div style="position:absolute; left:271px; top:335px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:371px; top:383px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:471px; top:418px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:571px; top:444px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:671px; top:463px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:771px; top:476px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:871px; top:484px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:971px; top:493px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:1071px; top:498px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+
+  <div style="position:absolute; left:168px; top:267px; width:24px; height:24px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:173px; top:272px; width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>
+
+  <div style="position:absolute; left:200px; top:270px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; font-weight:700; color:#1F2A3A;">k＝1：兩者相等，都是每次試跑的成功率</div>
+  <div style="position:absolute; left:392px; top:208px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; color:#2B3340;">pass@3：<span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">97%</span>（原圖的標注）</div>
+  <div style="position:absolute; left:398px; top:358px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; color:#2B3340;">pass^3：<span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">39%</span>（原圖的標注）</div>
+  <div style="position:absolute; left:996px; top:156px; white-space:nowrap; font-size:13px; font-weight:700; color:#1F2A3A;">趨近 100%</div>
+  <div style="position:absolute; left:1004px; top:468px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; font-weight:700; color:#1F2A3A;">掉向 0%</div>
+
+  <div style="position:absolute; left:1120px; top:170px; width:420px; height:316px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 24px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-size:17px; font-weight:700; color:#1C2431;">怎麼讀這張圖</div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#1F2A3A; margin-top:2px;">01</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">k＝1 時兩條線重疊，<br>都等於每一次試跑的成功率。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#1F2A3A; margin-top:2px;">02</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">pass@k：k 次裡至少一次成功。<br>給的機會越多，越接近 100%。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#1F2A3A; margin-top:2px;">03</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">pass^k：k 次全部成功。<br>每次都要一致，k 越大越難，掉向 0%。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#1F2A3A; margin-top:2px;">04</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">到了 k＝10，<br>兩條線講的是相反的故事。</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">一半的 task 第一次就過</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">pass@1 是 50%，表示有一半的 task<br>第一次嘗試就成功；寫程式最常看它。</div>
+    <div style="font-size:13px; color:#8A93A0;">一次成功就夠的工具，看 pass@k。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">每次 75%，連過三次約 42%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">三次全過的機率是 (0.75)³ ≈ 42%。<br>面對客戶的 agent，使用者期待每次都可靠。</div>
+    <div style="font-size:13px; color:#8A93A0;">一致性是必要條件時，看 pass^k。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">每個 task 有自己的成功率</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">同一個 agent 可能一題 90%、另一題 50%；<br>這次過了的題，下次可能不過。</div>
+    <div style="font-size:13px; color:#8A93A0;">所以同一題要跑好幾次 trial（第 02 卡）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：依原文圖 3 重畫，點的位置依原圖目測，只標原文寫出的數字；圖上的 97%、39% 和正文 75% 的算例是兩組不同的例子。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c08" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M180 520V178" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M180 520H1094" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M280 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M380 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M480 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M580 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M680 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M780 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M880 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M980 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M1080 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>不管是哪一類 agent，每次跑的行為都會不一樣，所以評估結果比表面上難解讀。每個 task 有自己的成功率，也許一題 90%、另一題 50%；這次 eval 過了的 task，下次可能就不過。有時候真正想量的，是 agent 在一個 task 上成功的比例，也就是幾次 trial 裡有幾次成功。原文用兩個指標抓這個細節：</p>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="big">50<small>% pass@1</small></div><div class="label">一半的題目第一次就過</div><div class="note">pass@1 是 50%，表示模型在這組 eval 裡，有一半的 task 第一次嘗試就成功。</div></div>
+      <div class="stat-card bronze"><div class="big">≈42<small>% pass^3</small></div><div class="label">每次 75%，連過三次</div><div class="note">每次 trial 的成功率 75%、跑 3 次，三次全過的機率是 (0.75)³，約 42%。</div></div>
+    </div>
+    <p><strong>pass@k</strong> 量的是 agent 在 k 次嘗試裡，至少拿出一個正確解的可能性。k 越大，pass@k 越高：射門的次數越多，至少進一球的機會就越大。寫程式時，通常最在意的是 agent 第一次就找到解，也就是 pass@1；在其他情境裡，提出很多個解是可以接受的，只要其中一個能用就好。</p>
+    <p><strong>pass^k</strong> 量的是 k 次 trial 全部成功的機率。k 越大，pass^k 越低，因為要在更多次 trial 裡都保持一致，門檻更難跨過。面對客戶的 agent 特別要看這個指標，因為使用者期待它每一次都表現可靠。</p>
+    <div class="codeblock">
+      <span class="file">示意 · 兩個指標的算法（整理者的補充，假設每次 trial 獨立、成功率都是 p）</span>
+<pre class="code"><span class="c"># pass^k：k 次全部成功</span>
+pass^k = p^k                 <span class="c"># 原文的例子：0.75^3 ≈ 0.42</span>
+<span class="c"># pass@k：至少一次成功 = 1 減掉「k 次全部失敗」</span>
+pass@k = 1 - (1 - p)^k      <span class="c"># k = 1 時兩者都等於 p</span></pre>
+    </div>
+    <p>原文的第三張圖把兩條線畫在一起：隨著 trial 次數增加，兩者越分越開。k＝1 時它們完全相同，都等於每次 trial 的成功率；到了 k＝10，它們講的是相反的故事：pass@k 逼近 100%，pass^k 掉到 0%。圖上那個例子標的是：跑 3 次，pass@3 到 97%，pass^3 掉到 39%。</p>
+    <p>兩個指標都有用，選哪一個看產品需求：只要成功一次就夠的工具，看 pass@k；一致性是必要條件的 agent，看 pass^k。</p>
+    <div class="thought">
+      <span class="label">整理者的思考題 · 01</span>
+      <h4>你的 agent，使用者只給它一次機會，還是會重試到成功為止？</h4>
+      <p>想一個你的 agent 最常被用的情境：使用者看到第一次的結果就離開，還是會叫它重來、從幾個答案裡挑一個？</p>
+      <p class="hint">前者要看 pass^k（或至少 pass@1），後者看 pass@k 比較貼近實際體驗。同一個 task 要跑好幾次 trial，兩個指標才算得出來。</p>
+    </div>
+  </div>
+</section>
+
+<section id="roadmap-start" data-toc="路線圖與起步">
+  <div class="container head">
+    <p class="chapter">Chapter 08 · Going from zero to one · Steps 0–1</p>
+    <h2><span class="seg">別等題庫夠大，</span><span class="seg">20 到 50 個就能起步</span></h2>
+    <p class="lede">原文把從沒有 eval 到值得信任的 eval 排成九步、分三段：蒐集 task、設計 harness 與 grader、長期維護。第一段的前兩步是：現在就開始，先從你本來就在手動檢查的東西下手。</p>
+    
+  </div>
+  <div class="cardband" id="card-09"><div class="cardlabel"><span class="n">圖卡 09 / 13</span><span class="t">路線圖：第 0 步就開始</span><button type="button" class="zoom" data-card="09">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">第 0 步就開始：20 到 50 個真實失敗就夠</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">原文的路線圖分三段、從第 0 步編到第 8 步：先蒐集 task，再設計 harness 與 grader，最後長期維護；這一張的重點是第一段的前兩步</div>
+
+  <div style="position:absolute; left:60px; top:158px; width:648px; height:28px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:14px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:500; color:#4B5866;">第一段 · 蒐集 task（第 0 到 3 步）</div>
+  <div style="position:absolute; left:724px; top:158px; width:316px; height:28px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:14px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:500; color:#4B5866;">第二段 · harness 與 grader</div>
+  <div style="position:absolute; left:1056px; top:158px; width:482px; height:28px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:14px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:500; color:#4B5866;">第三段 · 長期維護與使用</div>
+
+  <div style="position:absolute; left:60px; top:196px; width:150px; height:160px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 12px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.1em; color:#2E7B4F;">STEP 0</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">現在就開始</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">20 到 50 個<br>真實失敗就夠</div>
+    <div style="margin-top:auto; font-size:12px; font-weight:700; color:#2E7B4F;">本章</div>
+  </div>
+  <div style="position:absolute; left:226px; top:196px; width:150px; height:160px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 12px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.1em; color:#2E7B4F;">STEP 1</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">從手動檢查下手</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">發版前的檢查、<br>bug 與客服佇列</div>
+    <div style="margin-top:auto; font-size:12px; font-weight:700; color:#2E7B4F;">本章</div>
+  </div>
+  <div style="position:absolute; left:392px; top:196px; width:150px; height:160px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 12px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.1em; color:#8A93A0;">STEP 2</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">寫清楚的 task</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">專家判得一樣，<br>附上參考解</div>
+    <div style="margin-top:auto; font-size:12px; color:#8A93A0;">第 10 卡</div>
+  </div>
+  <div style="position:absolute; left:558px; top:196px; width:150px; height:160px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 12px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.1em; color:#8A93A0;">STEP 3</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">正反兩面都測</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">該做、不該做的<br>情況都要有</div>
+    <div style="margin-top:auto; font-size:12px; color:#8A93A0;">第 10 卡</div>
+  </div>
+  <div style="position:absolute; left:724px; top:196px; width:150px; height:160px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 12px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.1em; color:#8A93A0;">STEP 4</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">穩定的 harness</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">每次 trial 都<br>從乾淨環境開始</div>
+    <div style="margin-top:auto; font-size:12px; color:#8A93A0;">第 11 卡</div>
+  </div>
+  <div style="position:absolute; left:890px; top:196px; width:150px; height:160px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 12px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.1em; color:#8A93A0;">STEP 5</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">用心設計 grader</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">評產出不評路徑，<br>判官要校準</div>
+    <div style="margin-top:auto; font-size:12px; color:#8A93A0;">第 11 卡</div>
+  </div>
+  <div style="position:absolute; left:1056px; top:196px; width:150px; height:160px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 12px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.1em; color:#8A93A0;">STEP 6</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">讀 transcript</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">失敗公不公平，<br>讀了才知道</div>
+    <div style="margin-top:auto; font-size:12px; color:#8A93A0;">第 12 卡</div>
+  </div>
+  <div style="position:absolute; left:1222px; top:196px; width:150px; height:160px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 12px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.1em; color:#8A93A0;">STEP 7</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">盯著飽和</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">接近 100%，<br>就看不出進步</div>
+    <div style="margin-top:auto; font-size:12px; color:#8A93A0;">第 12 卡</div>
+  </div>
+  <div style="position:absolute; left:1388px; top:196px; width:150px; height:160px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 12px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.1em; color:#8A93A0;">STEP 8</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">長期維護</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">專責團隊管設施，<br>大家貢獻 task</div>
+    <div style="margin-top:auto; font-size:12px; color:#8A93A0;">第 12 卡</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:388px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">口訣</div>
+    <div style="font-size:15px; color:#2B3340;">原文把這條路叫做 eval 驅動的 agent 開發：早點定義成功、清楚地量、持續迭代。這一條路從完全沒有 eval，走到可以信任的 eval。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:474px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:494px; font-size:20px; font-weight:700; color:#1C2431;">第一段的前兩步，加上一條提醒</div>
+
+  <div style="position:absolute; left:60px; top:536px; width:470px; height:226px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">第 0 步：20 到 50 個就夠</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">很多團隊以為要幾百個 task 才能開始。<br>早期每次改動的影響都很明顯，效果大，<br>小樣本就看得出來；先用 80/20 的做法。<br>成熟的 agent 才需要更大、更難的題組。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文的說法：從真實失敗裡挑簡單的 task。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:536px; width:470px; height:226px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">第 1 步：從手動檢查開始</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">發版前會確認的行為、使用者常做的事；<br>已經上線的話，去翻 bug 追蹤與客服佇列，<br>把使用者回報的失敗變成 task，<br>再依對使用者的影響排優先順序。</div>
+    <div style="font-size:13px; color:#8A93A0;">這樣題組才會反映真實的用法。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:536px; width:470px; height:226px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">越晚開始，越難建</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">早期，產品需求很自然就能寫成測試案例；<br>拖得太久，就得從一個已經上線的系統，<br>倒過來推出成功的標準。<br>這也是第 0 步叫你現在就開始的理由。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說 eval 拖得越久越難建。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：九格的名稱是整理者依原文圖 4 與各步小標譯的；每格下方指向本組講那一步的卡。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M212 268L224 276L212 284Z" fill="#9AA3AE"></path>
+    <path d="M378 268L390 276L378 284Z" fill="#9AA3AE"></path>
+    <path d="M544 268L556 276L544 284Z" fill="#9AA3AE"></path>
+    <path d="M710 268L722 276L710 284Z" fill="#9AA3AE"></path>
+    <path d="M876 268L888 276L876 284Z" fill="#9AA3AE"></path>
+    <path d="M1042 268L1054 276L1042 284Z" fill="#9AA3AE"></path>
+    <path d="M1208 268L1220 276L1208 284Z" fill="#9AA3AE"></path>
+    <path d="M1374 268L1386 276L1374 284Z" fill="#9AA3AE"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>原文的後半是一張路線圖。作者說這是他們在實務中驗證過的建議，帶你從完全沒有 eval，走到可以信任的 eval；他們把它叫做 eval 驅動的 agent 開發：早點定義成功、清楚地量、持續迭代。九步分成三段，本頁用四章走完：</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>段</th><th>步驟</th><th>本頁</th></tr></thead>
+        <tbody>
+          <tr><td>蒐集初始題組的 task</td><td>第 0 步 早點開始<br>第 1 步 從手動檢查開始<br>第 2 步 寫沒有歧義的 task，附參考解<br>第 3 步 正反兩面都有的題組</td><td>第 8、9 章</td></tr>
+          <tr><td>設計 harness 與 grader</td><td>第 4 步 穩定、隔離的 harness<br>第 5 步 用心設計 grader</td><td>第 10 章</td></tr>
+          <tr><td>長期維護與使用</td><td>第 6 步 讀 transcript<br>第 7 步 盯著 capability 評估的飽和<br>第 8 步 開放貢獻、持續維護</td><td>第 11 章</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>第 0 步：早點開始。</strong>作者看到很多團隊遲遲不建 eval，因為以為需要好幾百個 task。實際上，從真實失敗裡挑出 20 到 50 個簡單的 task，就是很好的起點。道理在於：agent 開發的早期，系統的每次改動通常都有明顯、看得出來的影響；效果這麼大，小樣本就夠了。比較成熟的 agent 可能需要更大、更難的題組，才偵測得到比較小的效果；但一開始最好採 80/20 的做法。</p>
+    <p>eval 拖得越久越難建。早期，產品需求可以很自然地轉成測試案例；等太久，就變成要從一個已經上線的系統反推成功標準。</p>
+    <p><strong>第 1 步：從你已經在手動測的開始。</strong>先把開發時手動做的檢查寫下來：每次發版前會確認的行為、終端使用者常做的任務。已經上線的話，就去翻 bug 追蹤系統與客服佇列。把使用者回報的失敗轉成測試案例，題組才會反映真實的用法；再依對使用者的影響排優先順序，力氣就花在要緊的地方。</p>
+    <div class="explain bronze">
+      <span class="label">實作提示</span>
+      <h4>前 20 個 task 可以從哪裡來</h4>
+      <ul>
+        <li>發版前的手動檢查清單：每一條「我會試試看它能不能…」都是一個 task。</li>
+        <li>bug 追蹤系統裡已經修好的 agent 問題：修好了，正好拿來當 regression 題。</li>
+        <li>客服佇列裡重複出現的抱怨：依對使用者的影響排序，先寫影響最大的。</li>
+      </ul>
+      <p>這份清單是整理者依第 1 步的建議展開的。</p>
+    </div>
+  </div>
+</section>
+
+<section id="task-quality" data-toc="好的 task">
+  <div class="container head">
+    <p class="chapter">Chapter 09 · Steps 2–3 · Unambiguous tasks, balanced problem sets</p>
+    <h2><span class="seg">好的 task，</span><span class="seg">兩位專家會判出同一個結果</span></h2>
+    <p class="lede">task 寫得含糊，雜訊就跑進指標裡。每個 task 要讓照指示做的 agent 過得了，要有一份能通過所有 grader 的參考解；整組題目還要把該做與不該做的情況都測到。</p>
+    
+  </div>
+  <div class="cardband" id="card-10"><div class="cardlabel"><span class="n">圖卡 10 / 13</span><span class="t">好的 task 要過三道檢查</span><button type="button" class="zoom" data-card="10">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">好的 task，兩位專家會判出同一個結果</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2 步：task 規格含糊，雜訊就跑進指標裡。一個候選 task 依序過三道檢查才放進題組，最後還要看整組是不是正反兩面都有（第 3 步）</div>
+
+  <div style="position:absolute; left:60px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:700; color:#FFFFFF;">一個候選 task</div>
+  <div style="position:absolute; left:360px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#1C2431; line-height:1.3;"><div>兩位專家各自判，<br>結論一樣嗎？</div></div>
+  <div style="position:absolute; left:660px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#1C2431; line-height:1.3;"><div>grader 查的，<br>task 裡都寫了嗎？</div></div>
+  <div style="position:absolute; left:960px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#1C2431; line-height:1.3;"><div>有參考解能通過<br>所有 grader 嗎？</div></div>
+  <div style="position:absolute; left:1260px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#FFFFFF; line-height:1.3;"><div>放進題組，<br>再看整組平不平衡</div></div>
+
+  <div style="position:absolute; left:610px; top:196px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#6B7380;">是</div>
+  <div style="position:absolute; left:910px; top:196px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#6B7380;">是</div>
+  <div style="position:absolute; left:1210px; top:196px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#2E7B4F;">是</div>
+  <div style="position:absolute; left:486px; top:280px; font-size:13px; font-weight:700; color:#C8501F;">否</div>
+  <div style="position:absolute; left:786px; top:280px; font-size:13px; font-weight:700; color:#C8501F;">否</div>
+  <div style="position:absolute; left:1086px; top:280px; font-size:13px; font-weight:700; color:#C8501F;">否</div>
+
+  <div style="position:absolute; left:360px; top:330px; width:230px; height:124px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:16px 18px; display:flex; flex-direction:column; justify-content:center; gap:6px;">
+    <div style="font-size:15px; font-weight:700; color:#C8501F;">規格含糊</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">含糊會變成指標裡的雜訊；<br>專家自己都做不出來的，<br>也要回頭改題目</div>
+  </div>
+  <div style="position:absolute; left:660px; top:330px; width:230px; height:124px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:16px 18px; display:flex; flex-direction:column; justify-content:center; gap:6px;">
+    <div style="font-size:15px; font-weight:700; color:#C8501F;">照指示做也會失敗</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;"><span style="white-space:nowrap">Terminal-Bench</span> 的稽核：<br>task 沒寫檔案路徑，<br>測試卻假設了某個路徑</div>
+  </div>
+  <div style="position:absolute; left:960px; top:330px; width:230px; height:124px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:16px 18px; display:flex; flex-direction:column; justify-content:center; gap:6px;">
+    <div style="font-size:15px; font-weight:700; color:#C8501F;">不知道解不解得出來</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">參考解證明題目解得出來，<br>也驗證 grader 的設定對了</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:486px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:506px; font-size:20px; font-weight:700; color:#1C2431;">整組題目的兩條規則，加上作者的例子</div>
+  <div style="position:absolute; left:60px; top:550px; width:470px; height:206px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">0% pass@100，多半是題壞了</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">前沿模型跑了很多次都是 0%，<br>最常見的原因是 task 壞了，<br>而不是 agent 做不到；先回頭檢查規格與 grader。</div>
+    <div style="font-size:13px; color:#8A93A0;">每個 task 都要讓照指示做的 agent 過得了。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:550px; width:470px; height:206px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">正反兩面都要測</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">只測「該搜尋時有沒有搜」，最後會得到<br>一個幾乎什麼都搜的 agent；單邊的 eval<br>帶來單邊的最佳化。</div>
+    <div style="font-size:13px; color:#8A93A0;">所以要避免類別不平衡的題組。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:550px; width:470px; height:206px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">作者的例子：網頁搜尋</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">作者說替 Claude.ai 的網頁搜尋做 eval 時，<br>兩邊都測：該搜的（查天氣），<br>和該直接答的（誰創立了 Apple）。</div>
+    <div style="font-size:13px; color:#8A93A0;">兩邊的平衡花了好幾輪，prompt 與 eval 一起改。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三道檢查的順序是整理者排的，內容都出自原文第 2 步；「專家自己做得出來嗎」也是原文的問法，rubric 寫得含糊一樣會判得不一致。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M290 222L358 222" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M590 222L658 222" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M890 222L958 222" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M1190 222L1258 222" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c10)"></path>
+    <path d="M475 254L475 328" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c10)"></path>
+    <path d="M775 254L775 328" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c10)"></path>
+    <path d="M1075 254L1075 328" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c10)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p><strong>第 2 步：寫沒有歧義的 task，附上參考解。</strong>作者說，把 task 的品質做對，比看起來難。好的 task 是兩位領域專家各自判，會得到同樣的通過或失敗結論。再問一句：專家自己做得出這道題嗎？做不到，task 就要再改。task 規格裡的含糊，最後會變成指標裡的雜訊；模型 grader 的評分標準也一樣，含糊的 rubric 會產生不一致的判斷。</p>
+    <p>每個 task 都要讓照指示正確做事的 agent 過得了，這一點可能很細微。作者舉 Terminal-Bench 的稽核為例：有個 task 要 agent 寫一支腳本，卻沒有指定檔案路徑，測試又假設腳本在某個特定路徑，agent 就可能在自己沒有錯的情況下失敗。grader 會檢查的每一件事，都應該在 task 描述裡寫清楚；agent 不該因為規格含糊而失敗。</p>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="big">2<small>位專家</small></div><div class="label">各自判，結論要一樣</div><div class="note">兩位領域專家獨立判同一個 task，應該得到同樣的通過或失敗結論；判不一樣，就是規格還含糊。</div></div>
+      <div class="stat-card bronze"><div class="big">0<small>% pass@100</small></div><div class="label">跑很多次都是零</div><div class="note">前沿模型在很多次 trial 裡通過率都是 0%，最常見的原因是 task 壞了，而不是 agent 做不到；這時先回頭檢查 task 規格與 grader。</div></div>
+    </div>
+    <p>作者建議替每個 task 準備一份參考解：一份已知能用、通過所有 grader 的輸出。它證明這道題解得出來，也驗證 grader 的設定是對的。</p>
+    <p><strong>第 3 步：建立平衡的題組。</strong>某個行為該出現的情況要測，不該出現的情況也要測。單邊的 eval 會帶來單邊的最佳化：如果只測 agent 在該搜尋時有沒有搜尋，最後可能得到一個幾乎什麼都要搜尋的 agent。所以要避免類別不平衡的題組。</p>
+    <p>作者說，他們替 Claude.ai 的網頁搜尋建 eval 時，親身學到這一課。難處在於，要讓模型在不該搜尋時不搜，同時保住它在適當時候做大量研究的能力。團隊建的 eval 兩個方向都涵蓋：</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>方向</th><th>例子</th><th>錯了叫什麼</th></tr></thead>
+        <tbody>
+          <tr><td>應該搜尋</td><td>查天氣</td><td>觸發不足（undertriggering）：該搜卻沒搜</td></tr>
+          <tr><td>應該直接用既有知識回答</td><td>「誰創立了 Apple？」</td><td>過度觸發（overtriggering）：不該搜卻搜了</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>在觸發不足與過度觸發之間取得平衡很難，作者說花了好幾輪，同時修改 prompt 與 eval；之後遇到新的問題例子，就繼續加進 eval，擴大涵蓋的範圍。</p>
+    <div class="thought">
+      <span class="label">整理者的思考題 · 02</span>
+      <h4>拿你的一個 task，請一位同事不看你的答案各判一次，你們判得一樣嗎？</h4>
+      <p>挑一個你覺得很清楚的 task，只給同事 task 描述與一份 agent 的輸出，請他判通過或失敗。</p>
+      <p class="hint">判得不一樣，通常是 task 描述漏寫了 grader 會檢查的條件（像 Terminal-Bench 的檔案路徑）。先補規格，再寫一份參考解，確認它過得了所有 grader。</p>
+    </div>
+  </div>
+</section>
+
+<section id="harness-graders" data-toc="harness 與 grader">
+  <div class="container head">
+    <p class="chapter">Chapter 10 · Steps 4–5 · Design the eval harness and graders</p>
+    <h2><span class="seg">分數要量到 agent，</span><span class="seg">不是量到 eval 的毛病</span></h2>
+    <p class="lede">harness 要讓 eval 裡的 agent 和上線的差不多，每次 trial 從乾淨的環境開始；grader 能用程式就用程式，評 agent 做出了什麼而不是走了哪條路，LLM 判官要和專家校準，也要防作弊。</p>
+    
+  </div>
+  <div class="cardband" id="card-11"><div class="cardlabel"><span class="n">圖卡 11 / 13</span><span class="t">分數要量到 agent 本身</span><button type="button" class="zoom" data-card="11">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">分數要量到 agent，不是量到環境或 grader</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4、5 步：eval 裡的 agent 要和上線的差不多，環境不能自己帶進雜訊；grader 要評得公平、和人對齊，也要防作弊</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">01　環境 · 第 4 步</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">每次 trial，<br>都從乾淨的環境開始</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">殘留的檔案、快取的資料、耗盡的資源，<br>會讓失敗彼此相關，量到的是基礎設施；<br>共用狀態也會灌水：作者說 Claude 曾讀到<br>前幾次 trial 留下的 git 歷史。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ trial 之間共用檔案、快取與資源<br>✓ 每次隔離、從頭開始</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">02　評分 · 第 5 步</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">評它做出了什麼，<br>不評它走哪條路</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">規定工具呼叫的順序太死：agent 常找到<br>出題者沒想到、卻完全有效的做法。<br>多個部分的 task，要給部分分數：<br>驗了身分卻沒退款，也比馬上失敗好。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 規定每一步的工具呼叫順序<br>✓ 評產出，呈現成功的程度</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">03　判官 · 第 5 步</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">LLM 判官，<br>要和專家校準</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">給它一條退路：資訊不夠就回答 Unknown，<br>減少幻覺；每個面向寫一份清楚的 rubric，<br>各交給一個獨立的判官，不讓一個判官<br>包辦全部。穩定之後，人工偶爾複查就好。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 一個判官一次判所有面向<br>✓ 一個面向一個判官，可以說 Unknown</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; font-size:20px; font-weight:700; color:#1C2431;">選 grader 的順序（第 5 步）</div>
+  <div style="position:absolute; left:60px; top:630px; width:460px; height:72px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:rgba(255,255,255,0.6);">01</div>
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">確定性的 grader：能用就用</div>
+  </div>
+  <div style="position:absolute; left:570px; top:630px; width:460px; height:72px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">02</div>
+    <div style="font-size:16px; font-weight:700; color:#2E7B4F;">LLM grader：必要時，或需要彈性時</div>
+  </div>
+  <div style="position:absolute; left:1080px; top:630px; width:460px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">03</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">人工 grader：審慎地拿來驗證</div>
+  </div>
+  <div style="position:absolute; left:60px; top:722px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">原文另外兩條：grader 要防作弊，通過必須是真的解決了問題，不是鑽到漏洞；評分的 bug、harness 的限制與規格含糊，會讓表現好的 agent 也拿低分（第 12 卡的 CORE-Bench）。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三張卡依原文第 4、5 步整理，每張下方的 ✗／✓ 兩行是整理者的濃縮；確定性的 grader 就是第 04 卡的程式 grader。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M539 658L551 666L539 674Z" fill="#9AA3AE"></path>
+    <path d="M1049 658L1061 666L1049 674Z" fill="#9AA3AE"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p><strong>第 4 步：建一個穩健、環境穩定的 harness。</strong>eval 裡的 agent 要和上線使用的 agent 運作得大致相同，環境本身也不能再帶進雜訊。每次 trial 都應該從乾淨的環境開始、彼此隔離。trial 之間不必要的共用狀態（殘留的檔案、快取的資料、耗盡的資源），會讓失敗彼此相關，量到的是基礎設施的不穩，而不是 agent 的表現。</p>
+    <p>共用狀態也可能把分數灌高。作者說，在一些內部 eval 裡，他們觀察到 Claude 讀了前幾次 trial 留下的 git 歷史，在某些 task 上占到不公平的便宜。反過來，如果好幾次不同的 trial 都因為環境的同一個限制（例如 CPU 記憶體不夠）而失敗，這些 trial 就不是獨立的，它們受同一個因素影響，eval 的結果也就量不準 agent 的表現。</p>
+    <p><strong>第 5 步：用心設計 grader。</strong>好的 eval 設計要替 agent 與 task 挑最合適的 grader。作者的建議有先後：</p>
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>能用確定性的 grader 就用</strong>快、便宜、可重現，失敗時好追。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>必要時才用 LLM grader</strong>或是為了多一點彈性。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>人工 grader 審慎地用</strong>拿來做額外的驗證。</div></div>
+    </div>
+    <p>很多人的直覺是檢查 agent 有沒有照非常具體的步驟做，例如工具呼叫的順序對不對。作者說他們發現這種做法太僵硬，測試會變得很脆弱，因為 agent 常常找到出題者沒料到、但完全有效的做法。為了不白白懲罰創意，通常比較好的做法是：</p>
+    <div class="quote-en">
+      "grade what the agent produced, not the path it took"
+      <span class="zh">評 agent 做出了什麼，不評它走了哪條路。出自原文第 5 步。</span>
+    </div>
+    <p>由好幾個部分組成的 task，要給部分分數。一個客服 agent 正確找出問題、也驗證了客戶身分，卻沒能完成退款，明顯比一開始就失敗的好；結果裡要呈現這種成功的程度。</p>
+    <p>模型評分通常要仔細迭代，才確認得了它準不準。LLM 當判官時，要和人類專家密切校準，確認人工評分與模型評分之間的落差很小。作者給了三個做法：</p>
+    <div class="values">
+      <div class="value-card"><div class="num">01</div><h4>給它一條退路</h4><p>為了避免幻覺，告訴它資訊不足時就回答 Unknown，不要硬判。</p></div>
+      <div class="value-card"><div class="num">02</div><h4>每個面向一份清楚的 rubric</h4><p>把 task 拆成幾個面向，各自寫成清楚、有結構的評分準則。</p></div>
+      <div class="value-card"><div class="num">03</div><h4>一個面向一個判官</h4><p>每個面向交給一個獨立的 LLM 判官，不讓一個判官包辦所有面向。系統穩了之後，人工只要偶爾複查。</p></div>
+    </div>
+    <div class="codeblock">
+      <span class="file">示意 · 只評一個面向、允許 Unknown 的判官 prompt（教學用示意，非原文）</span>
+<pre class="code">你是評分者，這次只評一個面向：<span class="s">退款的處理方式有沒有講清楚</span>。
+依照下面的 rubric 判斷，只能輸出 <span class="k">PASS</span>、<span class="k">FAIL</span> 或 <span class="k">Unknown</span>。
+transcript 裡的資訊不足以判斷時，輸出 <span class="k">Unknown</span>，不要猜。  <span class="c"># 給它一條退路</span>
+
+&lt;rubric&gt;{這個面向的評分準則}&lt;/rubric&gt;
+&lt;transcript&gt;{要評的那一次 trial}&lt;/transcript&gt;</pre>
+    </div>
+    <p>有些評估帶著不容易察覺的失敗模式：agent 表現其實很好，分數卻很低，原因是評分的 bug、agent harness 的限制，或規格含糊。作者說，連很成熟的團隊都可能漏掉。</p>
+    <div class="story">
+      <div class="label">關鍵觀念 · 二</div>
+      <h4>同一個模型，修掉 eval 的毛病後從 42% 到 95%</h4>
+      <p>作者說，Opus 4.5 起初在 CORE-Bench 上只拿到 42%，直到一位 Anthropic 的研究員找出好幾個問題：評分太死，預期 96.124991… 時把 96.12 判成錯；task 的規格含糊；有些帶隨機性的 task 根本無法精確重現。修掉這些 bug、改用限制比較少的 scaffold 之後，Opus 4.5 的分數跳到 95%。</p>
+      <p>METR 也在他們的時間跨度（time horizon）基準裡發現幾個設定錯誤的 task：題目要 agent 最佳化到一個指定的分數門檻，評分卻要求超過那個門檻。結果照指示做的模型（例如 Claude）反而被扣分，忽略指定目標的模型分數更高。仔細地再檢查一次 task 與 grader，可以避開這些問題。</p>
+    </div>
+    <p>最後，grader 要能抵抗繞過與作弊。agent 不應該能輕易騙過 eval；task 與 grader 的設計要讓通過真的需要解決問題，而不是鑽到沒預料到的漏洞。</p>
+  </div>
+</section>
+
+<section id="maintain" data-toc="讀 transcript 與維護">
+  <div class="container head">
+    <p class="chapter">Chapter 11 · Steps 6–8 · Maintain and use the eval long-term</p>
+    <h2><span class="seg">eval 要有人讀，</span><span class="seg">也要有人管</span></h2>
+    <p class="lede">分數要有人讀過 transcript 才能信；capability 評估快滿分時，就量不出進步了；整組 eval 是活的，要有明確的擁有者，也要讓最接近需求的人能貢獻題目。</p>
+    
+  </div>
+  <div class="cardband" id="card-12"><div class="cardlabel"><span class="n">圖卡 12 / 13</span><span class="t">task 沒過，先讀 transcript</span><button type="button" class="zoom" data-card="12">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">task 沒過：先讀 transcript，再決定修誰</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 6、7 步：沒有人讀過 transcript 之前，分數不照單全收；失敗要看起來公平，看得出 agent 錯在哪、為什麼錯</div>
+
+  <div style="position:absolute; left:60px; top:285px; width:230px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#FFFFFF; line-height:1.3;"><div>一個 task 沒過，<br>或分數不再上升</div></div>
+  <div style="position:absolute; left:400px; top:275px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:17px; font-weight:700; color:#1C2431; line-height:1.35;"><div>讀 transcript：<br>問題出在誰身上？</div></div>
+
+  <div style="position:absolute; left:822px; top:164px; font-size:13px; font-weight:700; color:#2E7B4F;">改 agent</div>
+  <div style="position:absolute; left:822px; top:250px; font-size:13px; font-weight:700; color:#C8501F;">改 grader</div>
+  <div style="position:absolute; left:822px; top:336px; font-size:13px; font-weight:700; color:#C8501F;">改 task</div>
+  <div style="position:absolute; left:822px; top:422px; font-size:13px; font-weight:700; color:#C8501F;">改 harness</div>
+
+  <div style="position:absolute; left:940px; top:150px; width:600px; height:76px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:10px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">agent 真的做錯了：失敗是公平的</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">看得出它錯在哪、為什麼錯，這時該改的才是 agent</div>
+  </div>
+  <div style="position:absolute; left:940px; top:236px; width:600px; height:76px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:10px; padding:10px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-size:17px; font-weight:700; color:#C8501F;">grader 判掉了有效的解</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">評分太死：預期 <span style="white-space:nowrap">96.124991…</span> 時，把 <span style="white-space:nowrap">96.12</span> 判成錯（<span style="white-space:nowrap">CORE-Bench</span>）</div>
+  </div>
+  <div style="position:absolute; left:940px; top:322px; width:600px; height:76px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:10px; padding:10px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-size:17px; font-weight:700; color:#C8501F;">task 含糊，或根本無法重現</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">規格含糊；有些帶隨機性的 task 無法精確重現（<span style="white-space:nowrap">CORE-Bench</span>）</div>
+  </div>
+  <div style="position:absolute; left:940px; top:408px; width:600px; height:76px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:10px; padding:10px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-size:17px; font-weight:700; color:#C8501F;">harness 綁住了模型</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">換成限制比較少的 scaffold 之後，同一個模型的分數大漲（<span style="white-space:nowrap">CORE-Bench</span>）</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:506px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">作者的規矩</div>
+    <div style="font-size:15px; color:#2B3340;">沒有人深入看過 eval 的細節、讀過一些 transcript 之前，分數不照單全收；評分不公平、task 含糊、有效的解被扣分、harness 綁手，就修 eval。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:584px; font-size:20px; font-weight:700; color:#1C2431;">這三步的其他提醒</div>
+  <div style="position:absolute; left:60px; top:626px; width:470px; height:196px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;"><span style="white-space:nowrap">CORE-Bench</span>：42% → 95%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">作者說 Opus 4.5 起初只拿 42%；研究員修掉<br>評分太死、規格含糊、無法重現的題目，<br>再換成限制較少的 scaffold，分數跳到 95%。</div>
+    <div style="font-size:13px; color:#8A93A0;">METR 也有門檻題：題目要達到，評分卻要超過。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:626px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">滿分的 eval，看不出進步</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">第 7 步：接近 100% 只抓得到退步；<br>越接近飽和，大進步也只讓分數小小地動。<br>Qodo 的一次性寫程式 eval 就看不出來。</div>
+    <div style="font-size:13px; color:#8A93A0;"><span style="white-space:nowrap">SWE-bench Verified</span>：今年從 30% 到超過 80%。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:626px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">第 8 步：eval 要有擁有者</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">專責的 eval 團隊管基礎設施；<br>領域專家與產品團隊貢獻大部分 task，<br>自己跑；產品經理、客戶成功經理、業務都能加題。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說他們可以用 Claude Code 把 task 當成 PR 送進來。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：四個出口是整理者依第 5 到 7 步歸納的；CORE-Bench 與 METR 的例子出自第 5 步。SWE-bench 的起點在寫程式那一節寫的是 40%，兩處照原文。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c12" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c12" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+      <marker id="ao-c12" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+    </defs>
+    <path d="M290 317L398 317" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c12)"></path>
+    <path d="M700 317H800" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M760 317V188H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c12)"></path>
+    <path d="M800 317V274H938" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c12)"></path>
+    <path d="M800 317V360H938" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c12)"></path>
+    <path d="M760 317V446H938" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c12)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p><strong>第 6 步：讀 transcript。</strong>不讀很多次 trial 的 transcript 與評分，就不會知道 grader 運作得好不好。作者說，Anthropic 投資做了檢視 eval transcript 的工具，也固定花時間讀。一個 task 失敗時，transcript 會告訴你：是 agent 真的犯了錯，還是 grader 把一個有效的解判掉了；它也常讓人看到 agent 與 eval 行為上的關鍵細節。</p>
+    <p>失敗應該看起來公平：清楚 agent 錯在哪、為什麼錯。分數爬不上去時，需要有把握那是 agent 的表現，而不是 eval 的問題。讀 transcript 就是確認 eval 量到真正重要的東西的方法，作者說這是開發 agent 的一項關鍵技能。</p>
+    <p><strong>第 7 步：盯著 capability 評估的飽和。</strong>通過率 100% 的 eval 還能追蹤退步，卻給不出任何進步的訊號。當 agent 通過了所有解得出來的 task、沒有再進步的空間，就是 eval 飽和了。原文的例子是 SWE-Bench Verified：今年起步時分數是 30%，前沿模型現在已經超過 80%、接近飽和。原文談寫程式的 agent 時說的是一年內從 40% 到超過 80%，兩處的起點不同，本頁照原文各自寫。</p>
+    <p>越接近飽和，進步也越慢，因為只剩最難的 task。結果可能會騙人：能力大幅提升，分數卻只小小地動。作者說，做程式碼審查的新創 Qodo 一開始對 Opus 4.5 不太驚豔，因為他們一次性的寫程式 eval 抓不到模型在較長、較複雜任務上的進步；於是他們做了一套新的 agentic eval 框架，進步的樣子才清楚得多。</p>
+    <p>作者的規矩是：在有人深入看過 eval 的細節、讀過一些 transcript 之前，不照單全收 eval 的分數。評分不公平、task 含糊、有效的解被扣分，或 harness 限制了模型，就要修改 eval。</p>
+    <p><strong>第 8 步：開放貢獻與持續維護，讓題組長期健康。</strong>一組 eval 是活的東西，需要持續的關注與明確的擁有權，才會一直有用。作者說，Anthropic 試過好幾種維護方式，最有效的分工是：</p>
+    <div class="values">
+      <div class="value-card"><span class="tag">基礎設施</span><h4>專責的 eval 團隊</h4><p>擁有核心的評估基礎設施。</p></div>
+      <div class="value-card"><span class="tag">題目</span><h4>領域專家與產品團隊</h4><p>貢獻大部分的 eval task，也自己跑評估。</p></div>
+      <div class="value-card"><span class="tag">需求</span><h4>產品經理、客戶成功經理、業務</h4><p>以現在的模型能力，他們可以用 Claude Code 把一個 eval task 當成 PR 送進來。</p></div>
+    </div>
+    <p>對 AI 產品團隊來說，擁有並迭代 eval，應該像維護單元測試一樣是日常工作。團隊可能在一個 AI 功能上浪費好幾週：早期測試時它「能用」，卻達不到沒有明說的期待，而一組設計良好的 eval 早就能把這些期待挖出來。定義 eval 的 task，也是壓力測試產品需求夠不夠具體、能不能開始做的最好方法之一。</p>
+    <p>作者建議練習 eval 驅動的開發：在 agent 做得到之前，先寫 eval 定義規劃中的能力，再迭代到 agent 表現良好為止。作者說他們內部常做一些今天「夠用」、其實是押注幾個月後模型能力的功能；從低通過率開始的 capability 評估讓這些押注看得見，新模型一推出，跑一次題組就知道哪些押注押對了。</p>
+    <p>作者的理由是：最接近產品需求與使用者的人，最適合定義什麼叫成功。他們的建議是讓這些人貢獻 task，更好的是主動幫他們做得到。</p>
+    <div class="thought">
+      <span class="label">整理者的思考題 · 03</span>
+      <h4>上一次你的 eval 分數變動時，有人去讀那幾題的 transcript 嗎？</h4>
+      <p>挑最近一次分數明顯上升或下降的紀錄，隨機讀五題的 transcript，每一題問：這是 agent 的表現，還是 grader、task 或 harness 的問題？</p>
+      <p class="hint">如果有題目是 eval 本身的問題，先修 eval 再看分數；如果某個 capability 題組已經接近 100%，把它移進 regression，再補幾題更難的。</p>
+    </div>
+  </div>
+</section>
+
+<section id="holistic" data-toc="和其他方法搭配">
+  <div class="container head">
+    <p class="chapter">Chapter 12 · How evals fit with other methods for a holistic understanding of agents</p>
+    <h2><span class="seg">自動化 eval 只是一層，</span><span class="seg">要和別的方法疊著用</span></h2>
+    <p class="lede">自動化 eval 能在幾千個 task 上跑、不碰真實使用者，但只是了解 agent 的方法之一。生產監控、使用者回饋、A/B 測試、人工讀 transcript、系統化的人工研究，各自接住不同的問題。</p>
+    
+  </div>
+  <div class="cardband" id="card-13"><div class="cardlabel"><span class="n">圖卡 13 / 13</span><span class="t">六種方法疊成多層防線</span><button type="button" class="zoom" data-card="13">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">沒有一層接得住所有問題，方法要疊起來用</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">自動化 eval 能在幾千個 task 上跑、不碰真實使用者，但只是了解 agent 的方法之一；原文借安全工程的瑞士起司模型：每一層都有洞</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:1480px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:250px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">方法</div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">什麼時候用</div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">長處</div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">短處</div>
+  </div>
+  <div style="position:absolute; left:60px; top:194px; width:1480px; height:62px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:grid; grid-template-columns:250px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#2E7B4F;">自動化 eval</div><div style="font-size:12px; color:#8A93A0;">程式跑測試，不用真實使用者</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>上線前與 CI/CD 裡：<br>每次改 agent、每次升級模型</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>迭代快、完全可重現、不影響使用者；<br>每次 commit 都能跑</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>前期投入多、要持續維護；<br>和真實用法不符時，給出假的信心</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:256px; width:1480px; height:62px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:250px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">生產監控</div><div style="font-size:12px; color:#8A93A0;">追蹤線上的指標與錯誤</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>上線後：偵測分布的漂移，<br>與沒料到的真實世界失敗</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>看得到大規模的真實行為，<br>抓得到合成 eval 漏掉的問題</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>被動，使用者先碰到；訊號吵，<br>也沒有評分用的標準答案</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:318px; width:1480px; height:62px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:250px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">A/B 測試</div><div style="font-size:12px; color:#8A93A0;">用真實流量比較版本</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>流量足夠之後，<br>驗證重大的改動</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>量得到留存、任務完成這類<br>真實結果，控制了干擾因素</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>要幾天到幾週才顯著；<br>只測得到部署了的改動</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:380px; width:1480px; height:62px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:250px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">使用者回饋</div><div style="font-size:12px; color:#8A93A0;">倒讚、bug 回報</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>持續：隨時分流處理</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>冒出沒預料到的問題，<br>附有真實使用者的例子</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>稀少、自我選擇、偏向嚴重的問題；<br>使用者很少說出原因</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:442px; width:1480px; height:62px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:250px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">人工讀 transcript</div><div style="font-size:12px; color:#8A93A0;">人一段段讀 agent 的對話</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>持續：每週抽樣讀，<br>需要時再深入</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>培養對失敗模式的直覺，<br>抓到細微的品質問題</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>費時、無法擴展、覆蓋不一致；<br>多半只有質性的訊號</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:504px; width:1480px; height:62px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:250px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">系統化的人工研究</div><div style="font-size:12px; color:#8A93A0;">受訓評分者有結構地評</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>校準 LLM grader，<br>或評主觀的輸出</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>多位評分者的黃金標準，<br>處理得了主觀或含糊的任務</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>貴、週期長、很難常做；<br>評分者之間的分歧要調解</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:598px; width:470px; height:188px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">第一道防線：自動化 eval</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">上線前與 CI/CD 裡，每次改 agent、<br>每次換模型都跑，快速迭代靠它。</div>
+    <div style="font-size:13px; color:#8A93A0;">瑞士起司圖：一致地量，在部署前抓到退步。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:598px; width:470px; height:188px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">真實的狀況：生產監控</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">上線後接手，看分布的漂移，<br>與現實裡沒料到的失敗；A/B 測試等流量夠了再用。</div>
+    <div style="font-size:13px; color:#8A93A0;">瑞士起司圖：冒出罕見的邊界情況。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:598px; width:470px; height:188px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">校準：定期的人工審閱</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">每週抽樣讀 transcript、持續處理回饋；<br>系統化的研究留給校準 LLM grader。</div>
+    <div style="font-size:13px; color:#8A93A0;">瑞士起司圖：抓細微的失敗與沒料到的行為。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：表格依原文的比較表與階段說明精簡改寫；瑞士起司模型的意思是每一層都有洞，洞沒對齊，漏過一層的問題會被另一層接住。</div>
+</div></div></div>
+  <div class="container prose">
+    <p>自動化評估可以在不部署到生產環境、不影響真實使用者的情況下，拿 agent 跑幾千個 task。作者提醒，這只是了解 agent 表現的許多方法之一；完整的樣貌還包括生產監控、使用者回饋、A/B 測試、人工讀 transcript，以及系統化的人工評估。原文用一張表比較這六種方法，下面是精簡改寫：</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>方法</th><th>長處</th><th>短處</th></tr></thead>
+        <tbody>
+          <tr><td>自動化 eval<br>用程式跑測試，<br>不需要真實使用者</td><td>迭代快、完全可重現、不影響使用者；每次 commit 都能跑；不必部署就能大規模測情境</td><td>前期要投入更多來建；產品與模型演進時要持續維護，避免漂移；和真實用法不符時，會帶來假的信心</td></tr>
+          <tr><td>生產監控<br>追蹤線上系統的<br>指標與錯誤</td><td>看得到大規模的真實使用者行為；抓得到合成 eval 漏掉的問題；知道 agent 實際表現如何</td><td>被動：問題先碰到使用者才知道；訊號可能很吵；要投資埋點；缺少評分用的標準答案</td></tr>
+          <tr><td>A/B 測試<br>用真實流量<br>比較不同版本</td><td>量得到留存、任務完成這類真實結果；控制了干擾因素；可擴展、有系統</td><td>慢：要幾天到幾週才達到顯著，還要有足夠的流量；只測得到你部署的改動；不徹底讀 transcript 的話，很難知道指標變化背後的原因</td></tr>
+          <tr><td>使用者回饋<br>倒讚、bug 回報<br>這類明確的訊號</td><td>冒出你沒預料到的問題；附有真實使用者的例子；常和產品目標相關</td><td>稀少、自我選擇、偏向嚴重的問題；使用者很少說明失敗的原因；無法自動化；主要靠使用者抓問題，會傷到使用者</td></tr>
+          <tr><td>人工讀 transcript<br>人一段段讀<br>agent 的對話</td><td>培養對失敗模式的直覺；抓到自動檢查漏掉的細微品質問題；幫忙校準「好」長什麼樣</td><td>費時、無法擴展、覆蓋不一致；評閱者疲勞或換人會影響訊號品質；通常只給質性的訊號，給不出清楚的量化評分</td></tr>
+          <tr><td>系統化的人工研究<br>受訓評分者有結構地<br>評 agent 的輸出</td><td>多位評分者給出的黃金標準判斷；處理得了主觀或含糊的任務；提供改進模型 grader 的訊號</td><td>相對貴、週期長；很難常常做；評分者之間的分歧要調解；法律、金融、醫療這類複雜領域，要請專家來做</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>這些方法對應 agent 開發的不同階段。自動化 eval 在上線前與 CI/CD 裡特別有用：每次改 agent、每次升級模型都跑，是對抗品質問題的第一道防線。生產監控在上線後接手，偵測分布的漂移與沒料到的真實世界失敗。A/B 測試等流量足夠了，再拿來驗證重大的改動。使用者回饋與讀 transcript 是持續的習慣，用來補漏：隨時分流處理回饋、每週抽樣讀 transcript、需要時再深入。系統化的人工研究則留給兩件事：校準 LLM grader，或評估那些要以人類共識當參考標準的主觀輸出。</p>
+    <p>原文用安全工程裡的瑞士起司模型來比喻：沒有任何一層評估能接住每一個問題。好幾種方法疊在一起，從一層的洞漏過去的失敗，會被另一層接住。原文的圖畫了三層：</p>
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>自動化 eval</strong>一致地量測、建立效能的基準線，在部署前抓到退步。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>人工讀 transcript、搶先體驗計畫</strong>抓到細微的失敗，以及沒料到的使用者或 agent 行為。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>生產監控、A/B 測試、使用者回饋</strong>冒出罕見的邊界情況，以及大規模的真實使用模式。</div></div>
+    </div>
+    <p>作者的結論是，最有效的團隊會把這些方法組合起來：自動化 eval 負責快速迭代，生產監控提供真實情況，定期的人工審閱負責校準。</p>
+    <div class="explain stone">
+      <span class="label">補充說明</span>
+      <h4>瑞士起司模型在說什麼</h4>
+      <p>每片起司都有洞，一片擋不住所有東西；但每片的洞在不同位置，好幾片疊起來，要剛好穿過每一片的洞才會漏到最後。放在 agent 上：每一種方法都有盲點，重點是讓這些盲點錯開。這段解釋是整理者寫的，原文只借用了這個名稱與圖。</p>
+    </div>
+  </div>
+</section>
+
+<section id="takeaways" data-toc="結論與動手做" class="nocard">
+  <div class="container">
+    <p class="chapter">Chapter 13 · Conclusion · Appendix: Eval frameworks</p>
+    <h2><span class="seg">eval 的價值會累積，</span><span class="seg">前提是當成核心</span></h2>
+    <p class="lede">沒有 eval 的團隊修一個壞一個；早投入的團隊，失敗變成 task、task 擋住退步、指標取代猜測。做法依 agent 的類型而不同，基本功不變。</p>
+    <p>作者在結論裡再比一次兩種團隊。沒有 eval 的團隊陷在被動的循環裡：修好一個失敗、又造成另一個，分不出真正的退步與雜訊。早早投入的團隊看到的是相反的情況：失敗變成測試案例，測試案例防止退步，指標取代了猜測，開發跟著加速。eval 給整個團隊一座清楚的山可以爬，把「agent 感覺變差了」變成可以處理的事。這份價值會累積，但前提是把 eval 當成核心元件，而不是事後才補的東西。</p>
+    <p>作者說各類 agent 的做法不同，這篇描述的基本功卻不變。整理成對照表：</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>原文列的基本功</th><th>本頁</th></tr></thead>
+        <tbody>
+          <tr><td>早點開始，不要等完美的題組</td><td>第 8 章</td></tr>
+          <tr><td>從你看到的失敗裡取真實的 task</td><td>第 8 章</td></tr>
+          <tr><td>定義沒有歧義、穩固的成功標準</td><td>第 9 章</td></tr>
+          <tr><td>用心設計 grader，混用多種類型</td><td>第 3、5、10 章</td></tr>
+          <tr><td>確保題目對模型來說夠難</td><td>第 4、11 章</td></tr>
+          <tr><td>迭代 eval 本身，提高訊號對雜訊的比例</td><td>第 10、11 章</td></tr>
+          <tr><td>讀 transcript</td><td>第 11 章</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>作者也說，agent 評估仍是一個新生、變化很快的領域。agent 接下更長的任務、在多 agent 系統裡協作、處理越來越主觀的工作，評估的技巧也得跟著調整；他們會在學到更多時繼續分享。文末致謝寫明這篇由 Mikaela Grace、Jeremy Hadfield、Rodrigo Olivares、Jiri De Jonghe 執筆，並感謝一起做 eval 的客戶與夥伴，包括 iGent、Cognition、Bolt、Sierra、Vals.ai、Macroscope、PromptLayer、Stripe、Shopify 與 Terminal Bench 團隊。</p>
+    <p>原文的附錄列了幾個能幫團隊實作 agent 評估、不必從零搭基礎設施的開源與商業框架。作者說選哪一個，要看你的 agent 類型、既有的技術堆疊，以及需要的是離線評估、生產環境的可觀測性，還是兩者都要：</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>框架</th><th>原文的描述</th></tr></thead>
+        <tbody>
+          <tr><td>Harbor</td><td>在容器化環境裡跑 agent，有跨雲端大規模跑 trial 的基礎設施，以及定義 task 與 grader 的標準格式；Terminal-Bench 2.0 這類熱門基準透過它的 registry 發布</td></tr>
+          <tr><td>Braintrust</td><td>結合離線評估、生產環境的可觀測性與實驗追蹤；它的 <code>autoevals</code> 函式庫內建事實性、相關性等常見面向的評分器</td></tr>
+          <tr><td>LangSmith</td><td>追蹤、離線與線上評估、資料集管理，和 LangChain 生態緊密整合</td></tr>
+          <tr><td>Langfuse</td><td>能力相近、可以自架的開源替代，適合有資料落地要求的團隊</td></tr>
+          <tr><td>Arize</td><td>開源的 Phoenix 做 LLM 追蹤、除錯、離線或線上評估；SaaS 的 AX 在 Phoenix 之上擴充規模、最佳化與監控</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>作者說很多團隊會組合多種工具、自己做 eval 框架，或只用簡單的評估腳本起步。框架能加速、能標準化，但好壞取決於你拿它跑的 eval task；通常最好的做法是很快挑一個合用的框架，再把力氣花在 eval 本身，反覆打磨高品質的測試案例與 grader。</p>
+    <div class="pullquote bronze">
+      失敗變成 task，task 擋住退步，指標取代猜測；這個循環轉起來之前，先要有人讀 transcript。
+      <cite>整理自 Conclusion</cite>
+    </div>
+    <p>下面這份清單不在原文裡，是整理者把全文的建議壓成的順序，讓你從一個已經在跑的 agent 開始建第一組 eval。</p>
+    <ol class="checklist">
+      <li><span class="box" aria-hidden="true"></span><div><strong>從 bug 追蹤與客服佇列挑 20 到 50 個真實失敗，寫成 task</strong><small>加上發版前的手動檢查；依對使用者的影響排順序。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>每個 task 請一位同事獨立判一次，再附一份參考解</strong><small>判得不一樣就改規格；參考解要能通過所有 grader。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>補上反面的題目</strong><small>該做與不該做的情況都要有，例如該搜尋與不該搜尋。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>每次 trial 從乾淨的環境開始，結果到環境裡查</strong><small>不共用檔案、快取與資源；outcome 用環境的狀態判，不用 agent 的話判。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>grader 先用程式，需要彈性才加 LLM 判官</strong><small>一個面向一個判官，允許回答 Unknown；先和人工判斷對齊。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>同一個 task 跑多次，依產品需求看 pass@k 或 pass^k</strong><small>一次成功就夠的看 pass@k，每次都要可靠的看 pass^k。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>每週讀一批 transcript，接近滿分的題組移進 regression</strong><small>再替 capability 題組補更難的 task。</small></div></li>
+    </ol>
+  </div>
+</section>
+
+<section id="glossary" class="nocard glossary" data-toc="名詞速查">
+  <div class="wide">
+    <p class="eyebrow">Reference · 名詞速查</p>
+    <h2><span class="seg">二十四個名詞，</span><span class="seg">看懂 agent 的評估</span></h2>
+    <p class="lede">依「組成、grader、題組、非確定性、路線圖、其他方法」的順序排，解釋是整理者依原文的用法寫的。</p>
+    <dl class="glossary-grid">
+      <div class="term"><dt>Eval (evaluation)</dt><span class="zh-name">評估</span><dd>給 AI 一個輸入，再用評分邏輯判斷輸出算不算成功；本篇談開發時自動跑、不需要真實使用者的那一種。</dd></div>
+      <div class="term"><dt>Task</dt><span class="zh-name">題目</span><dd>一道有定義好的輸入與成功標準的測試，也叫 problem 或 test case。</dd></div>
+      <div class="term"><dt>Trial</dt><span class="zh-name">試跑</span><dd>對一個 task 的一次嘗試；模型每次輸出不同，所以同一題跑好幾次。</dd></div>
+      <div class="term"><dt>Grader</dt><span class="zh-name">評分器</span><dd>替 agent 表現的某個面向打分的邏輯；一個 task 可以掛好幾個，每個含多條 assertion。</dd></div>
+      <div class="term"><dt>Assertion</dt><span class="zh-name">斷言</span><dd>grader 裡的一條檢查，也叫 check；例如「回答根據 fetch_policy 工具的結果」。</dd></div>
+      <div class="term"><dt>Transcript</dt><span class="zh-name">執行紀錄</span><dd>一次 trial 的完整紀錄：輸出、工具呼叫、推理、中間結果；也叫 trace 或 trajectory。</dd></div>
+      <div class="term"><dt>Outcome</dt><span class="zh-name">最終狀態</span><dd>trial 結束時環境裡的狀態，例如資料庫裡有沒有那筆訂位；它和 agent 說了什麼是兩回事。</dd></div>
+      <div class="term"><dt>Evaluation harness</dt><span class="zh-name">評估框架</span><dd>端到端跑 eval 的基礎設施：給指示與工具、同時跑 task、記錄每一步、打分、彙整。</dd></div>
+      <div class="term"><dt>Agent harness</dt><span class="zh-name">agent 框架</span><dd>讓模型能當 agent 的系統，也叫 scaffold；評一個 agent，評的是它和模型一起。</dd></div>
+      <div class="term"><dt>Evaluation suite</dt><span class="zh-name">題組</span><dd>為了量某些能力或行為而設計、共享一個大目標的一組 task，例如客服的退款、取消、升級處理。</dd></div>
+      <div class="term"><dt>Code-based grader</dt><span class="zh-name">程式 grader</span><dd>字串比對、測試、靜態分析這一類；快、便宜、可重現，但對有效的變化很脆弱。</dd></div>
+      <div class="term"><dt>Model-based grader</dt><span class="zh-name">模型 grader</span><dd>也就是 LLM 當判官：依 rubric、assertion 或兩兩比較打分；有彈性，但不確定，要和人工校準。</dd></div>
+      <div class="term"><dt>Human grader</dt><span class="zh-name">人工 grader</span><dd>專家審閱、抽樣檢查、群眾判斷；是黃金標準，也用來校準模型 grader，但又貴又慢。</dd></div>
+      <div class="term"><dt>Rubric</dt><span class="zh-name">評分準則</span><dd>寫給 grader 的評分標準；原文建議每個面向一份、交給獨立的判官，含糊的 rubric 會判得不一致。</dd></div>
+      <div class="term"><dt>Partial credit</dt><span class="zh-name">部分分數</span><dd>由好幾個部分組成的 task，依完成的程度給分，不只記通過或失敗。</dd></div>
+      <div class="term"><dt>Capability eval</dt><span class="zh-name">能力評估</span><dd>問「它能把什麼做好」，從低通過率開始，給團隊一座可以往上爬的山；也叫品質評估。</dd></div>
+      <div class="term"><dt>Regression eval</dt><span class="zh-name">回歸評估</span><dd>問「以前會的還會嗎」，通過率應接近 100%；分數一掉，就是有東西壞了。</dd></div>
+      <div class="term"><dt>Saturation</dt><span class="zh-name">飽和</span><dd>agent 通過了所有解得出來的 task，eval 只剩抓退步的作用，看不出進步。</dd></div>
+      <div class="term"><dt>pass@k</dt><span class="zh-name">至少一次成功</span><dd>k 次嘗試裡至少一次成功的機率；k 越大越高，適合一次成功就夠的工具。</dd></div>
+      <div class="term"><dt>pass^k</dt><span class="zh-name">每次都成功</span><dd>k 次 trial 全部成功的機率；k 越大越低，適合要求每次都可靠的 agent。</dd></div>
+      <div class="term"><dt>Reference solution</dt><span class="zh-name">參考解</span><dd>一份已知能通過所有 grader 的輸出，證明題目解得出來、grader 設定正確。</dd></div>
+      <div class="term"><dt>Class-imbalanced eval</dt><span class="zh-name">不平衡的題組</span><dd>只測行為該出現的情況、不測不該出現的；單邊的 eval 會帶來單邊的最佳化。</dd></div>
+      <div class="term"><dt>Eval-driven development</dt><span class="zh-name">eval 驅動開發</span><dd>在 agent 做得到之前，先寫 eval 定義規劃中的能力，再迭代到它表現良好。</dd></div>
+      <div class="term"><dt>Swiss cheese model</dt><span class="zh-name">瑞士起司模型</span><dd>借自安全工程的比喻：每一層都有洞，好幾層疊起來，漏過一層的問題會被另一層接住。</dd></div>
+    </dl>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>資料來源：Anthropic Engineering，〈Demystifying evals for AI agents〉，Mikaela Grace、Jeremy Hadfield、Rodrigo Olivares、Jiri De Jonghe，2026 年 1 月 9 日。<br><a href="https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents">www.anthropic.com/engineering/demystifying-evals-for-ai-agents</a></p>
+    <p class="credit">整理於 2026-09-24</p>
+    <p class="disclaimer">本頁為學習用的重述與整理，不是原文逐句翻譯。觀點與著作權屬於原作者。程式片段為教學用精簡版，實際用法請以原文與官方文件為準。</p>
+  </div>
+</footer>
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="圖卡大圖"><button type="button" class="close">關閉（Esc）</button><div class="frame"></div></div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fitFrames() {
+    var frames = document.querySelectorAll('.cardband .frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  var KEY = 'rearranged-article-mode';
+  function setMode(m, save) {
+    document.body.classList.toggle('mode-cards', m === 'cards');
+    var btns = document.querySelectorAll('.modebar button[data-mode]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-mode') === m ? 'true' : 'false');
+    }
+    if (save) { try { localStorage.setItem(KEY, m); } catch (e) {} }
+    fitFrames();
+  }
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  setMode(saved === 'cards' ? 'cards' : 'full', false);
+
+  var box = document.getElementById('lightbox');
+  var boxFrame = box.querySelector('.frame');
+  function fitLightbox() {
+    if (!box.classList.contains('open')) return;
+    var root = boxFrame.firstElementChild;
+    if (!root) return;
+    var s = Math.min(1, (window.innerWidth - 48) / W, (window.innerHeight - 48) / H);
+    root.style.transform = 'scale(' + s + ')';
+    boxFrame.style.width = Math.round(W * s) + 'px';
+    boxFrame.style.height = Math.round(H * s) + 'px';
+  }
+  function openLightbox(num) {
+    var bandEl = document.getElementById('card-' + num);
+    if (!bandEl) return;
+    var root = bandEl.querySelector('.frame > div');
+    boxFrame.innerHTML = '';
+    var clone = root.cloneNode(true);
+    clone.style.transform = '';
+    boxFrame.appendChild(clone);
+    box.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    fitLightbox();
+  }
+  function closeLightbox() {
+    box.classList.remove('open');
+    boxFrame.innerHTML = '';
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var b = t.closest('.modebar button[data-mode]');
+    if (b) { setMode(b.getAttribute('data-mode'), true); return; }
+    var z = t.closest('.cardlabel .zoom');
+    if (z) { openLightbox(z.getAttribute('data-card')); return; }
+    if (t.closest('.lightbox') && !t.closest('.lightbox .frame')) { closeLightbox(); }
+  });
+  document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') closeLightbox(); });
+  window.addEventListener('resize', function () { fitFrames(); fitLightbox(); });
+  window.addEventListener('load', fitFrames);
+  fitFrames();
+})();
+</script>
+</body>
+</html>

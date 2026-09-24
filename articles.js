@@ -685,6 +685,42 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "demystifying-agent-evals",
+      "path": "articles/demystifying-agent-evals/index.html",
+      "title": "Demystifying Evals for AI Agents：讓 agent 好用的能力，也讓它難以評估",
+      "summary": "Anthropic 2026 年初的工程文章：agent 會跑很多輪、改變環境，評估它要有 task、trial、grader、transcript、outcome 與 harness。從三種 grader、capability 與 regression、四類 agent 怎麼評、pass@k 與 pass^k，到從零建起 eval 的九步路線圖與其他方法的搭配，每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "Anthropic Engineering · Mikaela Grace、Jeremy Hadfield、Rodrigo Olivares、Jiri De Jonghe",
+        "url": "https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents",
+        "date": "2026-01-09"
+      },
+      "date": "2026-09-24",
+      "tags": [
+        "agent-evaluation",
+        "llm-as-a-judge",
+        "agents",
+        "anthropic",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 8,
+        "kind": "必讀",
+        "section": "Evaluation for Agentic Systems",
+        "lecture": "LLM-as-Judge & Evaluation Infrastructure",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/demystifying-agent-evals/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "data-flywheels",
       "path": "articles/data-flywheels/index.html",
       "title": "Data Flywheels：讓每一筆生產資料，回頭改進 LLM 應用",

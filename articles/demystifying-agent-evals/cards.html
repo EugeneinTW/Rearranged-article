@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Demystifying Evals for AI Agents · 圖解卡</title>
+<meta name="description" content="Anthropic 2026 年初的工程文章：agent 會跑很多輪、改變環境，評估它要有 task、trial、grader、transcript、outcome 與 harness。從三種 grader、capability 與 regression、四類 agent 怎麼評、pass@k 與 pass^k，到從零建起 eval 的九步路線圖與其他方法的搭配，每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="agent-evaluation, llm-as-a-judge, agents, anthropic, cs329z">
+<meta name="source" content="https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents">
+<meta name="date" content="2026-09-24">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+:root { color-scheme: light; --bg: #F4F5F7; --line: #E5E9EE; --ink: #1C2431; --mute: #8A93A0; --orange: #C8501F; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: #C8501F; } a:hover { color: #9E3E16; }
+a:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.wrap { max-width: 1600px; margin: 0 auto; padding-block: 24px 48px; padding-inline: 16px; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; padding: 6px 4px 18px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; letter-spacing: 0.12em; color: var(--mute); }
+.head nav { display: flex; flex-wrap: wrap; gap: 6px 14px; letter-spacing: 0.04em; }
+.head nav a { color: var(--mute); text-decoration: none; font-weight: 600; }
+.head nav a:hover { color: var(--orange); }
+.page { margin-bottom: 36px; scroll-margin-top: 16px; }
+.label { display: flex; align-items: baseline; gap: 14px; padding: 0 4px 8px; font-size: 13px; color: var(--mute); }
+.label .n { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-weight: 600; font-size: 12px; letter-spacing: 0.1em; color: var(--orange); }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--line); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; }
+.foot { padding: 12px 4px 0; font-size: 12px; color: var(--mute); line-height: 1.7; }
+@media print {
+  @page { size: 1600px 900px; margin: 0; }
+  body { background: #FFFFFF; }
+  .wrap { max-width: none; padding: 0; }
+  .head, .label, .foot { display: none; }
+  .page { margin: 0; page-break-after: always; }
+  .frame { border: none; border-radius: 0; height: auto !important; }
+  .frame > div { transform: none !important; }
+}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><span>Demystifying Evals for AI Agents · 圖解卡 · 13 張 · 連續閱讀版</span><nav class="site" aria-label="導覽"><a href="../../">首頁</a><a href="index.html">圖卡＋教材版</a></nav><nav aria-label="跳頁"><a href="#p01" title="封面">01</a><a href="#p02" title="一次評估由哪些零件組成">02</a><a href="#p03" title="沒有 eval，只能等抱怨">03</a><a href="#p04" title="三種 grader 的長處與代價">04</a><a href="#p05" title="capability 與 regression">05</a><a href="#p06" title="一個 task 掛四種 grader">06</a><a href="#p07" title="研究看來源，操作電腦看狀態">07</a><a href="#p08" title="pass@k 與 pass^k">08</a><a href="#p09" title="路線圖：第 0 步就開始">09</a><a href="#p10" title="好的 task 要過三道檢查">10</a><a href="#p11" title="分數要量到 agent 本身">11</a><a href="#p12" title="task 沒過，先讀 transcript">12</a><a href="#p13" title="六種方法疊成多層防線">13</a></nav></div>
+<section class="page" id="p01">
+  <div class="label"><span class="n">01 / 13</span><span>封面</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;"><span style="letter-spacing:0.14em">AGENT EVALS</span> &#183; 圖解卡 &#183; 16:9 &#183; 13 張</div>
+  <div style="position:absolute; left:60px; top:110px; width:840px; font-size:60px; font-weight:700; color:#1C2431; line-height:1.3; letter-spacing:0.01em;">讓 agent 好用的能力，<br>也讓它難以評估。</div>
+  <div style="position:absolute; left:60px; top:296px; width:820px; font-size:20px; color:#6B7380; line-height:1.7;">整理自 Anthropic Engineering〈Demystifying evals for AI agents〉（2026-01-09）。<br>十二張圖講一件事：task、grader、transcript、harness 一件件搭起來，<br>「agent 變差了」才變成查得到的訊號。</div>
+  <div style="position:absolute; left:60px; top:432px; display:flex; align-items:center; gap:36px;">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#C8501F;"></div>
+      <div style="font-size:15px; color:#2B3340;">讓分數失真的地方</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#2E7B4F;"></div>
+      <div style="font-size:15px; color:#2B3340;">grader 與檢查</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#1F2A3A;"></div>
+      <div style="font-size:15px; color:#2B3340;">agent、harness 與終點</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div>
+      <div style="font-size:15px; color:#2B3340;">中性節點</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; top:482px; width:820px; font-size:13px; color:#8A93A0; line-height:1.6;">整組共用同一套語意色：橘是會讓分數失真、要回頭修的地方，綠是 grader 與檢查，深藍是 agent、harness 與終點。</div>
+  <div style="position:absolute; left:960px; top:110px; width:580px; box-sizing:border-box; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 32px; display:flex; flex-direction:column;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">本組 &#183; 13 張</div>
+    <div style="margin-top:12px; display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">01</div><div style="font-size:16px; color:#1C2431;">封面</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">02</div><div style="font-size:16px; color:#1C2431;">一次評估由哪些零件組成</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">03</div><div style="font-size:16px; color:#1C2431;">沒有 eval，只能等抱怨</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">04</div><div style="font-size:16px; color:#1C2431;">三種 grader 的長處與代價</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">05</div><div style="font-size:16px; color:#1C2431;">capability 與 regression</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">06</div><div style="font-size:16px; color:#1C2431;">一個 task 掛四種 grader</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">07</div><div style="font-size:16px; color:#1C2431;">研究看來源，操作電腦看狀態</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">08</div><div style="font-size:16px; color:#1C2431;">pass@k 與 pass^k</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">09</div><div style="font-size:16px; color:#1C2431;">路線圖：第 0 步就開始</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">10</div><div style="font-size:16px; color:#1C2431;">好的 task 要過三道檢查</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">11</div><div style="font-size:16px; color:#1C2431;">分數要量到 agent 本身</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">12</div><div style="font-size:16px; color:#1C2431;">task 沒過，先讀 transcript</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#2E7B4F;">13</div><div style="font-size:16px; color:#1C2431;">六種方法疊成多層防線</div></div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">來源：www.anthropic.com/engineering/demystifying-evals-for-ai-agents —— 本組為學習用重述；YAML 與 prompt 是教學用精簡版，數字只用原文寫出的。</div>
+</div></div>
+</section>
+<section class="page" id="p02">
+  <div class="label"><span class="n">02 / 13</span><span>一次評估由哪些零件組成</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">一個 task 跑好幾次，每次留下過程與結果</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">原文的八個定義與圖 2：evaluation harness 同時跑一組 task，每個 task 跑好幾次 trial，grader 讀 transcript 與 outcome 打分；被評的是 agent harness 加模型</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:440px; height:370px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:10px;"></div>
+  <div style="position:absolute; left:80px; top:164px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;"><span style="letter-spacing:0.12em">EVALUATION HARNESS</span> &#183; 跑整組 eval</div>
+  <div style="position:absolute; left:80px; top:192px; width:400px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">suite：客服（一組 task 共享一個目標）</div>
+  <div style="position:absolute; left:80px; top:242px; width:400px; height:58px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; padding:0px 14px; display:flex; align-items:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">task：處理一筆退款</div><div style="font-size:12.5px; color:#6B7380;">定義好的輸入，加上怎樣才算成功</div></div></div>
+  <div style="position:absolute; left:80px; top:310px; width:400px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">task：取消訂單</div>
+  <div style="position:absolute; left:80px; top:360px; width:400px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">task：升級處理（escalation）</div>
+  <div style="position:absolute; left:80px; top:410px; width:400px; height:58px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; border-radius:6px; padding:0px 14px; display:flex; align-items:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">harness 的工作</div><div style="font-size:12.5px; color:#6B7380;">給指示與工具、同時跑 task、記錄每一步、打分、彙整</div></div></div>
+  <div style="position:absolute; left:80px; top:482px; width:400px; font-size:13px; color:#6B7380; line-height:1.5;">三個 task 是原文客服 suite 的例子</div>
+
+  <div style="position:absolute; left:505px; top:248px; width:66px; text-align:center; font-size:12.5px; color:#8A93A0;">展開</div>
+
+  <div style="position:absolute; left:580px; top:150px; width:500px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:17px; font-weight:700; color:#FFFFFF;">展開一個 task：四個部分</div>
+  <div style="position:absolute; left:580px; top:198px; width:500px; height:322px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:12px 22px; display:flex; flex-direction:column; justify-content:center; gap:9px;">
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">1</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">輸入與成功標準</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">TASK</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">一道題：定義好的輸入加上成功標準；<br>也叫 problem 或 test case</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">2</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">grader</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">GRADERS</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">替某個面向打分；可以掛好幾個，<br>每個含多條 assertion（也叫 check）</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">3</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">trial</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">TRIALS</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">一次嘗試；模型每次輸出不同，<br>所以同一題要跑好幾次</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">4</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">transcript 與 outcome</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">RECORD · STATE</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">每次 trial 留下兩樣：完整的紀錄，<br>以及環境最後的狀態</div></div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:1140px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;"><span style="letter-spacing:0.12em">WHO</span> &#183; 誰寫、誰讀、誰跑</div>
+  <div style="position:absolute; left:1140px; top:178px; width:400px; height:76px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#FFFFFF;">agent harness ＋ 模型</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">處理輸入、調度工具呼叫：寫出 transcript，也改變環境</div></div>
+  <div style="position:absolute; left:1140px; top:280px; width:400px; height:76px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#2E7B4F;">grader</div><div style="font-size:12.5px; color:#6B7380;">讀 transcript 或 outcome 的一部分，給出分數</div></div>
+  <div style="position:absolute; left:1140px; top:382px; width:400px; height:76px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">evaluation harness</div><div style="font-size:12.5px; color:#6B7380;">同時跑 task、記錄每一步、打分、彙整結果</div></div>
+  <div style="position:absolute; left:1140px; top:474px; width:400px; font-size:13px; color:#6B7380; line-height:1.5;">評「一個 agent」，評的是 agent harness 和模型一起；<br>作者說 Claude Code 就是一個 agent harness</div>
+  <div style="position:absolute; left:1092px; top:194px; width:40px; text-align:center; font-size:12.5px; color:#8A93A0;">寫</div>
+  <div style="position:absolute; left:1092px; top:296px; width:40px; text-align:center; font-size:12.5px; color:#2E7B4F;">讀</div>
+  <div style="position:absolute; left:1092px; top:398px; width:40px; text-align:center; font-size:12.5px; color:#8A93A0;">跑</div>
+
+  <div style="position:absolute; left:60px; top:574px; width:470px; height:184px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">agent 說訂好了，不算數</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">訂機票的 agent 在 transcript 最後說「已經訂好了」；<br>outcome 是 SQL 資料庫裡有沒有那筆訂位。</div>
+    <div style="font-size:13px; color:#8A93A0;">grader 查 outcome，查的是環境，不是 agent 的話。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:574px; width:470px; height:184px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">transcript 是整段紀錄</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">輸出、工具呼叫、推理、中間結果都在裡面；<br>用 Anthropic API 時，就是跑完時整個 messages 陣列。</div>
+    <div style="font-size:13px; color:#8A93A0;">也叫 trace 或 trajectory。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:574px; width:470px; height:184px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">模型會超出題目的想像</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">作者說 Opus 4.5 在 τ2-bench 找到政策的漏洞：<br>照題目算失敗，其實替使用者找到更好的解。</div>
+    <div style="font-size:13px; color:#8A93A0;">所以不能只比對預期的步驟（第 11 卡）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：依原文的定義清單與圖 2 重畫；客服 suite 的三個 task 是原文的例子，退款 task 的 grader 見第 06 卡。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+      <marker id="an-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M482 271H576" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1138 216H1084" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c02)"></path>
+    <path d="M1082 318H1136" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c02)"></path>
+    <path d="M1138 420H1084" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p03">
+  <div class="label"><span class="n">03 / 13</span><span>沒有 eval，只能等抱怨</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">把「agent 變差了」，變成查得到的訊號</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">早期靠手動測試、自己試用與直覺就走得很遠；agent 上線、開始擴大之後，沒有 eval 的團隊只能猜了再試，等使用者來抱怨</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 沒有 eval：被動地除錯</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 有 eval：改動先跑一輪</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:90px; top:208px; width:250px; height:54px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">使用者回報：變差了</div>
+  <div style="position:absolute; left:440px; top:208px; width:250px; height:54px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2B3340;">手動重現</div>
+  <div style="position:absolute; left:440px; top:318px; width:250px; height:54px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2B3340;">修 bug</div>
+  <div style="position:absolute; left:90px; top:318px; width:250px; height:54px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">希望別的地方沒壞</div>
+  <div style="position:absolute; left:100px; top:281px; width:105px; text-align:right; font-size:12.5px; color:#C8501F;">下一次抱怨</div>
+  <div style="position:absolute; left:315px; top:281px; width:150px; text-align:center; font-size:12.5px; color:#8A93A0;">被動的循環</div>
+
+  <div style="position:absolute; left:60px; top:400px; font-size:13px; font-weight:700; color:#C8501F;">少了 eval，團隊做不到的三件事</div>
+  <div style="position:absolute; left:60px; top:426px; width:224px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">分不出真退步和雜訊</div>
+  <div style="position:absolute; left:298px; top:426px; width:224px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">沒法先測幾百個情境</div>
+  <div style="position:absolute; left:536px; top:426px; width:224px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">量不出改善了多少</div>
+  <div style="position:absolute; left:60px; top:500px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">原文形容這是盲飛：除了猜了再試，沒有辦法確認。<br>斷點常出現在 agent 上線、開始擴大規模之後。</div>
+
+  <div style="position:absolute; left:1100px; top:200px; width:180px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">改了一版 agent</div>
+  <div style="position:absolute; left:1300px; top:262px; font-size:13px; font-weight:500; color:#2E7B4F;">每一版都再跑一輪</div>
+  <div style="position:absolute; left:1015px; top:300px; width:350px; height:50px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">跑整組 eval：幾百個情境</div>
+  <div style="position:absolute; left:895px; top:420px; width:170px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">有沒有退步？</div>
+  <div style="position:absolute; left:1105px; top:420px; width:170px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">有沒有進步？</div>
+  <div style="position:absolute; left:1315px; top:420px; width:170px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">延遲、成本變了嗎？</div>
+  <div style="position:absolute; left:895px; top:478px; font-size:13px; font-weight:500; color:#2E7B4F;">每題都有分數，和上一版比，就知道是哪裡變了</div>
+  <div style="position:absolute; left:840px; top:520px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">新模型推出時，有 eval 的團隊幾天內就知道強項、調好 prompt、升級；<br>沒有 eval 的團隊要測上好幾週。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#C8501F;">等使用者抱怨，才知道壞了</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">等抱怨、手動重現、修 bug、希望別處沒退步：<br>每一步都發生在問題碰到使用者之後。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說 Claude Code 也走過這一段，後來先替簡潔、檔案編輯這類窄範圍寫 eval。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F;">基準線和回歸測試，順便就有</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">同一批 task 上一直追延遲、token 用量、每個 task 的成本與錯誤率；<br>eval 也是產品與研究之間頻寬最大的溝通管道。</div>
+    <div style="font-size:13px; color:#8A93A0;">成本一開始就看得到，好處慢慢累積，所以容易被低估。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：原文沒有說一開始就一定要寫 eval；有的團隊一開始就寫，有的到了規模才補，作者說兩種都能讓開發變快，只是越晚補越難。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M340 235H438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M565 262V316" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M440 345H342" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M215 318V264" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c03)"></path>
+    <path d="M1190 250V298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1190 350V385H980V418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1190 350V418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1190 350V385H1400V418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1485 443H1515V225H1282" stroke="#2E7B4F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#an-c03)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p04">
+  <div class="label"><span class="n">04 / 13</span><span>三種 grader 的長處與代價</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">三種 grader，各用一種代價換一種長處</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">agent 的評估通常把三種 grader 混著用，每一種只評 transcript 或 outcome 的一部分；替這份工作挑對 grader，是評估設計的核心</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:240px 520px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">grader</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">做法（原文列的）</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">長處</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">弱點</div>
+  </div>
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:116px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px 520px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">程式 grader</div><div style="font-size:13px; color:#8A93A0;">Code-based · 能用就先用</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; color:#2B3340; line-height:1.55;"><div>字串比對：完全相同、正規表示式、模糊比對<br>二元測試（<span style="white-space:nowrap">fail-to-pass</span>、<span style="white-space:nowrap">pass-to-pass</span>）、靜態分析<br>驗結果、驗工具呼叫、分析 transcript 的輪數與 token</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.55;"><div>快、便宜、客觀、可重現<br>容易除錯，能驗特定的條件</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.55;"><div>有效但不符預期模式的變化，<br>也會被判錯；缺少細膩，<br>主觀的任務評得有限</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:326px; width:1480px; height:116px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px 520px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">模型 grader</div><div style="font-size:13px; color:#8A93A0;">Model-based · 必要時才用</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; color:#2B3340; line-height:1.55;"><div>依 rubric 評分、自然語言寫的 assertion<br>兩兩比較（pairwise）、對照參考答案<br>多個判官取共識</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.55;"><div>有彈性、可擴展、抓得到細節，<br>處理得了開放式任務<br>與自由格式的輸出</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.55;"><div>不確定，同一份輸出可能判得不同；<br>比程式貴；<br>要和人工 grader 校準才準</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:442px; width:1480px; height:116px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px 520px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">人工 grader</div><div style="font-size:13px; color:#8A93A0;">Human · 審慎地用來驗證</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; color:#2B3340; line-height:1.55;"><div>領域專家審閱、群眾判斷、抽樣檢查<br>A/B 測試、標註者之間的一致度</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.55;"><div>黃金標準的品質，<br>符合專家使用者的判斷；<br>也用來校準模型 grader</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.55;"><div>貴、慢；<br>常要大規模地找得到<br>人類專家</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:582px; font-size:20px; font-weight:700; color:#1C2431;">一個 task 掛好幾個 grader 時，分數怎麼合</div>
+  <div style="position:absolute; left:60px; top:624px; width:470px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">加權：合起來過門檻</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">各 grader 的分數加權合計，<br>總分要到門檻才算通過。</div>
+    <div style="font-size:13px; color:#8A93A0;">整理者的讀法：一個面向差一點，別的可以補。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:624px; width:470px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">二元：全部都要過</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">task 上的每個 grader 都要通過，<br>有一個不過，這個 task 就算失敗。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文的定義：所有 grader 都必須通過。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:624px; width:470px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">混合：兩種一起用</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">原文只說可以混用，沒有規定怎麼混；<br>例如關鍵的 grader 必須過，其餘加權。</div>
+    <div style="font-size:13px; color:#8A93A0;">「例如」之後是整理者舉的例子。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：表格依原文的三張表整理，措辭是整理者的；第 11 卡是第 5 步建議的順序：能用程式就用程式，必要時才用模型，人工審慎地用來驗證。</div>
+</div></div>
+</section>
+<section class="page" id="p05">
+  <div class="label"><span class="n">05 / 13</span><span>capability 與 regression</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">capability 從低分往上爬，regression 守在接近滿分</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">兩種評估問的問題不同，分數的意思也不同；capability 的 task 通過率高了，就畢業成 regression，持續跑來抓漂移</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">CAPABILITY · QUALITY</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">capability：它能把什麼做好？</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">REGRESSION</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">regression：以前會的，現在還會嗎？</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:300px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:222px; width:700px; height:62px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 20px; display:flex; align-items:center;"><div><div style="font-size:16px; font-weight:700; color:#1C2431;">挑 agent 還做不好的 task</div><div style="margin-top:2px; font-size:13px; color:#6B7380;">刻意留一段可以爬的山：題目難，通過率從低處開始</div></div></div>
+  <div style="position:absolute; left:60px; top:311px; font-size:14px; font-weight:700; color:#4B5866;">通過率</div>
+  <div style="position:absolute; left:140px; top:306px; width:560px; height:30px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px;"></div>
+  <div style="position:absolute; left:140px; top:306px; width:120px; height:30px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px 0px 0px 6px;"></div>
+  <div style="position:absolute; left:272px; top:311px; font-size:13px; color:#2B3340;">起點：低</div>
+  <div style="position:absolute; left:140px; top:340px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">0</div>
+  <div style="position:absolute; left:640px; top:340px; width:60px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">100%</div>
+  <div style="position:absolute; left:60px; top:366px; font-size:14px; font-weight:500; color:#2E7B4F;">每次改 agent、每次換新模型，看通過率往上爬</div>
+  <div style="position:absolute; left:60px; top:400px; width:700px; height:48px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; border-radius:8px; padding:0px 20px; display:flex; align-items:center; font-size:15px; font-weight:700; color:#1C2431;">在問：這件事，它做得到嗎？</div>
+
+  <div style="position:absolute; left:840px; top:222px; width:700px; height:62px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 20px; display:flex; align-items:center;"><div><div style="font-size:16px; font-weight:700; color:#1C2431;">放 agent 以前就處理得了的 task</div><div style="margin-top:2px; font-size:13px; color:#6B7380;">整組都應該過；分數一掉，就是有東西壞了、要修</div></div></div>
+  <div style="position:absolute; left:840px; top:311px; font-size:14px; font-weight:700; color:#4B5866;">通過率</div>
+  <div style="position:absolute; left:920px; top:306px; width:560px; height:30px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px;"></div>
+  <div style="position:absolute; left:920px; top:306px; width:546px; height:30px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px 0px 0px 6px;"></div>
+  <div style="position:absolute; left:940px; top:311px; font-size:13px; color:#FFFFFF;">接近 100%</div>
+  <div style="position:absolute; left:920px; top:340px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">0</div>
+  <div style="position:absolute; left:1420px; top:340px; width:60px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">100%</div>
+  <div style="position:absolute; left:840px; top:366px; font-size:14px; color:#6B7380;">團隊在 capability 上爬山時，這一組也要一起跑</div>
+  <div style="position:absolute; left:840px; top:400px; width:700px; height:48px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; border-radius:8px; padding:0px 20px; display:flex; align-items:center; font-size:15px; font-weight:700; color:#1C2431;">在問：以前會的，現在還能穩定做到嗎？</div>
+
+  <div style="position:absolute; left:60px; top:472px; width:560px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 20px; display:flex; align-items:center; font-size:15px; font-weight:700; color:#1C2431;">capability 題組裡，通過率已經很高的 task</div>
+  <div style="position:absolute; left:760px; top:474px; width:80px; text-align:center; background-color:#FFFFFF; font-size:14px; font-weight:700; color:#2E7B4F;">畢業</div>
+  <div style="position:absolute; left:1020px; top:472px; width:520px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:0px 20px; display:flex; align-items:center; font-size:15px; font-weight:700; color:#2E7B4F;">移進 regression 題組，持續跑來抓漂移</div>
+  <div style="position:absolute; left:60px; top:542px; width:1480px; font-size:13px; color:#8A93A0;">同一批 task，原本問「做得到嗎」，畢業之後問「還能穩定做到嗎」；時機是 agent 上線、最佳化過之後。</div>
+
+  <div style="position:absolute; left:60px; top:590px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">兩組都要跑</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">團隊在 capability 評估上爬山的時候，<br>也要跑 regression，確認沒在別處弄壞東西。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文說 regression 的通過率應該接近 100%。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:590px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">畢業：從做得到，到穩定做到</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">通過率已經很高的 capability 評估，<br>變成一組持續跑的 regression 題組。</div>
+    <div style="font-size:13px; color:#8A93A0;">目的是抓住任何漂移。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:590px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">滿分的題組，給不出進步的訊號</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">第 7 步：接近 100% 的 eval 只抓得到退步；<br>越接近飽和，大進步也只讓分數小小地動。</div>
+    <div style="font-size:13px; color:#8A93A0;">結論的提醒：題目要對模型夠難（第 12 卡）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：通過率條是整理者的示意，原文只說 capability 從低通過率開始、regression 應該接近 100%；兩種題組都要跑，所以不用 ✗／✓。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="an-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M622 500H1016" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p06">
+  <div class="label"><span class="n">06 / 13</span><span>一個 task 掛四種 grader</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">agent 說退款辦好了，要四種 grader 各查一樣</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">原文的對話 agent 例子：一位不滿的客戶要退款。成功有好幾個面向，所以同一個 task 掛了四種 grader；對話本身要另一個 LLM 扮演客戶來跑</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:410px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:18px; font-weight:700; color:#FFFFFF;">一段模擬的客服對話</div>
+  <div style="position:absolute; left:60px; top:198px; width:410px; height:258px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:18px 24px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:13px; color:#8A93A0;">客戶（另一個 LLM 扮演）</div>
+    <div style="font-size:15px; color:#2B3340;">「等了兩週還沒退款，真的很火大。」</div>
+    <div style="font-size:13px; color:#8A93A0;">agent 查政策、驗身分、處理退款、寄確認信</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">agent：「退款已處理，確認信也寄出了。」</div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">說自己退好款了</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">說確認信寄出了</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">語氣聽起來很體貼</div></div>
+    <div style="font-size:13px; color:#8A93A0;">↑ 這幾句都是自述，不是證據</div>
+  </div>
+
+  <div style="position:absolute; left:580px; top:120px; font-size:20px; font-weight:700; color:#1C2431;">四種 grader（都寫在 task 定義裡，只查證據）</div>
+  <div style="position:absolute; left:580px; top:158px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">1</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">工單結案了嗎？退款處理了嗎？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">STATE_CHECK</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">查環境裡的最終狀態：tickets 是 resolved、refunds 是 processed，不看 agent 怎麼說</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:250px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">2</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">該呼叫的工具，都呼叫了嗎？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">TOOL_CALLS</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">verify_identity、process_refund（金額 ≤ 100）、send_confirmation 都要出現</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:342px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">3</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">10 輪之內結束了嗎？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">TRANSCRIPT</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">max_turns: 10；原文說成功的其中一個面向，就是不到 10 輪就完成</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:434px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">4</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">互動的品質夠好嗎？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">LLM_RUBRIC</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">三條 assertion：對客戶的不滿有同理心、解決方式講清楚、回答根據 fetch_policy 的結果</div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:545px; width:480px; height:130px; box-sizing:border-box; background-color:#1F2A3A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#FFFFFF;">判定：一個面向一個 grader</div>
+    <div style="font-size:14px; color:rgba(255,255,255,0.78); line-height:1.6;">狀態查結果、工具呼叫查過程、輪數查效率，<br>rubric 查互動本身；自述不在任何一道裡。</div>
+  </div>
+  <div style="position:absolute; left:580px; top:545px; width:960px; height:130px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">為什麼例子掛滿 grader</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">原文說這份和寫程式的那份例子，都是為了示範全部的 grader。實務上，對話 agent 多半用模型 grader<br>同時評溝通品質與目標達成，因為像回答問題這類 task，可能有好幾個「對」的解。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:695px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:716px; font-size:20px; font-weight:700; color:#1C2431;">寫程式與對話的 agent，實務上各自怎麼評</div>
+  <div style="position:absolute; left:60px; top:752px; font-size:16px; color:#2B3340;">① 寫程式：先用單元測試驗正確性，再用一份 LLM rubric 評整體程式品質；靜態分析、狀態、工具呼叫需要時才加。</div>
+  <div style="position:absolute; left:60px; top:784px; font-size:16px; color:#2B3340;">② 寫程式也要評 transcript：用啟發式的程式品質規則，加上有清楚 rubric 的模型 grader，評它怎麼呼叫工具、怎麼和使用者互動。</div>
+  <div style="position:absolute; left:60px; top:816px; font-size:16px; color:#2B3340;">③ 對話：常要另一個 LLM 扮演使用者；τ-Bench、τ2-Bench 就在零售客服、訂機票的情境裡，這樣模擬多輪互動。</div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左邊的對話是整理者編的示意；四種 grader 與它們查的內容取自原文的 YAML 例子（已精簡），兩份例子都另外追蹤輪數、token 與延遲。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M482 336L558 336" stroke="#9AA3AE" stroke-width="2" marker-end="url(#ag-c06)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p07">
+  <div class="label"><span class="n">07 / 13</span><span>研究看來源，操作電腦看狀態</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">研究看來源撐不撐得住，操作電腦看狀態變了沒</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">兩類 agent 的成功，都不能只看它交出的文字：研究報告要對回檢索到的來源，操作電腦要到環境裡查，事情是不是真的發生了</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">RESEARCH AGENTS</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">研究：好不好要看任務，拆成幾種檢查</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">COMPUTER USE AGENTS</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">操作電腦：在環境裡跑，查結果真的發生了</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:190px; top:222px; width:440px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">研究報告：蒐集、綜合、分析之後的答案</div>
+  <div style="position:absolute; left:60px; top:304px; width:340px; height:70px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">有來源撐腰嗎</div><div style="font-size:12.5px; color:#6B7380;">groundedness：主張對得上檢索到的來源</div></div>
+  <div style="position:absolute; left:420px; top:304px; width:340px; height:70px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">該有的都有嗎</div><div style="font-size:12.5px; color:#6B7380;">coverage：好答案必須包含的關鍵事實</div></div>
+  <div style="position:absolute; left:60px; top:388px; width:340px; height:70px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">來源夠權威嗎</div><div style="font-size:12.5px; color:#6B7380;">source quality：不只是第一個搜到的</div></div>
+  <div style="position:absolute; left:420px; top:388px; width:340px; height:70px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">客觀題答對了嗎</div><div style="font-size:12.5px; color:#6B7380;">exact match：例如 X 公司第三季的營收</div></div>
+  <div style="position:absolute; left:60px; top:470px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">另外用 LLM 標出沒根據的主張與涵蓋的缺口，也評綜合得是否連貫、完整。</div>
+  <div style="position:absolute; left:60px; top:500px; width:700px; height:58px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center; gap:14px;">
+    <div style="flex-shrink:0; padding:4px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">三個難處</div>
+    <div style="font-size:13.5px; color:#2B3340; line-height:1.5;">專家可能意見不一；參考資料一直在變，標準答案跟著移動；<br>輸出越長、越開放，出錯的空間就越大</div>
+  </div>
+
+  <div style="position:absolute; left:970px; top:222px; width:440px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">agent 用截圖、點擊、鍵盤、捲動操作軟體</div>
+  <div style="position:absolute; left:860px; top:300px; width:680px; height:158px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #D5DAE1; border-radius:10px;"></div>
+  <div style="position:absolute; left:880px; top:311px; font-size:14px; font-weight:700; color:#1C2431;">放進真的或沙盒環境，跑完之後查</div>
+  <div style="position:absolute; left:880px; top:342px; width:640px; height:30px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:13.5px; color:#2B3340;">WebArena：網址與頁面狀態對不對</div>
+  <div style="position:absolute; left:880px; top:378px; width:640px; height:30px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:13.5px; font-weight:700; color:#2E7B4F;">會改資料的 task 查後端：訂單真的成立，不只是確認頁出現了</div>
+  <div style="position:absolute; left:880px; top:414px; width:640px; height:30px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:13.5px; color:#2B3340;">OSWorld：檔案系統、應用程式設定、資料庫內容、UI 元件屬性</div>
+  <div style="position:absolute; left:840px; top:470px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">瀏覽器 agent 另有一個取捨：token 用量對延遲</div>
+  <div style="position:absolute; left:840px; top:500px; width:340px; height:58px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">讀 DOM：快，但吃 token</div><div style="font-size:12.5px; color:#6B7380;">例：請 Claude 摘要維基百科</div></div></div>
+  <div style="position:absolute; left:1200px; top:500px; width:340px; height:58px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">看截圖：慢，但省 token</div><div style="font-size:12.5px; color:#6B7380;">例：在 Amazon 找新的筆電包</div></div></div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">研究的 rubric，要常跟專家校準</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">什麼算完整、有來源、甚至正確，要看任務：<br>市場掃描、併購前的盡職調查、科學報告，標準都不同。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">BrowseComp 的題目在整個網路上撈針：容易驗證，很難解。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">連選對工具都要評</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">作者說 Claude for Chrome 的 eval，就在檢查 agent 有沒有<br>依情境選對 DOM 或截圖，瀏覽器任務因此做得更快、更準。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">WebArena 測瀏覽器上的任務，OSWorld 擴大到整個作業系統。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩類並排是整理者的畫法，原文各是一節、沒有互相比較；檢查項目與基準的例子都取自原文，所以不用 ✗／✓。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M410 272V288H230V302" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M410 288H590V302" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M1190 272V298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p08">
+  <div class="label"><span class="n">08 / 13</span><span>pass@k 與 pass^k</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">k 越大，pass@k 越高，pass^k 越低</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">同一個 task 每次跑的結果不一樣：pass@k 是 k 次裡至少成功一次的機率，pass^k 是 k 次全部成功的機率；兩條線從同一點出發</div>
+
+  <div style="position:absolute; left:60px; top:136px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>pass@k：k 次裡至少一次成功</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>pass^k：k 次全部成功</div>
+    <div style="color:#8A93A0;">點的位置依原文圖 3 目測</div>
+  </div>
+
+  <div style="position:absolute; left:180px; top:190px; width:900px; height:1px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:272px; width:900px; height:1px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:355px; width:900px; height:1px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:437px; width:900px; height:1px; background-color:#EEF1F5;"></div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <polyline points="180,279 280,213 380,196 480,192 580,190 680,190 780,190 880,190 980,190 1080,190" stroke="#6B7380" stroke-width="1.5" fill="none"></polyline>
+    <polyline points="180,279 280,344 380,392 480,427 580,453 680,472 780,485 880,493 980,502 1080,507" stroke="#6B7380" stroke-width="1.5" stroke-dasharray="5 4" fill="none"></polyline>
+  </svg>
+
+  <div style="position:absolute; left:190px; top:160px; font-size:12px; color:#8A93A0;">↑ 成功率（%）</div>
+  <div style="position:absolute; left:122px; top:181px; width:40px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">100</div>
+  <div style="position:absolute; left:122px; top:264px; width:40px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">75</div>
+  <div style="position:absolute; left:122px; top:346px; width:40px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">50</div>
+  <div style="position:absolute; left:122px; top:429px; width:40px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">25</div>
+  <div style="position:absolute; left:122px; top:511px; width:40px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">0</div>
+  <div style="position:absolute; left:160px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">1</div>
+  <div style="position:absolute; left:260px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">2</div>
+  <div style="position:absolute; left:360px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">3</div>
+  <div style="position:absolute; left:460px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">4</div>
+  <div style="position:absolute; left:560px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">5</div>
+  <div style="position:absolute; left:660px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">6</div>
+  <div style="position:absolute; left:760px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">7</div>
+  <div style="position:absolute; left:860px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">8</div>
+  <div style="position:absolute; left:960px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">9</div>
+  <div style="position:absolute; left:1060px; top:530px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">10</div>
+  <div style="position:absolute; left:880px; top:552px; width:200px; text-align:right; font-size:12px; color:#8A93A0;">試跑次數 k →</div>
+
+  <div style="position:absolute; left:271px; top:204px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:371px; top:187px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:471px; top:183px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:571px; top:181px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:671px; top:181px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:771px; top:181px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:871px; top:181px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:971px; top:181px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1071px; top:181px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+
+  <div style="position:absolute; left:271px; top:335px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:371px; top:383px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:471px; top:418px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:571px; top:444px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:671px; top:463px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:771px; top:476px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:871px; top:484px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:971px; top:493px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:1071px; top:498px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+
+  <div style="position:absolute; left:168px; top:267px; width:24px; height:24px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:173px; top:272px; width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>
+
+  <div style="position:absolute; left:200px; top:270px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; font-weight:700; color:#1F2A3A;">k＝1：兩者相等，都是每次試跑的成功率</div>
+  <div style="position:absolute; left:392px; top:208px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; color:#2B3340;">pass@3：<span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">97%</span>（原圖的標注）</div>
+  <div style="position:absolute; left:398px; top:358px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; color:#2B3340;">pass^3：<span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">39%</span>（原圖的標注）</div>
+  <div style="position:absolute; left:996px; top:156px; white-space:nowrap; font-size:13px; font-weight:700; color:#1F2A3A;">趨近 100%</div>
+  <div style="position:absolute; left:1004px; top:468px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; font-weight:700; color:#1F2A3A;">掉向 0%</div>
+
+  <div style="position:absolute; left:1120px; top:170px; width:420px; height:316px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 24px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-size:17px; font-weight:700; color:#1C2431;">怎麼讀這張圖</div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#1F2A3A; margin-top:2px;">01</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">k＝1 時兩條線重疊，<br>都等於每一次試跑的成功率。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#1F2A3A; margin-top:2px;">02</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">pass@k：k 次裡至少一次成功。<br>給的機會越多，越接近 100%。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#1F2A3A; margin-top:2px;">03</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">pass^k：k 次全部成功。<br>每次都要一致，k 越大越難，掉向 0%。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#1F2A3A; margin-top:2px;">04</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">到了 k＝10，<br>兩條線講的是相反的故事。</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">一半的 task 第一次就過</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">pass@1 是 50%，表示有一半的 task<br>第一次嘗試就成功；寫程式最常看它。</div>
+    <div style="font-size:13px; color:#8A93A0;">一次成功就夠的工具，看 pass@k。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">每次 75%，連過三次約 42%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">三次全過的機率是 (0.75)³ ≈ 42%。<br>面對客戶的 agent，使用者期待每次都可靠。</div>
+    <div style="font-size:13px; color:#8A93A0;">一致性是必要條件時，看 pass^k。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">每個 task 有自己的成功率</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">同一個 agent 可能一題 90%、另一題 50%；<br>這次過了的題，下次可能不過。</div>
+    <div style="font-size:13px; color:#8A93A0;">所以同一題要跑好幾次 trial（第 02 卡）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：依原文圖 3 重畫，點的位置依原圖目測，只標原文寫出的數字；圖上的 97%、39% 和正文 75% 的算例是兩組不同的例子。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c08" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M180 520V178" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M180 520H1094" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M280 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M380 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M480 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M580 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M680 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M780 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M880 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M980 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M1080 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p09">
+  <div class="label"><span class="n">09 / 13</span><span>路線圖：第 0 步就開始</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">第 0 步就開始：20 到 50 個真實失敗就夠</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">原文的路線圖分三段、從第 0 步編到第 8 步：先蒐集 task，再設計 harness 與 grader，最後長期維護；這一張的重點是第一段的前兩步</div>
+
+  <div style="position:absolute; left:60px; top:158px; width:648px; height:28px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:14px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:500; color:#4B5866;">第一段 · 蒐集 task（第 0 到 3 步）</div>
+  <div style="position:absolute; left:724px; top:158px; width:316px; height:28px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:14px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:500; color:#4B5866;">第二段 · harness 與 grader</div>
+  <div style="position:absolute; left:1056px; top:158px; width:482px; height:28px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:14px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:500; color:#4B5866;">第三段 · 長期維護與使用</div>
+
+  <div style="position:absolute; left:60px; top:196px; width:150px; height:160px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 12px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.1em; color:#2E7B4F;">STEP 0</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">現在就開始</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">20 到 50 個<br>真實失敗就夠</div>
+    <div style="margin-top:auto; font-size:12px; font-weight:700; color:#2E7B4F;">本章</div>
+  </div>
+  <div style="position:absolute; left:226px; top:196px; width:150px; height:160px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 12px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.1em; color:#2E7B4F;">STEP 1</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">從手動檢查下手</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">發版前的檢查、<br>bug 與客服佇列</div>
+    <div style="margin-top:auto; font-size:12px; font-weight:700; color:#2E7B4F;">本章</div>
+  </div>
+  <div style="position:absolute; left:392px; top:196px; width:150px; height:160px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 12px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.1em; color:#8A93A0;">STEP 2</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">寫清楚的 task</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">專家判得一樣，<br>附上參考解</div>
+    <div style="margin-top:auto; font-size:12px; color:#8A93A0;">第 10 卡</div>
+  </div>
+  <div style="position:absolute; left:558px; top:196px; width:150px; height:160px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 12px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.1em; color:#8A93A0;">STEP 3</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">正反兩面都測</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">該做、不該做的<br>情況都要有</div>
+    <div style="margin-top:auto; font-size:12px; color:#8A93A0;">第 10 卡</div>
+  </div>
+  <div style="position:absolute; left:724px; top:196px; width:150px; height:160px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 12px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.1em; color:#8A93A0;">STEP 4</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">穩定的 harness</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">每次 trial 都<br>從乾淨環境開始</div>
+    <div style="margin-top:auto; font-size:12px; color:#8A93A0;">第 11 卡</div>
+  </div>
+  <div style="position:absolute; left:890px; top:196px; width:150px; height:160px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 12px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.1em; color:#8A93A0;">STEP 5</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">用心設計 grader</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">評產出不評路徑，<br>判官要校準</div>
+    <div style="margin-top:auto; font-size:12px; color:#8A93A0;">第 11 卡</div>
+  </div>
+  <div style="position:absolute; left:1056px; top:196px; width:150px; height:160px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 12px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.1em; color:#8A93A0;">STEP 6</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">讀 transcript</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">失敗公不公平，<br>讀了才知道</div>
+    <div style="margin-top:auto; font-size:12px; color:#8A93A0;">第 12 卡</div>
+  </div>
+  <div style="position:absolute; left:1222px; top:196px; width:150px; height:160px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 12px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.1em; color:#8A93A0;">STEP 7</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">盯著飽和</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">接近 100%，<br>就看不出進步</div>
+    <div style="margin-top:auto; font-size:12px; color:#8A93A0;">第 12 卡</div>
+  </div>
+  <div style="position:absolute; left:1388px; top:196px; width:150px; height:160px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 12px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.1em; color:#8A93A0;">STEP 8</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">長期維護</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">專責團隊管設施，<br>大家貢獻 task</div>
+    <div style="margin-top:auto; font-size:12px; color:#8A93A0;">第 12 卡</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:388px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">口訣</div>
+    <div style="font-size:15px; color:#2B3340;">原文把這條路叫做 eval 驅動的 agent 開發：早點定義成功、清楚地量、持續迭代。這一條路從完全沒有 eval，走到可以信任的 eval。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:474px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:494px; font-size:20px; font-weight:700; color:#1C2431;">第一段的前兩步，加上一條提醒</div>
+
+  <div style="position:absolute; left:60px; top:536px; width:470px; height:226px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">第 0 步：20 到 50 個就夠</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">很多團隊以為要幾百個 task 才能開始。<br>早期每次改動的影響都很明顯，效果大，<br>小樣本就看得出來；先用 80/20 的做法。<br>成熟的 agent 才需要更大、更難的題組。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文的說法：從真實失敗裡挑簡單的 task。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:536px; width:470px; height:226px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">第 1 步：從手動檢查開始</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">發版前會確認的行為、使用者常做的事；<br>已經上線的話，去翻 bug 追蹤與客服佇列，<br>把使用者回報的失敗變成 task，<br>再依對使用者的影響排優先順序。</div>
+    <div style="font-size:13px; color:#8A93A0;">這樣題組才會反映真實的用法。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:536px; width:470px; height:226px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">越晚開始，越難建</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">早期，產品需求很自然就能寫成測試案例；<br>拖得太久，就得從一個已經上線的系統，<br>倒過來推出成功的標準。<br>這也是第 0 步叫你現在就開始的理由。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說 eval 拖得越久越難建。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：九格的名稱是整理者依原文圖 4 與各步小標譯的；每格下方指向本組講那一步的卡。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M212 268L224 276L212 284Z" fill="#9AA3AE"></path>
+    <path d="M378 268L390 276L378 284Z" fill="#9AA3AE"></path>
+    <path d="M544 268L556 276L544 284Z" fill="#9AA3AE"></path>
+    <path d="M710 268L722 276L710 284Z" fill="#9AA3AE"></path>
+    <path d="M876 268L888 276L876 284Z" fill="#9AA3AE"></path>
+    <path d="M1042 268L1054 276L1042 284Z" fill="#9AA3AE"></path>
+    <path d="M1208 268L1220 276L1208 284Z" fill="#9AA3AE"></path>
+    <path d="M1374 268L1386 276L1374 284Z" fill="#9AA3AE"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p10">
+  <div class="label"><span class="n">10 / 13</span><span>好的 task 要過三道檢查</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">好的 task，兩位專家會判出同一個結果</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2 步：task 規格含糊，雜訊就跑進指標裡。一個候選 task 依序過三道檢查才放進題組，最後還要看整組是不是正反兩面都有（第 3 步）</div>
+
+  <div style="position:absolute; left:60px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:700; color:#FFFFFF;">一個候選 task</div>
+  <div style="position:absolute; left:360px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#1C2431; line-height:1.3;"><div>兩位專家各自判，<br>結論一樣嗎？</div></div>
+  <div style="position:absolute; left:660px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#1C2431; line-height:1.3;"><div>grader 查的，<br>task 裡都寫了嗎？</div></div>
+  <div style="position:absolute; left:960px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#1C2431; line-height:1.3;"><div>有參考解能通過<br>所有 grader 嗎？</div></div>
+  <div style="position:absolute; left:1260px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#FFFFFF; line-height:1.3;"><div>放進題組，<br>再看整組平不平衡</div></div>
+
+  <div style="position:absolute; left:610px; top:196px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#6B7380;">是</div>
+  <div style="position:absolute; left:910px; top:196px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#6B7380;">是</div>
+  <div style="position:absolute; left:1210px; top:196px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#2E7B4F;">是</div>
+  <div style="position:absolute; left:486px; top:280px; font-size:13px; font-weight:700; color:#C8501F;">否</div>
+  <div style="position:absolute; left:786px; top:280px; font-size:13px; font-weight:700; color:#C8501F;">否</div>
+  <div style="position:absolute; left:1086px; top:280px; font-size:13px; font-weight:700; color:#C8501F;">否</div>
+
+  <div style="position:absolute; left:360px; top:330px; width:230px; height:124px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:16px 18px; display:flex; flex-direction:column; justify-content:center; gap:6px;">
+    <div style="font-size:15px; font-weight:700; color:#C8501F;">規格含糊</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">含糊會變成指標裡的雜訊；<br>專家自己都做不出來的，<br>也要回頭改題目</div>
+  </div>
+  <div style="position:absolute; left:660px; top:330px; width:230px; height:124px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:16px 18px; display:flex; flex-direction:column; justify-content:center; gap:6px;">
+    <div style="font-size:15px; font-weight:700; color:#C8501F;">照指示做也會失敗</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;"><span style="white-space:nowrap">Terminal-Bench</span> 的稽核：<br>task 沒寫檔案路徑，<br>測試卻假設了某個路徑</div>
+  </div>
+  <div style="position:absolute; left:960px; top:330px; width:230px; height:124px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:16px 18px; display:flex; flex-direction:column; justify-content:center; gap:6px;">
+    <div style="font-size:15px; font-weight:700; color:#C8501F;">不知道解不解得出來</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">參考解證明題目解得出來，<br>也驗證 grader 的設定對了</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:486px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:506px; font-size:20px; font-weight:700; color:#1C2431;">整組題目的兩條規則，加上作者的例子</div>
+  <div style="position:absolute; left:60px; top:550px; width:470px; height:206px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">0% pass@100，多半是題壞了</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">前沿模型跑了很多次都是 0%，<br>最常見的原因是 task 壞了，<br>而不是 agent 做不到；先回頭檢查規格與 grader。</div>
+    <div style="font-size:13px; color:#8A93A0;">每個 task 都要讓照指示做的 agent 過得了。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:550px; width:470px; height:206px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">正反兩面都要測</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">只測「該搜尋時有沒有搜」，最後會得到<br>一個幾乎什麼都搜的 agent；單邊的 eval<br>帶來單邊的最佳化。</div>
+    <div style="font-size:13px; color:#8A93A0;">所以要避免類別不平衡的題組。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:550px; width:470px; height:206px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">作者的例子：網頁搜尋</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">作者說替 Claude.ai 的網頁搜尋做 eval 時，<br>兩邊都測：該搜的（查天氣），<br>和該直接答的（誰創立了 Apple）。</div>
+    <div style="font-size:13px; color:#8A93A0;">兩邊的平衡花了好幾輪，prompt 與 eval 一起改。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三道檢查的順序是整理者排的，內容都出自原文第 2 步；「專家自己做得出來嗎」也是原文的問法，rubric 寫得含糊一樣會判得不一致。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M290 222L358 222" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M590 222L658 222" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M890 222L958 222" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M1190 222L1258 222" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c10)"></path>
+    <path d="M475 254L475 328" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c10)"></path>
+    <path d="M775 254L775 328" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c10)"></path>
+    <path d="M1075 254L1075 328" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c10)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p11">
+  <div class="label"><span class="n">11 / 13</span><span>分數要量到 agent 本身</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">分數要量到 agent，不是量到環境或 grader</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4、5 步：eval 裡的 agent 要和上線的差不多，環境不能自己帶進雜訊；grader 要評得公平、和人對齊，也要防作弊</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">01　環境 · 第 4 步</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">每次 trial，<br>都從乾淨的環境開始</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">殘留的檔案、快取的資料、耗盡的資源，<br>會讓失敗彼此相關，量到的是基礎設施；<br>共用狀態也會灌水：作者說 Claude 曾讀到<br>前幾次 trial 留下的 git 歷史。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ trial 之間共用檔案、快取與資源<br>✓ 每次隔離、從頭開始</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">02　評分 · 第 5 步</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">評它做出了什麼，<br>不評它走哪條路</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">規定工具呼叫的順序太死：agent 常找到<br>出題者沒想到、卻完全有效的做法。<br>多個部分的 task，要給部分分數：<br>驗了身分卻沒退款，也比馬上失敗好。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 規定每一步的工具呼叫順序<br>✓ 評產出，呈現成功的程度</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">03　判官 · 第 5 步</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">LLM 判官，<br>要和專家校準</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">給它一條退路：資訊不夠就回答 Unknown，<br>減少幻覺；每個面向寫一份清楚的 rubric，<br>各交給一個獨立的判官，不讓一個判官<br>包辦全部。穩定之後，人工偶爾複查就好。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 一個判官一次判所有面向<br>✓ 一個面向一個判官，可以說 Unknown</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; font-size:20px; font-weight:700; color:#1C2431;">選 grader 的順序（第 5 步）</div>
+  <div style="position:absolute; left:60px; top:630px; width:460px; height:72px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:rgba(255,255,255,0.6);">01</div>
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">確定性的 grader：能用就用</div>
+  </div>
+  <div style="position:absolute; left:570px; top:630px; width:460px; height:72px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">02</div>
+    <div style="font-size:16px; font-weight:700; color:#2E7B4F;">LLM grader：必要時，或需要彈性時</div>
+  </div>
+  <div style="position:absolute; left:1080px; top:630px; width:460px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">03</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">人工 grader：審慎地拿來驗證</div>
+  </div>
+  <div style="position:absolute; left:60px; top:722px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">原文另外兩條：grader 要防作弊，通過必須是真的解決了問題，不是鑽到漏洞；評分的 bug、harness 的限制與規格含糊，會讓表現好的 agent 也拿低分（第 12 卡的 CORE-Bench）。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三張卡依原文第 4、5 步整理，每張下方的 ✗／✓ 兩行是整理者的濃縮；確定性的 grader 就是第 04 卡的程式 grader。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M539 658L551 666L539 674Z" fill="#9AA3AE"></path>
+    <path d="M1049 658L1061 666L1049 674Z" fill="#9AA3AE"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p12">
+  <div class="label"><span class="n">12 / 13</span><span>task 沒過，先讀 transcript</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">task 沒過：先讀 transcript，再決定修誰</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 6、7 步：沒有人讀過 transcript 之前，分數不照單全收；失敗要看起來公平，看得出 agent 錯在哪、為什麼錯</div>
+
+  <div style="position:absolute; left:60px; top:285px; width:230px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#FFFFFF; line-height:1.3;"><div>一個 task 沒過，<br>或分數不再上升</div></div>
+  <div style="position:absolute; left:400px; top:275px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:17px; font-weight:700; color:#1C2431; line-height:1.35;"><div>讀 transcript：<br>問題出在誰身上？</div></div>
+
+  <div style="position:absolute; left:822px; top:164px; font-size:13px; font-weight:700; color:#2E7B4F;">改 agent</div>
+  <div style="position:absolute; left:822px; top:250px; font-size:13px; font-weight:700; color:#C8501F;">改 grader</div>
+  <div style="position:absolute; left:822px; top:336px; font-size:13px; font-weight:700; color:#C8501F;">改 task</div>
+  <div style="position:absolute; left:822px; top:422px; font-size:13px; font-weight:700; color:#C8501F;">改 harness</div>
+
+  <div style="position:absolute; left:940px; top:150px; width:600px; height:76px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:10px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">agent 真的做錯了：失敗是公平的</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">看得出它錯在哪、為什麼錯，這時該改的才是 agent</div>
+  </div>
+  <div style="position:absolute; left:940px; top:236px; width:600px; height:76px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:10px; padding:10px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-size:17px; font-weight:700; color:#C8501F;">grader 判掉了有效的解</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">評分太死：預期 <span style="white-space:nowrap">96.124991…</span> 時，把 <span style="white-space:nowrap">96.12</span> 判成錯（<span style="white-space:nowrap">CORE-Bench</span>）</div>
+  </div>
+  <div style="position:absolute; left:940px; top:322px; width:600px; height:76px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:10px; padding:10px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-size:17px; font-weight:700; color:#C8501F;">task 含糊，或根本無法重現</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">規格含糊；有些帶隨機性的 task 無法精確重現（<span style="white-space:nowrap">CORE-Bench</span>）</div>
+  </div>
+  <div style="position:absolute; left:940px; top:408px; width:600px; height:76px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:10px; padding:10px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-size:17px; font-weight:700; color:#C8501F;">harness 綁住了模型</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">換成限制比較少的 scaffold 之後，同一個模型的分數大漲（<span style="white-space:nowrap">CORE-Bench</span>）</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:506px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">作者的規矩</div>
+    <div style="font-size:15px; color:#2B3340;">沒有人深入看過 eval 的細節、讀過一些 transcript 之前，分數不照單全收；評分不公平、task 含糊、有效的解被扣分、harness 綁手，就修 eval。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:584px; font-size:20px; font-weight:700; color:#1C2431;">這三步的其他提醒</div>
+  <div style="position:absolute; left:60px; top:626px; width:470px; height:196px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;"><span style="white-space:nowrap">CORE-Bench</span>：42% → 95%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">作者說 Opus 4.5 起初只拿 42%；研究員修掉<br>評分太死、規格含糊、無法重現的題目，<br>再換成限制較少的 scaffold，分數跳到 95%。</div>
+    <div style="font-size:13px; color:#8A93A0;">METR 也有門檻題：題目要達到，評分卻要超過。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:626px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">滿分的 eval，看不出進步</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">第 7 步：接近 100% 只抓得到退步；<br>越接近飽和，大進步也只讓分數小小地動。<br>Qodo 的一次性寫程式 eval 就看不出來。</div>
+    <div style="font-size:13px; color:#8A93A0;"><span style="white-space:nowrap">SWE-bench Verified</span>：今年從 30% 到超過 80%。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:626px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">第 8 步：eval 要有擁有者</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">專責的 eval 團隊管基礎設施；<br>領域專家與產品團隊貢獻大部分 task，<br>自己跑；產品經理、客戶成功經理、業務都能加題。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說他們可以用 Claude Code 把 task 當成 PR 送進來。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：四個出口是整理者依第 5 到 7 步歸納的；CORE-Bench 與 METR 的例子出自第 5 步。SWE-bench 的起點在寫程式那一節寫的是 40%，兩處照原文。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c12" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c12" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+      <marker id="ao-c12" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+    </defs>
+    <path d="M290 317L398 317" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c12)"></path>
+    <path d="M700 317H800" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M760 317V188H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c12)"></path>
+    <path d="M800 317V274H938" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c12)"></path>
+    <path d="M800 317V360H938" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c12)"></path>
+    <path d="M760 317V446H938" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c12)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p13">
+  <div class="label"><span class="n">13 / 13</span><span>六種方法疊成多層防線</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">沒有一層接得住所有問題，方法要疊起來用</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">自動化 eval 能在幾千個 task 上跑、不碰真實使用者，但只是了解 agent 的方法之一；原文借安全工程的瑞士起司模型：每一層都有洞</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:1480px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:250px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">方法</div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">什麼時候用</div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">長處</div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">短處</div>
+  </div>
+  <div style="position:absolute; left:60px; top:194px; width:1480px; height:62px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:grid; grid-template-columns:250px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#2E7B4F;">自動化 eval</div><div style="font-size:12px; color:#8A93A0;">程式跑測試，不用真實使用者</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>上線前與 CI/CD 裡：<br>每次改 agent、每次升級模型</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>迭代快、完全可重現、不影響使用者；<br>每次 commit 都能跑</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>前期投入多、要持續維護；<br>和真實用法不符時，給出假的信心</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:256px; width:1480px; height:62px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:250px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">生產監控</div><div style="font-size:12px; color:#8A93A0;">追蹤線上的指標與錯誤</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>上線後：偵測分布的漂移，<br>與沒料到的真實世界失敗</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>看得到大規模的真實行為，<br>抓得到合成 eval 漏掉的問題</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>被動，使用者先碰到；訊號吵，<br>也沒有評分用的標準答案</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:318px; width:1480px; height:62px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:250px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">A/B 測試</div><div style="font-size:12px; color:#8A93A0;">用真實流量比較版本</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>流量足夠之後，<br>驗證重大的改動</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>量得到留存、任務完成這類<br>真實結果，控制了干擾因素</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>要幾天到幾週才顯著；<br>只測得到部署了的改動</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:380px; width:1480px; height:62px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:250px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">使用者回饋</div><div style="font-size:12px; color:#8A93A0;">倒讚、bug 回報</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>持續：隨時分流處理</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>冒出沒預料到的問題，<br>附有真實使用者的例子</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>稀少、自我選擇、偏向嚴重的問題；<br>使用者很少說出原因</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:442px; width:1480px; height:62px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:250px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">人工讀 transcript</div><div style="font-size:12px; color:#8A93A0;">人一段段讀 agent 的對話</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>持續：每週抽樣讀，<br>需要時再深入</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>培養對失敗模式的直覺，<br>抓到細微的品質問題</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>費時、無法擴展、覆蓋不一致；<br>多半只有質性的訊號</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:504px; width:1480px; height:62px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:250px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">系統化的人工研究</div><div style="font-size:12px; color:#8A93A0;">受訓評分者有結構地評</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>校準 LLM grader，<br>或評主觀的輸出</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>多位評分者的黃金標準，<br>處理得了主觀或含糊的任務</div></div>
+    <div style="padding:0px 20px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>貴、週期長、很難常做；<br>評分者之間的分歧要調解</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:598px; width:470px; height:188px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">第一道防線：自動化 eval</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">上線前與 CI/CD 裡，每次改 agent、<br>每次換模型都跑，快速迭代靠它。</div>
+    <div style="font-size:13px; color:#8A93A0;">瑞士起司圖：一致地量，在部署前抓到退步。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:598px; width:470px; height:188px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">真實的狀況：生產監控</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">上線後接手，看分布的漂移，<br>與現實裡沒料到的失敗；A/B 測試等流量夠了再用。</div>
+    <div style="font-size:13px; color:#8A93A0;">瑞士起司圖：冒出罕見的邊界情況。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:598px; width:470px; height:188px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">校準：定期的人工審閱</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">每週抽樣讀 transcript、持續處理回饋；<br>系統化的研究留給校準 LLM grader。</div>
+    <div style="font-size:13px; color:#8A93A0;">瑞士起司圖：抓細微的失敗與沒料到的行為。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：表格依原文的比較表與階段說明精簡改寫；瑞士起司模型的意思是每一層都有洞，洞沒對齊，漏過一層的問題會被另一層接住。</div>
+</div></div>
+</section>
+  <div class="foot">整理自 Anthropic Engineering · Mikaela Grace、Jeremy Hadfield、Rodrigo Olivares、Jiri De Jonghe，2026-01-09：<a href="https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents">https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents</a>。這些圖卡是學習用的重新整理，不是原文的逐句翻譯；觀點與著作權屬於原作者。<a href="index.html">回到圖卡＋教材版</a> · <a href="../../">回首頁</a></div>
+</div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fit() {
+    var frames = document.querySelectorAll('.frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('load', fit);
+  fit();
+})();
+</script>
+</body>
+</html>
