@@ -1,0 +1,2049 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tinyBenchmarks（Maia Polo et al. 2024）</title>
+<meta name="description" content="University of Michigan、IBM Research、MIT 等機構在 2024 年的論文（ICML 2024）：大型語言模型的基準動輒上萬題，每個新模型都考完整份非常昂貴。作者借用心理計量學的試題反應理論（IRT），用已經考過的模型的作答紀錄挑出有代表性的題，再用 IRT 預測沒考的題；在 Open LLM Leaderboard、MMLU、HELM、AlpacaEval 2.0 四個基準上，每個情境 100 題，平均估計誤差約 2%，並釋出四個 tiny 版與估計工具。每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="llm-evaluation, benchmarks, item-response-theory, efficient-evaluation, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2402.14992">
+<meta name="date" content="2026-09-24">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Theme: tech-modern 變體「測試報告語意色」
+   藍 = 主色 / 綠 = pass / 琥珀 = 注意 / 紅 = fail
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --paper: #ffffff;
+  --paper-soft: #f3f5f8;
+  --paper-shadow: #dde2e8;
+  --ink: #121821;
+  --ink-soft: #3b4450;
+  --ink-mute: #6b7481;
+  --primary: #1e56a8;
+  --primary-deep: #143a72;
+  --primary-bg: #e6eef9;
+  --accent: #157a52;
+  --accent-deep: #0d5236;
+  --accent-bg: #e1f3e9;
+  --warm: #b8620e;
+  --warm-deep: #7d4108;
+  --warm-bg: #fbeddc;
+  --danger: #b83228;
+  --danger-bg: #f9e3e0;
+  --stone: #5a6370;
+  --stone-bg: #eceff3;
+  --code-bg: #0f1720;
+  --code-ink: #e6edf3;
+  --code-mute: #8b98a8;
+  --code-blue: #7cc4ff;
+  --code-green: #7ee2b8;
+  --code-amber: #ffc46b;
+
+  --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-cjk: 'Noto Sans TC', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --content-width: 780px;
+  --wide-width: 1100px;
+  --gutter: 24px;
+}
+
+/* ---------- reset & 排版 ---------- */
+* { box-sizing: border-box; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+body {
+  margin: 0; padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-cjk);
+  font-size: 18px;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: var(--content-width); margin: 0 auto; padding: 0 var(--gutter); }
+.wide { max-width: var(--wide-width); margin: 0 auto; padding: 0 var(--gutter); }
+section { padding-block: 64px; }
+section + section { border-top: 1px solid var(--paper-shadow); }
+
+h1, h2, h3, h4 { font-family: var(--font-cjk); font-weight: 700; text-wrap: balance; }
+h1 { font-size: 56px; line-height: 1.14; margin: 0 0 24px; font-weight: 800; }
+h2 { font-size: 36px; line-height: 1.25; margin: 0 0 18px; letter-spacing: -0.01em; }
+h2 .seg { display: inline-block; }
+h3 { font-size: 25px; line-height: 1.35; margin: 44px 0 14px; }
+h4 { font-size: 20px; line-height: 1.4; margin: 26px 0 10px; }
+p { margin: 0 0 18px; }
+ul, ol { padding-left: 26px; margin: 0 0 18px; }
+li { margin-bottom: 8px; }
+em { font-style: normal; color: var(--primary-deep); font-weight: 600; }
+strong { font-weight: 700; }
+a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+code {
+  font-family: var(--font-mono); font-size: 0.86em;
+  background: var(--stone-bg); color: var(--primary-deep);
+  padding: 2px 6px; border-radius: 4px;
+}
+.mono { font-family: var(--font-mono); }
+
+/* ---------- Hero ---------- */
+.hero {
+  padding-block: 84px 60px;
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-soft) 100%);
+  border-bottom: 2px solid var(--primary-deep);
+  position: relative;
+}
+.hero::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: linear-gradient(90deg,
+    var(--primary) 0%, var(--primary) 25%,
+    var(--accent) 25%, var(--accent) 50%,
+    var(--warm) 50%, var(--warm) 75%,
+    var(--danger) 75%, var(--danger) 100%);
+}
+.hero-meta {
+  display: flex; flex-wrap: wrap; gap: 10px 22px;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  margin-bottom: 32px;
+}
+.hero-meta span::before { content: "—"; margin-right: 10px; color: var(--paper-shadow); }
+.hero-meta span:first-child::before { content: ""; margin: 0; }
+.hero h1 { font-size: 60px; font-weight: 800; word-break: keep-all; }
+.hero h1 .accent {
+  display: block; margin-top: 12px;
+  font-size: 0.55em; font-weight: 600; line-height: 1.3;
+  color: var(--primary-deep);
+}
+.hero .lede { font-size: 22px; max-width: 720px; }
+.hero-keystat {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 28px; margin: 44px 0 0; padding-top: 34px;
+  border-top: 1px dashed var(--paper-shadow);
+}
+.hero-keystat dt {
+  font-family: var(--font-sans);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--ink-mute); margin-bottom: 6px;
+}
+.hero-keystat dd {
+  margin: 0; font-family: var(--font-mono);
+  font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1;
+}
+.hero-keystat dd small { font-family: var(--font-cjk); font-size: 14px; color: var(--ink-mute); font-weight: 400; margin-left: 6px; }
+
+/* ---------- Chapter / lede / eyebrow ---------- */
+.chapter {
+  font-family: var(--font-mono);
+  font-size: 12.5px; color: var(--primary);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 0 0 10px;
+}
+.chapter::before { content: "§ "; color: var(--paper-shadow); margin-right: 4px; }
+.lede {
+  font-size: 22px; line-height: 1.6; color: var(--ink-soft);
+  margin: 0 0 28px; font-weight: 400;
+}
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--primary); margin: 0 0 14px;
+}
+
+/* ---------- Pull quote ---------- */
+.pullquote {
+  margin: 48px -16px; padding: 32px 40px;
+  font-family: var(--font-cjk);
+  font-size: 27px; line-height: 1.5; font-weight: 600;
+  color: var(--primary-deep);
+  border-left: 5px solid var(--primary);
+  background: linear-gradient(90deg, var(--primary-bg) 0%, transparent 100%);
+}
+.pullquote.bronze {
+  color: var(--accent-deep); border-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-bg) 0%, transparent 100%);
+}
+.pullquote.terra {
+  color: var(--warm-deep); border-color: var(--warm);
+  background: linear-gradient(90deg, var(--warm-bg) 0%, transparent 100%);
+}
+.pullquote cite {
+  display: block; margin-top: 16px; font-style: normal; font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  letter-spacing: 0.06em;
+}
+.pullquote cite::before { content: "— "; }
+
+/* ---------- English quote ---------- */
+.quote-en {
+  margin: 28px 0;
+  font-family: var(--font-sans); font-style: italic;
+  font-size: 21px; line-height: 1.5; color: var(--ink);
+  padding-left: 20px; border-left: 3px solid var(--accent);
+}
+.quote-en .zh {
+  display: block; margin-top: 10px;
+  font-family: var(--font-cjk); font-style: normal;
+  font-size: 15px; color: var(--ink-soft); line-height: 1.6;
+}
+
+/* ---------- Story ---------- */
+.story {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 14px;
+  padding: 38px 44px; margin: 48px 0;
+  position: relative;
+}
+.story::before {
+  content: "❝"; position: absolute; top: -6px; left: 24px;
+  font-size: 72px; color: var(--warm); line-height: 1;
+  font-family: var(--font-sans);
+}
+.story .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.18em;
+  color: var(--warm); margin-bottom: 10px; padding-left: 42px;
+}
+.story h4 { margin: 0 0 16px; font-size: 22px; color: var(--warm-deep); }
+.story p { margin-bottom: 14px; font-size: 17px; line-height: 1.7; }
+.story p:last-child { margin-bottom: 0; }
+
+/* ---------- Explain ---------- */
+.explain {
+  background: var(--primary-bg);
+  border-left: 4px solid var(--primary);
+  border-radius: 4px;
+  padding: 26px 30px; margin: 36px 0;
+  font-family: var(--font-cjk); position: relative;
+}
+.explain.bronze { background: var(--accent-bg); border-color: var(--accent); }
+.explain.terra { background: var(--warm-bg); border-color: var(--warm); }
+.explain.stone { background: var(--stone-bg); border-color: var(--stone); }
+.explain .label {
+  position: absolute; top: -12px; left: 16px;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.15em; padding: 4px 12px;
+  border-radius: 3px; text-transform: uppercase;
+}
+.explain.bronze .label { background: var(--accent); }
+.explain.terra .label { background: var(--warm); }
+.explain.stone .label { background: var(--stone); }
+.explain h4 { margin: 4px 0 12px; font-size: 19px; color: var(--primary-deep); }
+.explain.bronze h4 { color: var(--accent-deep); }
+.explain.terra h4 { color: var(--warm-deep); }
+.explain.stone h4 { color: var(--ink); }
+.explain p { font-size: 16.5px; }
+.explain p:last-child { margin-bottom: 0; }
+.explain ul, .explain ol { margin: 8px 0 0; padding-left: 22px; }
+.explain li { margin-bottom: 6px; font-size: 16px; }
+.explain code { background: rgba(255,255,255,0.75); }
+
+/* ---------- Stat grid ---------- */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.stat-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 28px 24px; text-align: center;
+  border-top: 4px solid var(--primary);
+}
+.stat-card.bronze { border-color: var(--accent); }
+.stat-card.terra { border-color: var(--warm); }
+.stat-card.danger { border-color: var(--danger); }
+.stat-card .big {
+  font-family: var(--font-mono);
+  font-size: 46px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1; margin-bottom: 10px;
+}
+.stat-card.bronze .big { color: var(--accent-deep); }
+.stat-card.terra .big { color: var(--warm-deep); }
+.stat-card.danger .big { color: var(--danger); }
+.stat-card .big small { font-family: var(--font-cjk); font-size: 16px; opacity: 0.75; margin-left: 4px; font-weight: 500; }
+.stat-card .label {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.stat-card .note { margin-top: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.55; }
+
+/* ---------- Compare table ---------- */
+.table-scroll { overflow-x: auto; margin: 36px 0; }
+.compare {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-cjk); font-size: 15.5px;
+  background: var(--paper-soft);
+  border-radius: 10px; overflow: hidden;
+  min-width: 560px;
+}
+.compare th, .compare td {
+  padding: 15px 18px; text-align: left;
+  border-bottom: 1px solid var(--paper-shadow);
+  vertical-align: top; line-height: 1.6;
+}
+.compare th {
+  background: var(--primary-deep); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+}
+.compare tr:last-child td { border-bottom: none; }
+.compare td:first-child { font-weight: 700; color: var(--primary-deep); width: 24%; }
+.compare .id { font-family: var(--font-mono); font-size: 13px; display: block; color: var(--ink-mute); font-weight: 500; margin-bottom: 2px; }
+.compare .yes { color: var(--accent-deep); font-weight: 700; }
+.compare .no { color: var(--danger); font-weight: 700; }
+
+/* ---------- Value cards ---------- */
+.values {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.value-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 26px 24px;
+  border-top: 5px solid var(--primary);
+}
+.value-card:nth-child(2) { border-top-color: var(--accent); }
+.value-card:nth-child(3) { border-top-color: var(--warm); }
+.value-card:nth-child(4) { border-top-color: var(--primary-deep); }
+.value-card:nth-child(5) { border-top-color: var(--stone); }
+.value-card .num {
+  font-family: var(--font-mono);
+  font-size: 38px; font-weight: 700;
+  color: var(--primary); line-height: 1; margin-bottom: 12px;
+}
+.value-card:nth-child(2) .num { color: var(--accent); }
+.value-card:nth-child(3) .num { color: var(--warm); }
+.value-card:nth-child(4) .num { color: var(--primary-deep); }
+.value-card:nth-child(5) .num { color: var(--stone); }
+.value-card .tag {
+  display: inline-block; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--primary); margin-bottom: 10px;
+}
+.value-card:nth-child(2) .tag { color: var(--accent); }
+.value-card:nth-child(3) .tag { color: var(--warm); }
+.value-card:nth-child(4) .tag { color: var(--primary-deep); }
+.value-card h4 { margin: 0 0 10px; font-size: 19px; line-height: 1.4; }
+.value-card p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin: 0; }
+
+/* ---------- 擴充檢查卡（附成本標籤） ---------- */
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px; margin: 40px 0;
+}
+.card {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 12px;
+  padding: 24px 24px 22px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.card .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card h4 { margin: 0; font-size: 18.5px; line-height: 1.4; }
+.card p { margin: 0; font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); }
+.card .signal { font-family: var(--font-mono); font-size: 12.5px; color: var(--primary-deep); background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 6px; padding: 6px 10px; margin-top: 4px; overflow-x: auto; white-space: nowrap; }
+.pill {
+  flex: none; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px;
+}
+.pill.fast { background: var(--accent-bg); color: var(--accent-deep); }
+.pill.mid { background: var(--warm-bg); color: var(--warm-deep); }
+.pill.slow { background: var(--danger-bg); color: var(--danger); }
+
+/* ---------- Thought ---------- */
+.thought {
+  background: var(--accent-bg);
+  border-left: 4px solid var(--accent);
+  padding: 26px 30px; margin: 40px 0;
+  border-radius: 4px; position: relative;
+}
+.thought .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--accent-deep); margin-bottom: 10px;
+}
+.thought h4 { font-size: 19px; margin: 0 0 14px; color: var(--accent-deep); line-height: 1.45; }
+.thought p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin-bottom: 8px; }
+.thought .hint {
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px dashed rgba(13, 82, 54, 0.3);
+  font-size: 14px; color: var(--accent-deep);
+}
+.thought .hint::before { content: "建議方向："; font-weight: 700; }
+
+/* ---------- Code block ---------- */
+.codeblock { margin: 30px 0; }
+.codeblock .file {
+  display: inline-block; font-family: var(--font-mono);
+  font-size: 12px; color: var(--ink-mute);
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow); border-bottom: none;
+  border-radius: 8px 8px 0 0; padding: 7px 14px;
+}
+pre.code {
+  margin: 0; background: var(--code-bg); color: var(--code-ink);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65;
+  padding: 22px 24px; border-radius: 0 10px 10px 10px;
+  overflow-x: auto; tab-size: 2; white-space: pre;
+}
+pre.code.solo { border-radius: 10px; }
+pre.code .c { color: var(--code-mute); }
+pre.code .k { color: var(--code-blue); }
+pre.code .s { color: var(--code-green); }
+pre.code .a { color: var(--code-amber); font-weight: 700; }
+
+/* ---------- Flow（eval 迴圈圖） ---------- */
+.flow { display: flex; align-items: stretch; margin: 40px 0; }
+.flow-step {
+  flex: 1 1 0; min-width: 0;
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow);
+  border-radius: 10px; padding: 18px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.flow-step .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--primary); letter-spacing: 0.1em; }
+.flow-step strong { font-size: 17px; line-height: 1.3; }
+.flow-step span.d { font-size: 14px; line-height: 1.55; color: var(--ink-soft); }
+.flow-step.score { border-color: var(--accent); background: var(--accent-bg); }
+.flow-step.score .k { color: var(--accent-deep); }
+.flow-arrow { flex: none; width: 30px; position: relative; }
+.flow-arrow::before {
+  content: ""; position: absolute; top: 50%; left: 2px; right: 2px; height: 2px;
+  background: var(--primary); transform: translateY(-50%);
+}
+.flow-arrow::after {
+  content: ""; position: absolute; top: 50%; right: 4px; width: 9px; height: 9px;
+  border-top: 2px solid var(--primary); border-right: 2px solid var(--primary);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+/* ---------- Cascade（編號步驟） ---------- */
+.cascade { display: flex; flex-direction: column; gap: 14px; margin: 32px 0; }
+.cascade-step {
+  display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px;
+}
+.cascade-step .n {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-mono); font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.cascade-step .t { font-size: 16.5px; line-height: 1.65; }
+.cascade-step .t strong { display: block; margin-bottom: 2px; }
+
+/* ---------- Checklist ---------- */
+.checklist { list-style: none; padding: 0; margin: 32px 0; display: flex; flex-direction: column; gap: 12px; }
+.checklist li {
+  display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px; margin: 0;
+  font-size: 16.5px; line-height: 1.65;
+}
+.checklist .box {
+  width: 24px; height: 24px; margin-top: 3px;
+  border: 2px solid var(--accent); border-radius: 6px; background: var(--paper);
+}
+.checklist strong { display: block; }
+.checklist small { display: block; color: var(--ink-soft); font-size: 15px; }
+
+/* ---------- Glossary ---------- */
+.glossary { background: var(--primary-deep); color: var(--paper); padding-block: 64px; }
+.glossary h2 { color: var(--paper); margin-top: 0; }
+.glossary .eyebrow { color: var(--accent-bg); }
+.glossary .lede { color: var(--paper); opacity: 0.8; }
+.glossary-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 26px; margin: 42px 0 0;
+}
+.term { border-top: 2px solid var(--accent); padding-top: 16px; }
+.term:nth-child(3n+2) { border-color: var(--warm); }
+.term:nth-child(3n+3) { border-color: var(--paper); }
+.term dt {
+  font-family: var(--font-mono);
+  font-size: 14px; font-weight: 700;
+  color: var(--accent-bg); letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+.term .zh-name { font-family: var(--font-cjk); font-size: 16px; font-weight: 600; color: var(--paper); margin-bottom: 8px; display: block; }
+.term dd { margin: 0; font-family: var(--font-cjk); font-size: 14.5px; line-height: 1.65; color: rgba(255, 255, 255, 0.8); }
+
+/* ---------- TOC ---------- */
+.toc {
+  position: fixed; right: 24px; top: 50%; transform: translateY(-50%); z-index: 10;
+  font-family: var(--font-sans); font-size: 12px;
+  background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 10px;
+  padding: 18px 20px; max-width: 236px;
+  box-shadow: 0 4px 18px rgba(18, 24, 33, 0.08);
+}
+.toc h5 { margin: 0 0 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-mute); }
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc -1; }
+.toc li { margin-bottom: 6px; counter-increment: toc; font-size: 12px; line-height: 1.45; display: flex; gap: 8px; }
+.toc li::before { content: counter(toc, decimal-leading-zero); font-family: var(--font-mono); color: var(--ink-mute); font-size: 10.5px; padding-top: 2px; }
+.toc a { color: var(--ink-soft); text-decoration: none; }
+.toc a:hover { color: var(--primary); }
+@media (max-width: 1340px) { .toc { display: none; } }
+
+/* ---------- Footer ---------- */
+footer {
+  padding-block: 48px 64px;
+  background: var(--paper-soft);
+  text-align: center;
+  font-family: var(--font-cjk);
+  font-size: 13.5px; color: var(--ink-mute);
+}
+footer p { margin: 0 0 8px; }
+footer .credit { font-family: var(--font-sans); }
+footer .disclaimer { margin-top: 14px; font-size: 12px; opacity: 0.75; max-width: 640px; margin-inline: auto; }
+
+/* ---------- 響應式 ---------- */
+@media (max-width: 768px) {
+  body { font-size: 17px; }
+  .hero { padding-block: 56px 42px; }
+  .hero h1 { font-size: 36px; }
+  .hero .lede { font-size: 18px; }
+  h2 { font-size: 27px; }
+  h3 { font-size: 22px; }
+  section { padding-block: 46px; }
+  .lede { font-size: 19px; }
+  .pullquote { font-size: 21px; margin: 34px 0; padding: 24px; }
+  .story { padding: 30px 24px; }
+  .stat-card .big { font-size: 36px; }
+  .flow { flex-direction: column; }
+  .flow-arrow { width: auto; height: 30px; }
+  .flow-arrow::before { top: 2px; bottom: 2px; left: 50%; right: auto; width: 2px; height: auto; transform: translateX(-50%); }
+  .flow-arrow::after { top: auto; bottom: 4px; left: 50%; right: auto; transform: translateX(-50%) rotate(135deg); }
+  .compare td:first-child { width: auto; }
+}
+
+/* ---------- 列印 ---------- */
+@media print {
+  .toc { display: none; }
+  body { font-size: 12pt; }
+  .hero, .glossary {
+    color: var(--ink) !important; background: white !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .glossary h2, .glossary .term dt, .glossary .lede, .glossary .term .zh-name { color: var(--ink) !important; }
+  .glossary .term dd { color: var(--ink-soft) !important; }
+  pre.code { background: #f3f5f8 !important; color: #121821 !important; border: 1px solid #ccd; white-space: pre-wrap; }
+  pre.code .c, pre.code .k, pre.code .s, pre.code .a { color: inherit !important; }
+  section { page-break-inside: avoid; }
+}
+
+/* ---------- 整合版：模式列、圖卡帶、燈箱 ---------- */
+.modebar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; padding: 10px var(--gutter); background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--paper-shadow); font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.modebar .brand { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.modebar .left { display: flex; align-items: center; gap: 14px; }
+.modebar .homelink { font-size: 12px; font-weight: 600; color: var(--ink-mute); text-decoration: none; }
+.modebar .homelink:hover { color: var(--primary); text-decoration: underline; }
+.modebar .switch { display: flex; gap: 6px; }
+.modebar button { font: inherit; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.modebar button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+.modebar button:focus-visible, .cardlabel .zoom:focus-visible, .lightbox .close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.modebar .canvaslink { font-size: 12px; color: var(--ink-mute); }
+.cardband { max-width: 1600px; margin: 4px auto 40px; padding: 0 var(--gutter); }
+.cardlabel { display: flex; align-items: baseline; gap: 14px; padding: 0 2px 8px; font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.cardlabel .n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--warm); }
+.cardlabel .zoom { margin-left: auto; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--paper-shadow); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; font-size: 16px; color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(18, 24, 33, 0.86); display: none; align-items: center; justify-content: center; padding: 24px; }
+.lightbox.open { display: flex; }
+.lightbox .frame { border: none; border-radius: 8px; max-width: none; width: auto; flex: none; }
+.lightbox .close { position: absolute; top: 14px; right: 18px; font: inherit; font-family: var(--font-sans); font-size: 13px; color: #FFFFFF; background: transparent; border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.faq { margin: 36px 0 8px; padding: 0; }
+.faq > div { padding: 18px 0; border-top: 1px solid var(--paper-shadow); }
+.faq > div:last-child { border-bottom: 1px solid var(--paper-shadow); }
+.faq dt { margin: 0 0 6px; font-weight: 700; font-size: 17px; color: var(--ink); }
+.faq dt::before { content: "問"; display: inline-block; margin-right: 10px; padding: 1px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; color: #FFFFFF; background: var(--primary); vertical-align: 2px; }
+.faq dd { margin: 0; font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+body.mode-cards section .prose { display: none; }
+body.mode-cards section.nocard { display: none; }
+body.mode-cards section { padding-block: 44px; }
+body.mode-cards .toc li.nocard { display: none; }
+@media (max-width: 768px) { .cardband { margin-bottom: 32px; } .modebar { font-size: 12px; } }
+@media print {
+  .modebar, .lightbox, .cardlabel .zoom { display: none !important; }
+  body.mode-cards section .prose { display: block !important; }
+  body.mode-cards section.nocard { display: block !important; }
+  section { page-break-inside: auto; }
+  .cardband, .story, .explain, .thought, .stat-grid, .values, .cards, .table-scroll { page-break-inside: avoid; }
+  .frame { height: auto !important; border: none; border-radius: 0; }
+  .frame > div { transform: none !important; zoom: 0.44; }
+}
+
+</style>
+</head>
+<body>
+<div class="modebar">
+  <div class="left"><a class="homelink" href="../../">← 首頁</a><span class="brand">tinyBenchmarks · 圖卡 + 教材</span></div>
+  <div class="switch" role="group" aria-label="閱讀模式">
+    <button type="button" data-mode="full" aria-pressed="true">圖卡＋詳解</button>
+    <button type="button" data-mode="cards" aria-pressed="false">只看圖卡</button>
+  </div>
+  <a class="canvaslink" href="cards.html">圖卡連續閱讀版</a>
+</div>
+<nav class="toc" aria-label="目錄">
+  <h5>目錄</h5>
+  <ol>
+    <li class="nocard"><a href="#prologue">第 7 週為什麼讀它</a></li>
+    <li><a href="#evaluation-cost">為什麼要少考幾題</a></li>
+    <li><a href="#problem">分數怎麼算</a></li>
+    <li><a href="#selecting">三種挑題法</a></li>
+    <li><a href="#irt-model">IRT 模型</a></li>
+    <li><a href="#p-irt">補上沒考的題</a></li>
+    <li><a href="#gp-irt">兩個估計怎麼混</a></li>
+    <li><a href="#protocol">評估流程</a></li>
+    <li><a href="#key-findings">100 題的結果</a></li>
+    <li><a href="#distribution-shift">新模型與專門模型</a></li>
+    <li><a href="#release">釋出的 tiny 版</a></li>
+    <li class="nocard"><a href="#related-work">相關工作</a></li>
+    <li><a href="#takeaways">結論與限制</a></li>
+    <li class="nocard"><a href="#glossary">名詞速查</a></li>
+  </ol>
+</nav>
+<header class="hero">
+  <div class="container">
+    <div class="hero-meta">
+      <span>arXiv · 2024-02-22（v2 2024-05-26；ICML 2024）</span>
+      <span>研究論文（University of Michigan、IBM Research、MIT 等，ICML 2024）</span>
+      <span>作者 Felipe Maia Polo、Lucas Weber、Leshem Choshen、Yuekai Sun、Gongjun Xu、Mikhail Yurochkin</span>
+    </div>
+    <p class="eyebrow">TINYBENCHMARKS · 圖卡＋教材整合版</p>
+    <h1>不必考完整份， 一百道精選題 就估得出分數<span class="accent">用舊模型的作答紀錄挑題， 再用試題反應理論補上沒考的題</span></h1>
+    <p class="lede">大型語言模型的基準動輒上萬題，每出一個新模型、每存一個 checkpoint、每換一種 prompt，都要再考一次，成本很高。這篇論文問的是：只考一小部分題，能不能估出整份基準的分數？作者比較三種挑題法，再借用心理計量學的試題反應理論（IRT）預測沒考的題；在 Open LLM Leaderboard、MMLU、HELM、AlpacaEval 2.0 四個基準上，每個情境 100 題，平均估計誤差約 2%。每章開頭先放一張圖解卡講重點，往下是詳細作法；想速讀就切到「只看圖卡」。</p>
+    <dl class="hero-keystat">
+      <div><dt>每個情境只考</dt><dd>100<small>題</small></dd></div>
+      <div><dt>平均估計誤差</dt><dd>2<small>% 左右</small></dd></div>
+      <div><dt>MMLU 題數縮減</dt><dd>140<small>倍</small></dd></div>
+      <div><dt>HELM 評一個模型</dt><dd>4K+<small>GPU 小時</small></dd></div>
+    </dl>
+  </div>
+</header>
+
+
+<section id="prologue" data-toc="第 7 週為什麼讀它" class="nocard">
+  <div class="container">
+    <p class="chapter">Prologue · 整理者的引言</p>
+    <h2><span class="seg">設計基準時，</span><span class="seg">也要算評估的帳</span></h2>
+    <p class="lede">Stanford CS 329Z 第 7 週「Evaluation Fundamentals &amp; Benchmark Design」那一講，談評估為什麼難、一個好基準要有哪些性質。這篇 2024 年的論文是那一講的選讀，處理一個常被略過的問題：基準有上萬題、每個模型都要考完整份時，評估本身就是一筆大開銷；能不能少考幾題，分數還估得準？</p>
+
+    <p>CS 329Z 把這一講放在「Evaluation for Agentic Systems」分區。講題從評估為什麼難開始，接著用一個四元組拆解一次評估：要求（request）、環境（environment）、停止條件（stopping criteria）、評分者（scorer），再談每個元件怎麼設計、好 benchmark 有哪些性質、怎麼讓 scaffolding 貼近真實使用，以及可靠度的幾個面向。同一講的必讀是 Zhu 等人的〈Establishing Best Practices for Building Rigorous Agentic Benchmarks〉，另一篇選讀是 Press 的〈How to Build Good Language Modeling Benchmarks〉。</p>
+    <p>放在這一講裡讀（這是整理者的讀法），tinyBenchmarks 碰到的是評分與可靠度這兩塊：一份基準的分數，是把每一題的評分平均起來；題數越多，分數越穩，每個模型要付的成本也越高。這篇論文換一個方向問：已經有很多模型考過完整份時，新模型只考 100 題，估出來的分數離完整份差多少？這個差距在更新的模型、專門領域的模型身上會不會變大？第 7 到 9 章的實驗設計，本身就是一個「怎麼驗證一種評估方法可不可靠」的範例。</p>
+    <p>作者有 6 位：Felipe Maia Polo、Yuekai Sun、Gongjun Xu 在 University of Michigan 的統計系，Lucas Weber 在 University of Pompeu Fabra，Leshem Choshen 在 IBM Research 與 MIT，Mikhail Yurochkin 在 IBM Research 與 MIT-IBM Watson AI Lab。論文 2024 年 2 月貼上 arXiv，5 月更新成 v2；abs 頁的註記與 v2 PDF 的第一頁都寫明是 ICML 2024 的論文。這一頁的內容與數字都依 v2：v2 改寫了命題 4.1 並補上證明，另外多了兩個附錄實驗（第 8、9 章會用到）。論文寫在 2024 年初，文中的模型、排行榜與它們的題數，例如 2024 年 1 月下載的 Open LLM Leaderboard 資料、HELM Lite v1.0.0、AlpacaEval 2.0，都是那個時候的狀態。</p>
+    <p>讀論文和讀部落格文章不同，處理方式先說清楚。章節跟著論文的論證走：第 1、2 章是動機與問題定義（論文第 1、2 節），第 3 章是三種挑題法（第 3 節），第 4 到 6 章是 IRT 與兩個估計量（第 4 節拆成三章），第 7 到 9 章是實驗（第 5 節拆成流程、主要結果、分布偏移三章），第 10 章是釋出的 tiny 版（第 6 節開頭與附錄 B），第 11 章是相關工作（第 1.1 節），第 12 章是延伸、限制與結論。論文沒有任何表格，結果全部畫成圖，圖上的點也多半沒有標數字：這一頁只用正文與圖說寫出的數字，加上圖 1、圖 4 圖例印出的誤差與排名相關、圖 9 圖例印出的有效樣本數；其他圖只轉述原文描述的走勢，並附上「怎麼讀這張圖」。整理者自己算的數字都會標出來；論文的式子不多，這一頁都改用文字與步驟講。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>論文的用語</th><th>意思（整理者加的對照）</th><th>這一頁怎麼寫</th></tr></thead>
+        <tbody>
+          <tr><td>benchmark</td><td>一整套考題與計分方式，例如 Open LLM Leaderboard</td><td>基準</td></tr>
+          <tr><td>scenario／sub-scenario</td><td>基準裡的一份考卷（例如 MMLU、GSM8K），<br>和考卷裡的分類（例如 MMLU 的 57 個科目）</td><td>情境／子情境</td></tr>
+          <tr><td>example（IRT 文獻叫 item）</td><td>一道題</td><td>題目</td></tr>
+          <tr><td>correctness</td><td>某個模型在某一題的得分，0 或 1，或 0 到 1 之間</td><td>正確度、對錯</td></tr>
+          <tr><td>anchor points</td><td>挑出來代表一群題目的那一題</td><td>錨點</td></tr>
+          <tr><td>Item Response Theory（IRT）</td><td>心理計量學的模型：用考生能力與題目參數預測答對機率</td><td>試題反應理論、IRT</td></tr>
+          <tr><td>estimator</td><td>從手上的資料算出一個估計值的方法</td><td>估計量</td></tr>
+          <tr><td>distribution shift</td><td>要估的新模型，和拿來挑題的舊模型不一樣</td><td>分布偏移</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>先把幾個統計名詞對齊</h4>
+      <ul>
+        <li><strong>估計誤差</strong>：用少數題目估出來的分數，和考完整份得到的真實分數差多少。論文的圖大多畫它在一批測試模型上的平均。</li>
+        <li><strong>偏差（bias）與變異（variance）</strong>：偏差是估計值平均起來離真值多遠，變異是同一種估法重抽幾次、結果晃得多厲害。題目抽得少，變異就大。</li>
+        <li><strong>加權平均</strong>：每一題乘上一個權重再加總，權重非負、加起來等於 1。三種挑題法最後都落在這個形式。</li>
+        <li><strong>K-means 分群</strong>：把一堆向量分成 K 群，讓每一群的點盡量靠近那一群的中心。</li>
+        <li><strong>Spearman 等級相關（r<sub>S</sub>）</strong>：只比排名的相關係數；1 代表估出來的排名和真實排名完全一樣。</li>
+      </ul>
+    </div>
+
+    <div class="pullquote">
+      一份基準的分數就是一個平均；要問的只是，平均幾題才夠準。
+      <cite>整理者的引言</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="evaluation-cost" data-toc="為什麼要少考幾題">
+  <div class="container head">
+    <p class="chapter">Chapter 01 · Introduction</p>
+    <h2><span class="seg">每個模型都考完整份，</span><span class="seg">評估就太貴</span></h2>
+    <p class="lede">HELM 評一個模型超過 4K GPU 小時，AlpacaEval 每題都要一個商用 LLM 當評審，而同一個模型還常常要評很多次。作者的主張是：每個情境 100 道挑過的題，就足以把完整基準的分數估到平均約 2% 的誤差。</p>
+    
+  </div>
+  <div class="cardband" id="card-02"><div class="cardlabel"><span class="n">圖卡 02 / 12</span><span class="t">每個模型都考完整份，太貴</span><button type="button" class="zoom" data-card="02">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">每個模型都考完整份太貴，100 題就估得出來</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 1 節：基準動輒上萬題，同一個模型又要評很多次（checkpoint、prompt、超參數）；作者改成只考挑過的少數題，再估出完整份的分數</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 每評一次，都考完整份</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 只考挑過的題，再估</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:320px; top:200px; width:180px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">同一個模型</div>
+  <div style="position:absolute; left:155px; top:320px; width:150px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">預訓練 checkpoint</div>
+  <div style="position:absolute; left:335px; top:320px; width:150px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">換一種 prompt</div>
+  <div style="position:absolute; left:515px; top:320px; width:150px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">調一組超參數</div>
+  <div style="position:absolute; left:155px; top:440px; width:150px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">再考完整份</div>
+  <div style="position:absolute; left:335px; top:440px; width:150px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">再考完整份</div>
+  <div style="position:absolute; left:515px; top:440px; width:150px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">再考完整份</div>
+  <div style="position:absolute; left:60px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">每多評一次，就多付一次完整基準的成本：MMLU 約 1.4 萬題，<br>Open LLM Leaderboard 約 2.9 萬題，AlpacaEval 每題都要 GPT-4 當評審。</div>
+
+  <div style="position:absolute; left:1100px; top:200px; width:180px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">同一個模型</div>
+  <div style="position:absolute; left:1300px; top:262px; font-size:13px; font-weight:500; color:#2E7B4F;">每評一次，都只考這些題</div>
+  <div style="position:absolute; left:1030px; top:300px; width:320px; height:50px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">只考 100 道精選題（每個情境）</div>
+  <div style="position:absolute; left:905px; top:420px; width:150px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">錨點：一題代表一群</div>
+  <div style="position:absolute; left:1115px; top:420px; width:150px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">權重：這群佔多少</div>
+  <div style="position:absolute; left:1325px; top:420px; width:150px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">IRT：補上沒考的題</div>
+  <div style="position:absolute; left:905px; top:482px; font-size:13px; font-weight:500; color:#2E7B4F;">三樣都從舊模型的逐題作答學來（第 4 到 7 卡），估出的是完整份的分數</div>
+  <div style="position:absolute; left:840px; top:530px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">題目少了，估計就會有誤差：這篇要量的正是這個誤差有多大，<br>以及換成更新、更不一樣的模型時，誤差會不會變大。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#C8501F;">HELM：評一個模型超過 4K GPU 小時</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">改用 API 則超過 1 萬美元；AlpacaEval 還要商用 LLM 當評審。<br>checkpoint、prompt、超參數每換一次，就再付一次。</div>
+    <div style="font-size:13px; color:#8A93A0;">數字是作者引用 HELM 作者的報告。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#2E7B4F;">MMLU：100 題，誤差 1.9%</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">不到全部題目的 1%；估出的排名和真實排名的 Spearman 相關 0.92。<br>四個基準每個情境 100 題，平均誤差約 2%。</div>
+    <div style="font-size:13px; color:#8A93A0;">圖 1：12 月 30 日到 1 月 18 日之間發布的一批新模型。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：✗ 標的是評估成本，不是說考完整份不對；兩條流程是整理者依引言畫的。1.9% 是一批新模型的平均，個別模型可以更高（第 8 章）。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M410 250L230 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M410 250L410 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M410 250L590 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M230 366L230 438" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c02)"></path>
+    <path d="M410 366L410 438" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c02)"></path>
+    <path d="M590 366L590 438" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c02)"></path>
+    <path d="M1190 250L1190 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1190 350V385H980V418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1190 350L1190 418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1190 350V385H1400V418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1475 443H1512V225H1282" stroke="#2E7B4F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#an-c02)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>引言從當時的局面講起。LLM 能解的任務越來越多，為了量化與比較這些能力，出現了幾個關鍵的基準：MMLU、Open LLM Leaderboard、HELM、AlpacaEval。這些基準由幾百到幾千道題組成，整個基準加起來常常上萬題，對有數十億參數的模型來說，考一次在算力、環境與金錢上都很昂貴。作者引用 HELM 作者的數字：在 HELM 上評一個 LLM，要超過 4K GPU 小時，改用 API 則超過 1 萬美元。AlpacaEval 這類基準還要一個商用 LLM 當評審，成本又往上加。</p>
+    <p>更麻煩的是，同一個模型常常要評很多次：預訓練期間要定期評 checkpoint 追蹤進度，也要試不同的 prompt 策略與更大範圍的超參數。每多評一次，就多付一次完整基準的成本。</p>
+    <p>作者因此重新檢視「一定要在這麼大的資料集上評估」這件事。圖 1 是全文的縮影：在 MMLU 上，只用 100 道挑過的題（不到全部題目的 1%）估每個模型的準確率，再和它考完整份 1.4 萬題的真實準確率比；對 12 月 30 日到 1 月 18 日之間發布的一批新模型，作者表現最好的策略 IRT++ 估出的準確率，平均只差 1.9%。</p>
+    <p>論文比較了三類策略（第 3、4 節）。第一是 Perlitz 等人為 HELM 提出的分層隨機抽樣，最簡單，但估計誤差可能很大。第二是依已經評過的模型的對錯把題目分群，靈感來自 Vivek 等人的 Anchor Points：要找的是「一個模型答對或答錯這題，就代表它在另一批題也會答對或答錯」的題目；它在某些設定下表現不錯，但對錯模式只是巧合時就不可靠，例如要估一個專精某個領域的模型。第三是作者用 IRT 建的新策略：把 LLM 當考生、基準當試卷，學出每道題需要哪些潛在能力的表示，用這個表示分群，並用 IRT 修正任意一組題目估出的分數。</p>
+    <p>實驗在四個熱門基準上做：Open LLM Leaderboard、MMLU、HELM、AlpacaEval 2.0。作者的結論是：每個情境 100 道挑過的題，就足以可靠地估出各種 LLM 的表現，平均誤差約 2%。他們據此釋出每個基準的 tiny 版（每個情境 100 題），以及用 IRT 進一步改善估計的工具。</p>
+
+    <div class="quote-en">
+      "100 curated examples per scenario are enough to reliably estimate the performance of various LLMs"
+      <span class="zh">「每個情境 100 道挑過的題，就足以可靠地估出各種 LLM 的表現」：引言最後一段的結論句，後面接著「平均誤差約 2%」。</span>
+    </div>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>怎麼讀圖 1</h4>
+      <p>圖 1 是一張散點圖：橫軸是模型考完整份 MMLU 的真實準確率，縱軸是只看 100 題估出來的準確率，每個點是一個新模型，紅色虛線是「估得完全準」的對角線。點越貼近虛線，估計越準。點旁沒有標數字，圖例印了兩個值：error＝0.019（平均估計誤差 1.9%）與 r<sub>S</sub>＝0.92（估出來的排名和真實排名的 Spearman 相關）。這兩個值和第 8 章圖 4 的 MMLU、IRT++ 那一格相同。第 2 卡左右兩條流程，是整理者依引言的描述畫的，✗ 與 ✓ 標的是評估成本，不是說考完整份不對。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="problem" data-toc="分數怎麼算">
+  <div class="container head">
+    <p class="chapter">Chapter 02 · Problem Statement · Appendix A</p>
+    <h2><span class="seg">基準分數，</span><span class="seg">是一層層平均上來的</span></h2>
+    <p class="lede">論文先把基準拆成三層：基準由情境組成，情境可以再分子情境，最底下是一道道題目。每題有一個 0 到 1 的正確度，分數從題目一路平均上去；要解的問題是：只看一小部分題，怎麼估出這個平均。</p>
+    
+  </div>
+  <div class="cardband" id="card-03"><div class="cardlabel"><span class="n">圖卡 03 / 12</span><span class="t">基準分數一層層平均上來</span><button type="button" class="zoom" data-card="03">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">基準分數，是一層層平均上來的</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2 節與附錄 A：每題有一個 0 到 1 的正確度，子情境、情境一層層平均，基準再平均情境（HELM 用 mean win rate）；要估的就是最上面那個數</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:440px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 16px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#8A93A0;">01</div><div><div style="font-size:15px; font-weight:700; color:#1C2431;">題目：一個正確度 Y</div><div style="margin-top:3px; font-size:12.5px; color:#6B7380;">0 或 1，或 0 到 1 之間的部分分數（例如 F1）</div></div></div>
+  <div style="position:absolute; left:60px; top:234px; width:440px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 16px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#8A93A0;">02</div><div><div style="font-size:15px; font-weight:700; color:#1C2431;">子情境：各自取平均</div><div style="margin-top:3px; font-size:12.5px; color:#6B7380;">題數不同時用平衡權重，讓每個子情境一樣重</div></div></div>
+  <div style="position:absolute; left:60px; top:318px; width:440px; height:70px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:10px 16px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#8A93A0;">03</div><div><div style="font-size:15px; font-weight:700; color:#1C2431;">情境：子情境再平均</div><div style="margin-top:3px; font-size:12.5px; color:#6B7380;">例如 MMLU 的分數＝57 個科目準確率的平均</div></div></div>
+  <div style="position:absolute; left:60px; top:402px; width:440px; height:70px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:10px 16px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:14px; font-weight:600; color:#2E7B4F;">04</div><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">基準：情境再平均</div><div style="margin-top:3px; font-size:12.5px; color:#6B7380;">HELM 例外：用跨情境的 mean win rate</div></div></div>
+  <div style="position:absolute; left:60px; top:490px; width:440px; font-size:13px; color:#6B7380; line-height:1.6;">要估的是第 04 步那個數；新模型只做一小部分題，<br>用挑出來的題加權平均去逼近它（式 3.1）。</div>
+
+  <div style="position:absolute; left:900px; top:150px; width:320px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:rgba(255,255,255,0.65);">BENCHMARK</div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">Open LLM Leaderboard · 約 2.9 萬題</div></div></div>
+
+  <div style="position:absolute; left:580px; top:236px; width:150px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">SCENARIO</div><div style="font-size:14px; font-weight:700; color:#1C2431;">ARC</div></div></div>
+  <div style="position:absolute; left:742px; top:236px; width:150px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">SCENARIO</div><div style="font-size:14px; font-weight:700; color:#1C2431;">HellaSwag</div></div></div>
+  <div style="position:absolute; left:904px; top:236px; width:150px; height:50px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#2E7B4F;">SCENARIO</div><div style="font-size:14px; font-weight:700; color:#2E7B4F;">MMLU</div></div></div>
+  <div style="position:absolute; left:1066px; top:236px; width:150px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">SCENARIO</div><div style="font-size:14px; font-weight:700; color:#1C2431;">TruthfulQA</div></div></div>
+  <div style="position:absolute; left:1228px; top:236px; width:150px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">SCENARIO</div><div style="font-size:14px; font-weight:700; color:#1C2431;">Winogrande</div></div></div>
+  <div style="position:absolute; left:1390px; top:236px; width:150px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">SCENARIO</div><div style="font-size:14px; font-weight:700; color:#1C2431;">GSM8K</div></div></div>
+
+  <div style="position:absolute; left:690px; top:326px; width:170px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">SUB-SCENARIO</div><div style="font-size:13px; color:#2B3340;">marketing</div></div></div>
+  <div style="position:absolute; left:874px; top:326px; width:210px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">SUB-SCENARIO</div><div style="font-size:13px; color:#2B3340;">elementary mathematics</div></div></div>
+  <div style="position:absolute; left:1098px; top:326px; width:170px; height:56px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">SUB-SCENARIO</div><div style="font-size:13px; color:#2B3340;">……共 57 個科目</div></div></div>
+
+  <div style="position:absolute; left:583px; top:426px; width:120px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">EXAMPLE</div><div style="font-size:13px; color:#2B3340;">題 1 · Y＝1</div></div></div>
+  <div style="position:absolute; left:715px; top:426px; width:120px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">EXAMPLE</div><div style="font-size:13px; color:#2B3340;">題 2 · Y＝0</div></div></div>
+  <div style="position:absolute; left:847px; top:426px; width:120px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">EXAMPLE</div><div style="font-size:13px; color:#2B3340;">題 3 · Y＝1</div></div></div>
+  <div style="position:absolute; left:1010px; top:420px; width:530px; font-size:13px; color:#6B7380; line-height:1.6;">每一層都是下一層的平均：題目 → 科目 → MMLU → Leaderboard。<br>箭頭朝上，因為分數是往上彙整的；MMLU 單獨評時，<br>它自己就是一個情境，57 個科目是子情境。</div>
+
+  <div style="position:absolute; left:60px; top:590px; width:470px; height:186px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">目標：只看一小部分題</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">替每個情境挑一小組題與權重，新模型<br>只做這些題，就估出它的情境分數。</div>
+    <div style="font-size:13px; color:#8A93A0;">權重非負、加總為 1（式 3.1）。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:590px; width:470px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">前提：舊模型的逐題紀錄</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">要有一批考過完整份的模型的正確度；<br>作者說許多熱門基準都免費公開。</div>
+    <div style="font-size:13px; color:#8A93A0;">第 8 卡：這批模型再切成訓練與測試。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:590px; width:470px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">子情境不等大：加權</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">每題的權重是 1 ÷ 子情境數 ÷ 那個子情境<br>的題數，程式裡叫 balance weights。</div>
+    <div style="font-size:13px; color:#8A93A0;">附錄 A；實驗都照這個方式算。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：樹依第 2 節與附錄 D 畫，科目與題目只畫幾個例子；箭頭朝上是整理者的畫法，表示分數往上平均。HELM 的基準分數是 mean win rate，不是平均。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M274 222L286 222L280 231Z" fill="#9AA3AE"></path>
+    <path d="M274 306L286 306L280 315Z" fill="#9AA3AE"></path>
+    <path d="M274 390L286 390L280 399Z" fill="#9AA3AE"></path>
+    <path d="M655 234L928 202" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M817 234L982 202" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M979 234L1036 202" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1141 234L1086 202" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1303 234L1140 202" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1465 234L1192 202" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M775 324L952 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M979 324L979 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1183 324L1006 288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M643 424L748 384" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M775 424L775 384" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M907 424L802 384" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 2 節先定義名詞。一個基準由幾個情境（scenario）組成，情境可能再分成子情境。原文舉的例子是：MMLU 與 HellaSwag 都是 Open LLM Leaderboard 與 HELM 的情境（附錄 D 列的 HELM Lite 十個情境裡沒有 HellaSwag，這一句照原文寫）；MMLU 自己又有「marketing」「elementary mathematics」這類子情境。作者在註腳說明，MMLU 與 AlpacaEval 各自當成一個情境。情境或子情境由一道道題目組成，題目在 IRT 的文獻裡叫 item，是給 LLM 解的小測驗，從選擇題到文字摘要都有。</p>
+    <p>模型 l 做完題目 i，基準背後的系統會給一個分數，作者叫它「正確度」，記作 Y<sub>il</sub>。這篇用到的基準裡，正確度要嘛是二元的 0 或 1（錯或對），要嘛是 0 到 1 之間的數，代表對的程度；後者用在一題不只一個正確答案的情況，例如 HELM 有些情境用 F1 計分。</p>
+    <p>最終目標是估出 LLM 在整份基準的表現。整份的表現，是各個情境表現的平均（Open LLM Leaderboard、MMLU、AlpacaEval 2.0），或是跨情境的平均勝率 mean win rate（HELM）。所以作者先估每個情境的表現，再照基準的規則彙整。有子情境時，情境的表現通常是各子情境表現的簡單平均。</p>
+    <p>為了講解方便，正文假設情境的分數就是它所有題目正確度的簡單平均。子情境題數不同時就不是這樣：要讓每個子情境一樣重，得改用加權平均。附錄 A 把這件事寫成式子：子情境 k 裡的每一題，權重是「1 ÷ 子情境的個數 ÷ 這個子情境的題數」，整個情境的分數就是所有題目的加權和。作者的程式把這些權重叫 balance weights，實驗裡也照這個方式算。</p>
+
+    <div class="codeblock">
+      <span class="file">情境分數與要估的東西 · 教學用示意（整理者寫的，不是論文的程式）</span>
+<pre class="code"><span class="c"># 真實分數：情境 j 所有題目的加權平均（子情境不等大時，權重讓每個子情境一樣重）</span>
+true_j = sum(w_full[i] * Y[l][i] <span class="k">for</span> i <span class="k">in</span> items_j)
+
+<span class="c"># 目標：新模型 l 只做挑出來的幾題，用另一組權重估出同一個數</span>
+est_j = sum(w[i] * Y[l][i] <span class="k">for</span> i <span class="k">in</span> picked_j)    <span class="c"># w 非負、加總為 1（式 3.1）</span></pre>
+    </div>
+
+    <p>要解的問題就是：挑一小部分題目 Î<sub>j</sub>，讓一個新模型只做這些題，就能估出它在情境 j 的分數。為了聰明地挑，作者假設手上有另一批 LLM 在整份基準上的正確度資料，也就是一群「考過完整份」的舊模型。作者指出，許多熱門基準的這種逐題資料都是免費公開的。下一章的三種挑題法，差別就在怎麼用這份資料。</p>
+
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>這裡的「訓練資料」長什麼樣</h4>
+      <p>一般機器學習的訓練資料是一堆題目與答案。這裡的訓練資料是一張表：每一列是一個已經考過完整份的舊模型，每一欄是一道題，格子裡是那個模型在那一題的正確度。挑題與擬合 IRT 都只用這張表，不需要題目的文字內容。第 7 章會看到，訓練與測試切的也是這張表的列，也就是模型。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="selecting" data-toc="三種挑題法">
+  <div class="container head">
+    <p class="chapter">Chapter 03 · Selecting Evaluation Examples</p>
+    <h2><span class="seg">作答模式相同的題，</span><span class="seg">只要考一題</span></h2>
+    <p class="lede">第 3 節比較三種挑題法：分層隨機抽樣，照子情境平均地抽；依對錯分群，找出能代表一群題的錨點，權重是這一群的大小；再把分群用的向量，換成 IRT 學到的題目表示。後兩種都要用到上一章那張舊模型的作答表。</p>
+    
+  </div>
+  <div class="cardband" id="card-04"><div class="cardlabel"><span class="n">圖卡 04 / 12</span><span class="t">依作答模式分群挑錨點</span><button type="button" class="zoom" data-card="04">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">作答模式相同的題，只要考一題當代表</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.2 節：每題用「訓練集裡每個模型答對與否」當向量，K-means 分成 K 群；離群中心最近的題是錨點，權重是這一群佔的比例</div>
+
+  <div style="position:absolute; left:200px; top:150px; width:194px; height:24px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:12px; color:#4B5866;">群 1 · 3 題 · 權重 3/8</div>
+  <div style="position:absolute; left:414px; top:150px; width:128px; height:24px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:12px; color:#4B5866;">群 2 · 權重 2/8</div>
+  <div style="position:absolute; left:562px; top:150px; width:194px; height:24px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:12px; color:#4B5866;">群 3 · 3 題 · 權重 3/8</div>
+
+  <div style="position:absolute; left:60px; top:181px; width:128px; text-align:right; font-size:12px; color:#8A93A0;">題目 →</div>
+  <div style="position:absolute; left:200px; top:182px; width:62px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">Q1</div>
+  <div style="position:absolute; left:266px; top:182px; width:62px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">Q2</div>
+  <div style="position:absolute; left:332px; top:182px; width:62px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">Q3</div>
+  <div style="position:absolute; left:414px; top:182px; width:62px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">Q4</div>
+  <div style="position:absolute; left:480px; top:182px; width:62px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">Q5</div>
+  <div style="position:absolute; left:562px; top:182px; width:62px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">Q6</div>
+  <div style="position:absolute; left:628px; top:182px; width:62px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">Q7</div>
+  <div style="position:absolute; left:694px; top:182px; width:62px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">Q8</div>
+
+  <div style="position:absolute; left:60px; top:217px; width:128px; text-align:right; font-size:13px; color:#2B3340;">舊模型 1</div>
+  <div style="position:absolute; left:60px; top:263px; width:128px; text-align:right; font-size:13px; color:#2B3340;">舊模型 2</div>
+  <div style="position:absolute; left:60px; top:309px; width:128px; text-align:right; font-size:13px; color:#2B3340;">舊模型 3</div>
+  <div style="position:absolute; left:60px; top:355px; width:128px; text-align:right; font-size:13px; color:#2B3340;">舊模型 4</div>
+  <div style="position:absolute; left:60px; top:401px; width:128px; text-align:right; font-size:13px; color:#2B3340;">舊模型 5</div>
+  <div style="position:absolute; left:60px; top:447px; width:128px; text-align:right; font-size:13px; color:#2B3340;">舊模型 6</div>
+  <div style="position:absolute; left:60px; top:511px; width:128px; text-align:right; font-size:13px; font-weight:700; color:#2E7B4F;">新模型</div>
+
+  <div style="position:absolute; left:200px; top:206px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:266px; top:206px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:332px; top:206px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:414px; top:206px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:480px; top:206px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:562px; top:206px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:628px; top:206px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:694px; top:206px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+
+  <div style="position:absolute; left:200px; top:252px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:266px; top:252px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:332px; top:252px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:414px; top:252px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:480px; top:252px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:562px; top:252px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+  <div style="position:absolute; left:628px; top:252px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:694px; top:252px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+
+  <div style="position:absolute; left:200px; top:298px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:266px; top:298px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:332px; top:298px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:414px; top:298px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:480px; top:298px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:562px; top:298px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+  <div style="position:absolute; left:628px; top:298px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+  <div style="position:absolute; left:694px; top:298px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+
+  <div style="position:absolute; left:200px; top:344px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:266px; top:344px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:332px; top:344px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:414px; top:344px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+  <div style="position:absolute; left:480px; top:344px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+  <div style="position:absolute; left:562px; top:344px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+  <div style="position:absolute; left:628px; top:344px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+  <div style="position:absolute; left:694px; top:344px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+
+  <div style="position:absolute; left:200px; top:390px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:266px; top:390px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:332px; top:390px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+  <div style="position:absolute; left:414px; top:390px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+  <div style="position:absolute; left:480px; top:390px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:562px; top:390px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+  <div style="position:absolute; left:628px; top:390px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+  <div style="position:absolute; left:694px; top:390px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+
+  <div style="position:absolute; left:200px; top:436px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+  <div style="position:absolute; left:266px; top:436px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+  <div style="position:absolute; left:332px; top:436px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+  <div style="position:absolute; left:414px; top:436px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+  <div style="position:absolute; left:480px; top:436px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+  <div style="position:absolute; left:562px; top:436px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+  <div style="position:absolute; left:628px; top:436px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+  <div style="position:absolute; left:694px; top:436px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1px solid #E5E9EE; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C5CCD5;">0</div>
+
+  <div style="position:absolute; left:200px; top:500px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:266px; top:500px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#F7F8FA; border:1px dashed #D5DAE1; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#9AA3AE;">?</div>
+  <div style="position:absolute; left:332px; top:500px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#F7F8FA; border:1px dashed #D5DAE1; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#9AA3AE;">?</div>
+  <div style="position:absolute; left:414px; top:500px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:480px; top:500px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#F7F8FA; border:1px dashed #D5DAE1; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#9AA3AE;">?</div>
+  <div style="position:absolute; left:562px; top:500px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#FFFFFF; border:1.5px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#6B7380;">0</div>
+  <div style="position:absolute; left:628px; top:500px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#F7F8FA; border:1px dashed #D5DAE1; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#9AA3AE;">?</div>
+  <div style="position:absolute; left:694px; top:500px; width:62px; height:42px; box-sizing:border-box; border-radius:4px; background-color:#F7F8FA; border:1px dashed #D5DAE1; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#9AA3AE;">?</div>
+
+  <div style="position:absolute; left:196px; top:177px; width:70px; height:369px; box-sizing:border-box; border:2px solid #2E7B4F; border-radius:6px;"></div>
+  <div style="position:absolute; left:410px; top:177px; width:70px; height:369px; box-sizing:border-box; border:2px solid #2E7B4F; border-radius:6px;"></div>
+  <div style="position:absolute; left:558px; top:177px; width:70px; height:369px; box-sizing:border-box; border:2px solid #2E7B4F; border-radius:6px;"></div>
+
+  <div style="position:absolute; left:800px; top:178px; font-size:15px; font-weight:700; color:#1C2431;">新模型只做 3 個錨點</div>
+  <div style="position:absolute; left:800px; top:212px; width:370px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; color:#2B3340;">Q1（群 1）答對 1 × 權重 3/8 ＝ <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">&#160;0.375</span></div>
+  <div style="position:absolute; left:800px; top:262px; width:370px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; color:#2B3340;">Q4（群 2）答對 1 × 權重 2/8 ＝ <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">&#160;0.250</span></div>
+  <div style="position:absolute; left:800px; top:312px; width:370px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; color:#2B3340;">Q6（群 3）答錯 0 × 權重 3/8 ＝ <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">&#160;0</span></div>
+  <div style="position:absolute; left:800px; top:376px; width:370px; height:58px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:17px; font-weight:700; color:#FFFFFF;">估計分數 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">0.625</span></div><div style="margin-top:2px; font-size:12px; color:rgba(255,255,255,0.75);">三列加總；權重加起來是 1</div></div></div>
+  <div style="position:absolute; left:800px; top:448px; width:370px; font-size:13px; color:#6B7380; line-height:1.6;">沒做的 5 題不另外估：<br>每一題都由自己那一群的錨點代表。</div>
+
+  <div style="position:absolute; left:1210px; top:150px; width:330px; height:264px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 24px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-size:17px; font-weight:700; color:#1C2431;">怎麼讀這張表</div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">01</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">每一列是一個舊模型，<br>每一欄是一道題；深色格是答對。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">02</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">一欄就是一道題的向量；作答模式<br>相近的欄，K-means 分成同一群。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">03</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">每群只留離中心最近的一題（綠框），<br>權重是這一群佔的題數比例。</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:560px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">式 3.1 的文字版：估計＝Σ（每題的權重 × 新模型在這題的正確度），權重非負、加總為 1；三種挑題法都是這個形式，差在挑哪幾題、權重怎麼給。</div>
+
+  <div style="position:absolute; left:60px; top:602px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">分層隨機抽樣：最簡單</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">在每個子情境均勻地抽、題數最多差 1，<br>每題權重相同；題少時誤差可能很大。</div>
+    <div style="font-size:13px; color:#8A93A0;">Perlitz 等人為 HELM 提出的做法。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:602px; width:470px; height:190px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">對錯向量的兩個弱點</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">對錯模式會隨時間改變，受分布偏移影響；<br>訓練模型一多，向量的維度跟著變高。</div>
+    <div style="font-size:13px; color:#8A93A0;">向量長度＝訓練模型的數量。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:602px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">改用 IRT 向量</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">每題換成 IRT 估出的 α、β，最多 16 維；<br>IRT 大致設對時，也比較不怕分布偏移。</div>
+    <div style="font-size:13px; color:#8A93A0;">第 5 卡講這組參數；挑法與權重不變。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：方格、分群與新模型的作答都是整理者的示意，不是論文的資料；實驗裡每個情境挑幾題到 100 題，K-means 的群數就是要挑的題數。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M985 352L985 374" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M760 521H780V405H798" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c04)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>三種方法最後都寫成同一個形式（式 3.1）：挑出的每一題有一個權重，權重非負、加總為 1，新模型在這些題上的加權平均，要接近它在整個情境的平均。差別在怎麼挑題、怎麼給權重。</p>
+    <p><strong>分層隨機抽樣。</strong>分層抽樣是先把資料分組，再從每一組抽，確保每一組都有代表。用子情境當分層，是 Perlitz 等人在從 HELM 抽子集時提出的；他們發現這樣抽，替模型排名的能力不會損失太多。作法是在每個子情境裡均勻地隨機抽，並讓任兩個子情境抽到的題數最多差 1；理由是一次好的評估，每個子情境都該一樣有代表性。每一題的權重都一樣，是 1 除以抽到的題數。</p>
+    <p><strong>依對錯分群。</strong>隨機抽的子集有抽樣本身的不確定性，題目少時更明顯。作者改用分群挑出有代表性的題。Vivek 等人原本的 Anchor Points，是依模型對正確類別的信心把分類任務的題目分群，每群挑一題「錨點」來評估；作者把它改到更一般的設定，讓 MMLU、AlpacaEval 2.0、Open LLM Leaderboard 與 HELM 的所有情境都能用。想法是：如果題目 i 是一個錨點，就該有一大批題目，模型答對它們若且唯若答對 i。具體作法是，每一題用一個向量表示，向量的每一格是訓練集裡某個模型在這一題的正確度，所以向量長度等於訓練模型的數量。對這些向量跑 K-means 分成 K 群，找出離每個群中心最近的那一題，這 K 題就是挑出的題。新模型的估計，是它在這 K 題上的加權平均，每一題的權重是它那一群佔情境題數的比例。</p>
+    <p>作者說這個方法簡單又有說服力，但有兩個弱點：對錯模式會變（例如隨時間變），所以會受分布偏移影響；訓練模型很多時，向量的維度很高，會碰上維度詛咒，也就是維度一高、距離就不太分得出遠近。</p>
+    <p><strong>依 IRT 表示分群。</strong>第三種方法換掉的是題目的向量：改用第 4 節 IRT 模型學到的題目參數，也就是每一題估出來的 α 與 β。IRT 依題目的難度與答對它需要的能力，給每一題一個有意義的表示。這個向量是低維的（實驗裡最多 16 維），直接解決了維度的問題；如果 IRT 模型合理描述了現實、題目的表示也穩定，它也可能減輕分布偏移。IRT 表示的是哪些題難度相近、需要的能力相近，錨點代表的正是作者想要的東西。權重同樣是錨點那一群佔的比例。</p>
+
+    <div class="codeblock">
+      <span class="file">用 K-means 挑錨點 · 教學用精簡版（整理者依第 3.2 節寫的，不是論文的程式）</span>
+<pre class="code"><span class="k">import</span> numpy <span class="k">as</span> np
+<span class="k">from</span> sklearn.cluster <span class="k">import</span> KMeans
+
+<span class="c"># Y_train：訓練模型 × 情境 j 的題目，每格是正確度</span>
+E = Y_train.T                                  <span class="c"># 對錯分群：每題一個向量，長度＝訓練模型數</span>
+<span class="c"># E = np.column_stack([alpha_hat, beta_hat])  # IRT 分群：改用 IRT 的題目參數，最多 16 維</span>
+
+km = KMeans(n_clusters=K).fit(E)
+anchors = [np.argmin(((E - c) ** 2).sum(axis=1)) <span class="k">for</span> c <span class="k">in</span> km.cluster_centers_]
+weights = np.bincount(km.labels_, minlength=K) / len(E)   <span class="c"># 這一群佔幾成</span>
+
+estimate = (weights * y_new[anchors]).sum()    <span class="c"># 新模型只做 K 個錨點</span></pre>
+    </div>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>第 3 節 · 方法</th><th>每題怎麼表示</th><th>怎麼挑</th><th>權重</th><th>原文點出的弱點</th></tr></thead>
+        <tbody>
+          <tr><td>分層隨機抽樣</td><td>不需要表示</td><td>每個子情境均勻地抽，<br>題數最多差 1</td><td>每題相同</td><td>題少時估計誤差<br>可能很大</td></tr>
+          <tr><td>依對錯分群</td><td>訓練模型在這題的<br>對錯向量</td><td>K-means，每群取<br>離中心最近的題</td><td>這一群佔的比例</td><td>分布偏移；<br>訓練模型多時的維度詛咒</td></tr>
+          <tr><td>依 IRT 表示分群</td><td>IRT 估出的 α、β<br>（最多 16 維）</td><td>同上</td><td>同上</td><td>要 IRT 模型<br>大致設對</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>附錄 A 補了一個細節：子情境題數不同時，分層隨機抽樣的權重仍是 1 除以題數，因為抽的時候已經讓子情境平均出現；分群時，錨點的權重改成它那一群所有題目的子情境權重加總。</p>
+
+    <div class="thought">
+      <span class="label">思考題 · 01</span>
+      <h4>你手上有多少個「考過完整份」的舊模型？</h4>
+      <p>想一個你在維護的評估集：可能是一組 agent 任務，也可能是一份內部的 QA 題庫。分群挑題需要一張「模型 × 題目」的逐題作答表，而且列數要夠多，分出來的群才有意義。</p>
+      <p class="hint">如果你只存了每次評估的總分，先改成保存每一題的結果；等累積了夠多個版本或模型，再試著分群挑題。在那之前，照子情境分層抽樣是最不依賴歷史資料的做法。「累積多少才夠」論文沒有給數字，這一段是整理者的建議。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="irt-model" data-toc="IRT 模型">
+  <div class="container head">
+    <p class="chapter">Chapter 04 · Better Performance Estimation with IRT · The IRT Model · Fitting</p>
+    <h2><span class="seg">IRT 給每道題，</span><span class="seg">一組能力需求與難度</span></h2>
+    <p class="lede">試題反應理論（IRT）是心理計量學用標準化考試估考生能力的模型。論文把 LLM 當考生、基準當試卷：每個模型有一個能力向量 θ，每道題有一個能力需求向量 α 和一個偏移 β，三者決定這個模型答對這一題的機率。</p>
+    
+  </div>
+  <div class="cardband" id="card-05"><div class="cardlabel"><span class="n">圖卡 05 / 12</span><span class="t">IRT：能力需求與難度</span><button type="button" class="zoom" data-card="05">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">IRT 給每道題一組能力需求與難度</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4.1 節：模型 l 答對題目 i 的機率＝邏輯斯（α<sub>i</sub> 與 θ<sub>l</sub> 的內積 − β<sub>i</sub>）；θ、α 是 d 維向量，β 是一個數。LLM 是考生，基準是試卷</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:440px; height:370px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:10px;"></div>
+  <div style="position:absolute; left:80px; top:164px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">TRAINING DATA → IRT</div>
+  <div style="position:absolute; left:80px; top:192px; width:400px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">作答表：舊模型 × 題目，每格 0 到 1</div>
+  <div style="position:absolute; left:80px; top:242px; width:400px; height:58px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; padding:0px 14px; display:flex; align-items:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">每道題：α<sub>i</sub> 與 β<sub>i</sub></div><div style="font-size:12.5px; color:#6B7380;">接起來就是題目向量，實驗裡最多 16 維</div></div></div>
+  <div style="position:absolute; left:80px; top:310px; width:400px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">每個舊模型：能力 θ<sub>l</sub>（d 維）</div>
+  <div style="position:absolute; left:80px; top:360px; width:400px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">擬合：變分推論，取平均當點估計</div>
+  <div style="position:absolute; left:80px; top:410px; width:400px; height:58px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; border-radius:6px; padding:0px 14px; display:flex; align-items:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">新模型：題目參數固定，只估 θ</div><div style="font-size:12.5px; color:#6B7380;">第 6 卡的 p-IRT 從這一步開始</div></div></div>
+  <div style="position:absolute; left:80px; top:482px; width:400px; font-size:13px; color:#6B7380; line-height:1.5;">題目參數用舊模型估一次，之後固定不動</div>
+
+  <div style="position:absolute; left:505px; top:248px; width:66px; text-align:center; font-size:12.5px; color:#8A93A0;">展開</div>
+
+  <div style="position:absolute; left:580px; top:150px; width:500px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:17px; font-weight:700; color:#FFFFFF;">展開：答對的機率怎麼算</div>
+  <div style="position:absolute; left:580px; top:198px; width:500px; height:322px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:14px 22px; display:flex; flex-direction:column; justify-content:center; gap:16px;">
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">1</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">模型的能力 θ<sub>l</sub></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">THETA</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">d 維向量，每一格是一種看不到的能力</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">2</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">題目需要的能力 α<sub>i</sub></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">ALPHA</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">d 維向量，決定答對要用到 θ 的哪幾維</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">3</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">偏移（難度）β<sub>i</sub></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">BETA</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">一個數；越大，同樣的能力下越難答對</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">4</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#2E7B4F;">答對機率 p<sub>il</sub></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">P(CORRECT)</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">邏輯斯（α<sub>i</sub> 與 θ<sub>l</sub> 的內積 − β<sub>i</sub>），落在 0 到 1</div></div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:1140px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;"><span style="letter-spacing:0.12em">WRITE / READ</span> &#183; 誰寫、誰讀這組參數</div>
+  <div style="position:absolute; left:1140px; top:178px; width:400px; height:76px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#FFFFFF;">寫：用舊模型的作答表擬合</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">變分推論；維度 d 在 2、5、10、15 裡用驗證挑</div></div>
+  <div style="position:absolute; left:1140px; top:280px; width:400px; height:76px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">讀：當題目向量來分群</div><div style="font-size:12.5px; color:#6B7380;">估出的 α、β 取代對錯向量跑 K-means（第 4 卡）</div></div>
+  <div style="position:absolute; left:1140px; top:382px; width:400px; height:76px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">讀：預測沒考的題</div><div style="font-size:12.5px; color:#6B7380;">p-IRT 與 gp-IRT 用它補分數（第 6、7 卡）</div></div>
+  <div style="position:absolute; left:1140px; top:474px; width:400px; font-size:13px; color:#6B7380; line-height:1.5;">寫只發生一次；新模型來時，<br>題目參數只讀、不改。</div>
+
+  <div style="position:absolute; left:60px; top:570px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">分數不是 0 或 1：先二值化</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">每個情境挑一個門檻 c，讓二值化後的總和<br>約等於原本分數的總和，再用標準的 IRT。</div>
+    <div style="font-size:13px; color:#8A93A0;">AlpacaEval 2.0，與 HELM、Leaderboard 的部分情境。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:570px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">擬合：變分推論</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">θ、α、β 都假設常態分布，再加一層超先驗；<br>點估計取變分分布的平均。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者用 Lalor 與 Rodriguez 的階層貝氏軟體。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:570px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">借用心理計量學</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">標準化考試用 IRT 從答題估考生的能力；<br>這裡的考生是 LLM，試卷是基準。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說 IRT 還沒被用來在高效評估裡估分數。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：把 β 讀成「難度」是整理者的說法，原文叫它偏移項；左側方塊、展開的四列與右側三格，是整理者依第 3、4 節的整理。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+    </defs>
+    <path d="M482 271H576" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M1138 216H1084" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c05)"></path>
+    <path d="M1082 318H1136" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c05)"></path>
+    <path d="M1082 420H1136" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c05)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>IRT 是一組發展成熟的統計模型，心理計量學用它透過標準化考試（例如 GRE、SAT）量測個人的潛在能力。第 1.1 節提到，IRT 近年也開始用在 AI 與 NLP：有人用 IRT 的潛在變數量語言模型的能力，有人用它研究常用基準的飽和（分不出模型的好壞），也有人發現 IRT 能可靠地預測 LLM 在沒看過的題目上的反應、替題目依難度與鑑別度分類、替模型排名。</p>
+    <p>第 4.1 節用的是兩參數的多維 IRT 模型。用文字講：模型 l 答對題目 i 的機率，是把「題目需要的能力 α<sub>i</sub> 和模型具備的能力 θ<sub>l</sub> 的內積」減掉 β<sub>i</sub>，再用邏輯斯函數壓到 0 到 1 之間。θ<sub>l</sub> 是模型 l 看不到的能力，是一個 d 維向量；α<sub>i</sub> 也是 d 維，決定答對這一題需要 θ 的哪幾個維度；β<sub>i</sub> 是一個數，作者說它可以看成偏移項，調節能力為零時答對的機率。β 越大，同一個模型答對的機率越低，所以可以把它讀成題目的難度（這是整理者的讀法；第 3.2 節作者也說，IRT 的表示依據的是題目的難度與需要的能力）。</p>
+
+    <div class="codeblock">
+      <span class="file">式 4.1 的文字版 · 教學用示意（整理者寫的）</span>
+<pre class="code"><span class="k">def</span> p_correct(theta_l, alpha_i, beta_i):
+    z = alpha_i @ theta_l - beta_i      <span class="c"># 能力對上需求的程度，再扣掉偏移（難度）</span>
+    <span class="k">return</span> 1 / (1 + np.exp(-z))          <span class="c"># 邏輯斯函數：壓進 0 到 1</span></pre>
+    </div>
+
+    <p>擬合出來的題目參數有兩個用途。第一，把估出的 α<sub>i</sub> 與 β<sub>i</sub> 接在一起，當作第 3 章分群用的題目向量。第二，下兩章的兩個估計量，都要用它們預測新模型在沒考的題上的表現。</p>
+    <p><strong>怎麼擬合（第 4.4 節）。</strong>作者用變分推論（variational inference）：不直接算出參數的精確分布，而是找一個簡單的分布去逼近它。他們假設 θ、α、β 都服從常態分布，常態分布的平均與精確度又各有自己的先驗（平均是常態分布、精確度是 Gamma 分布），這樣就能用 Lalor 與 Rodriguez（2023）的階層式貝氏模型軟體來擬合。模型與題目的參數，都取變分分布的平均當點估計。維度 d 在 {2, 5, 10, 15} 裡挑：在訓練集裡切出一份驗證集，選讓 IRT 預測得最準的那一個。</p>
+    <p><strong>分數在 0 與 1 之間時（第 4.3 節）。</strong>AlpacaEval 2.0 的分數是有上下界的連續值，可以轉到 0 到 1；HELM 與 Open LLM Leaderboard 也有幾個情境的分數落在 0 到 1 之間。作者的修法很簡單：每個情境選一個門檻 c，把分數大於等於 c 的算成 1、否則算 0，c 的選法是讓訓練資料裡「二值化之後的總和」大約等於「原本分數的總和」。這樣兩者的平均差不多，二值化之後就能用標準的 IRT 工具。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>為什麼是內積減掉一個數</h4>
+      <p>傳統的單維 IRT 只有一種能力：能力越高、題目越簡單，答對機率越高。多維版本讓一道題可以同時需要幾種能力，例如一題數學應用題可能同時要閱讀與計算。α<sub>i</sub> 的每一格說明這一題有多依賴某一種能力，θ<sub>l</sub> 的同一格說明模型在那種能力上有多強，內積就是「這個模型的強項，對不對得上這題的需求」。這一段是整理者補的背景，論文沒有展開。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="p-irt" data-toc="補上沒考的題">
+  <div class="container head">
+    <p class="chapter">Chapter 05 · IRT-based LLM Performance Estimation · The p-IRT Estimator</p>
+    <h2><span class="seg">沒考的題，</span><span class="seg">用預測的答對機率補上</span></h2>
+    <p class="lede">題目的 IRT 參數事先擬合好之後，新模型只要做少數幾題，就能估出它的能力 θ，再預測其餘每一題答對的機率。p-IRT 把看過的題的實際對錯，和沒看過的題的預測機率，依題數的比例合成一個分數。</p>
+    
+  </div>
+  <div class="cardband" id="card-06"><div class="cardlabel"><span class="n">圖卡 06 / 12</span><span class="t">p-IRT：補上沒考的題</span><button type="button" class="zoom" data-card="06">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">沒考的題，用 IRT 預測的答對機率補上</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4.2 節：情境分數＝看過的比例 × 看過的題的平均正確度＋沒看過的比例 × 沒看過的題的平均預測機率；看過的比例＝看過的題數 ÷ 情境的題數</div>
+
+  <div style="position:absolute; left:60px; top:140px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#2E7B4F;"></div>看過的題：用實際的正確度 Y</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1;"></div>沒看過的題：用 IRT 預測的答對機率 p</div>
+    <div style="color:#8A93A0;">p 由新模型估出的 θ 與每題的 α、β 算出（第 5 卡）</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:214px; font-size:16px; font-weight:700; color:#1C2431;">MMLU</div>
+  <div style="position:absolute; left:60px; top:238px; font-size:12px; color:#8A93A0;">約 1.4 萬題</div>
+  <div style="position:absolute; left:180px; top:184px; white-space:nowrap; font-size:13px; font-weight:700; color:#2E7B4F;">↓ 看過 100 題，看過的比例約 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">0.7%</span></div>
+  <div style="position:absolute; left:180px; top:206px; width:10px; height:56px; box-sizing:border-box; background-color:#2E7B4F; border-radius:6px 0px 0px 6px;"></div>
+  <div style="position:absolute; left:190px; top:206px; width:1310px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">其餘約 1.39 萬題：全部用 IRT 預測的答對機率補上</div>
+  <div style="position:absolute; left:180px; top:286px; font-size:13px; color:#8A93A0;">這個情境的分數，有九成九以上來自 IRT 的預測（整理者依題數算）</div>
+
+  <div style="position:absolute; left:60px; top:354px; font-size:16px; font-weight:700; color:#1C2431;">AlpacaEval</div>
+  <div style="position:absolute; left:60px; top:378px; font-size:12px; color:#8A93A0;">2.0 · 805 題</div>
+  <div style="position:absolute; left:180px; top:324px; white-space:nowrap; font-size:13px; font-weight:700; color:#2E7B4F;">看過的比例約 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">12.4%</span></div>
+  <div style="position:absolute; left:180px; top:346px; width:164px; height:56px; box-sizing:border-box; background-color:#2E7B4F; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#FFFFFF;">看過 100 題</div>
+  <div style="position:absolute; left:344px; top:346px; width:1156px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">沒看過的 705 題：用預測的答對機率補上</div>
+  <div style="position:absolute; left:180px; top:426px; font-size:13px; color:#8A93A0;">看過的題佔一成二，其餘仍靠 IRT；同樣考 100 題，題庫越大，估計越依賴 IRT（整理者算）</div>
+
+  <div style="position:absolute; left:60px; top:470px; width:1480px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">兩個限制</div>
+    <div style="font-size:15px; color:#2B3340;">用不上錨點的樣本權重；IRT 模型設錯、預測的機率不準時，灰色那一大段會整段偏掉</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:560px; width:470px; height:186px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">能力 θ 借所有情境的資料</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">固定每題的 α、β，只對新模型的作答做<br>邏輯斯迴歸；每個情境只看幾題也夠用。</div>
+    <div style="font-size:13px; color:#8A93A0;">估 θ 用的資料越多，p-IRT 的變異越小。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:560px; width:470px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">條件期望：最好的近似</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">已知看過的題的對錯時，情境分數的條件<br>期望值，是均方誤差最小的近似。</div>
+    <div style="font-size:13px; color:#8A93A0;">命題 4.1：參數已知、θ 收斂時，p-IRT 也收斂到它。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:560px; width:470px; height:186px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">兩個限制，交給 gp-IRT</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">用不上錨點的樣本權重；<br>IRT 模型設錯、預測不準時，表現就變差。</div>
+    <div style="font-size:13px; color:#8A93A0;">第 7 卡的 gp-IRT 就是為了補這兩點。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩列的比例是整理者用原文的題數算的（MMLU 以 1.4 萬題計）；「看過的比例」論文記作帶帽的 λ。子情境不等大時，兩段都要再乘上平衡權重（附錄 A）。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 4.2 節的設定是：題目參數（估出的 α、β）已經用訓練集，對所有情境的所有題擬合好了；現在要估一個不在訓練集裡的新模型 l 在情境 j 的分數，也就是它在情境 j 所有題目的平均正確度。新模型只做了情境 j 的一小部分題 Î<sub>j</sub>，可能也做了其他情境的一些題。</p>
+    <p>第一步估能力：把題目參數固定，對新模型實際做過的題，找出讓這些作答結果最可能出現的能力（最大化對數概似），下面叫它「估出的 θ」。題目參數固定之後，這件事就等於擬合一個邏輯斯迴歸，是統計裡研究得很透徹的 M 估計。</p>
+    <p>第二步估分數。情境分數是隨機的，作者用「已知看過的題的對錯時，情境分數的條件期望值」來近似它，這是均方誤差意義下最好的近似。拆開來看，它等於：看過的題直接用實際的正確度，沒看過的題用 IRT 給的答對機率，全部平均。寫成兩段的加權：權重是看過的題佔情境題數的比例（論文用帶帽的 λ 表示，這一頁寫成「看過的比例」）；看過的比例乘上看過的題的平均正確度，加上沒看過的比例乘上沒看過的題的平均預測機率。把真正的 θ 換成估出來的 θ，就是作者叫做 p-IRT（performance-IRT）的估計量（式 4.3）。</p>
+
+    <div class="codeblock">
+      <span class="file">p-IRT · 教學用精簡版（整理者依第 4.2 節寫的，不是論文的程式）</span>
+<pre class="code"><span class="c"># 1. 固定題目參數，只估新模型的能力（等於一個邏輯斯迴歸）</span>
+theta_hat = fit_theta(y_seen_all, alpha[seen_all], beta[seen_all])   <span class="c"># 可以用所有情境做過的題</span>
+
+<span class="c"># 2. 情境 j：看過的用實際對錯，沒看過的用預測的答對機率</span>
+lam = len(seen_j) / len(items_j)
+p_unseen = [p_correct(theta_hat, alpha[i], beta[i]) <span class="k">for</span> i <span class="k">in</span> unseen_j]
+z_pirt = lam * np.mean(y[seen_j]) + (1 - lam) * np.mean(p_unseen)</pre>
+    </div>
+
+    <p>作者說這個想法的好處，是可以用 IRT 模型估模型在沒看過的資料上的表現。估出的 θ 若能用很多情境的資料，效果特別好：即使每個情境只看了幾題，p-IRT 也能用上所有看過的題，讓每個情境的估計都更好。在訓練集給定的條件下，θ 用大量資料估出來時，p-IRT 的變異小；IRT 模型設定得合理時，偏差也小。</p>
+    <p>命題 4.1 談題目很多時的行為。假設所有題目參數的真值都已知、α 的長度有上界，而且估出的 θ 在看過的題數趨近無限時依機率收斂到真值，那麼 p-IRT 也會依機率收斂到上面那個「最好的近似」。附錄 C 的證明只用了兩件事：邏輯斯函數的斜率最多 1/4，以及 Cauchy–Schwarz 不等式。</p>
+    <p>作者也點出 p-IRT 的兩個限制，它們在實務上會削弱它的效果。第一，它沒辦法直接使用樣本權重，所以用不上錨點的權重；第二，如果預測的答對機率不準，例如 IRT 模型設錯了，p-IRT 的表現就會變差。下一章的 gp-IRT 就是為了補這兩點。附錄 A 另外說明，子情境題數不同時，p-IRT 裡看過與沒看過的兩段都要乘上子情境的平衡權重。</p>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>看過的題越少，估計越依賴 IRT</h4>
+      <p>看過的比例，就是看過的題佔情境題數的比例。以 MMLU 為例，約 1.4 萬題裡只考 100 題，看過的比例大約只有 0.7%；AlpacaEval 2.0 共 805 題，考 100 題時約 12.4%。這兩個比例是整理者用原文的題數算的。換句話說，在 MMLU 上，p-IRT 的分數有九成九以上來自 IRT 的預測：IRT 設得準，這是優點；設不準，那一大段就一起偏掉。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="gp-irt" data-toc="兩個估計怎麼混">
+  <div class="container head">
+    <p class="chapter">Chapter 06 · The Generalized p-IRT (gp-IRT) Estimator</p>
+    <h2><span class="seg">兩個估計混著用，</span><span class="seg">題越多越信實際作答</span></h2>
+    <p class="lede">gp-IRT 把第 3 章的加權平均和 p-IRT 用一個權重 λ 混在一起。加權平均偏差低，但題少時變異大；p-IRT 變異小，但 IRT 設錯時有去不掉的偏差。λ 依看過的題數與估出來的 IRT 偏差決定。</p>
+    
+  </div>
+  <div class="cardband" id="card-07"><div class="cardlabel"><span class="n">圖卡 07 / 12</span><span class="t">gp-IRT：λ 怎麼決定</span><button type="button" class="zoom" data-card="07">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">題越多、IRT 偏差越大，越信實際作答</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4.2 節：gp-IRT＝λ × 加權平均＋（1 − λ）× p-IRT，λ＝b² ÷（σ² ÷ n＋b²）；曲線是整理者代入 σ²＝0.01 與圖 2 的五個 b 算的</div>
+
+  <div style="position:absolute; left:60px; top:136px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:22px; height:0px; border-top:2.5px solid #1F2A3A;"></div>b＝0.01：IRT 偏差小</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:22px; height:0px; border-top:1.5px solid #9AA3AE;"></div>b＝0.02、0.03、0.04</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:22px; height:0px; border-top:2.5px solid #C8501F;"></div>b＝0.05：IRT 偏差大</div>
+    <div style="color:#8A93A0;">n＝看過的題數；σ²＝0.01，和圖 2 相同</div>
+  </div>
+
+  <div style="position:absolute; left:180px; top:200px; width:720px; height:0px; border-top:1px solid #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:360px; width:720px; height:0px; border-top:1px solid #EEF1F5;"></div>
+  <div style="position:absolute; left:252px; top:200px; width:0px; height:320px; border-left:1px dashed #D5DAE1;"></div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="axg-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M180 520V186" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#axg-c07)"></path>
+    <path d="M180 520H918" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#axg-c07)"></path>
+    <path d="M360 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M540 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M720 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M900 520V526" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M180 520L187.2 516.8L194.4 513.7L201.6 510.7L208.8 507.7L216.0 504.8L223.2 501.9L230.4 499.1L237.6 496.3L244.8 493.6L252.0 490.9L266.4 485.7L280.8 480.7L295.2 475.9L309.6 471.2L324.0 466.7L345.6 460.2L367.2 454.0L396.0 446.2L432.0 437.0L468.0 428.6L504.0 420.7L540.0 413.3L612.0 400.0L684.0 388.2L756.0 377.8L828.0 368.4L900.0 360.0" stroke="#1F2A3A" stroke-width="2.5" stroke-linejoin="round"></path>
+    <path d="M180 520L187.2 507.7L194.4 496.3L201.6 485.7L208.8 475.9L216.0 466.7L223.2 458.1L230.4 450.0L237.6 442.4L244.8 435.3L252.0 428.6L266.4 416.2L280.8 405.1L295.2 395.1L309.6 386.0L324.0 377.8L345.6 366.7L367.2 356.9L396.0 345.5L432.0 333.3L468.0 323.1L504.0 314.3L540.0 306.7L612.0 294.1L684.0 284.2L756.0 276.2L828.0 269.6L900.0 264.0" stroke="#9AA3AE" stroke-width="1.5" stroke-linejoin="round"></path>
+    <path d="M180 520L187.2 493.6L194.4 471.2L201.6 452.0L208.8 435.3L216.0 420.7L223.2 407.8L230.4 396.3L237.6 386.0L244.8 376.8L252.0 368.4L266.4 353.8L280.8 341.6L295.2 331.1L309.6 322.1L324.0 314.3L345.6 304.2L367.2 295.8L396.0 286.5L432.0 277.1L468.0 269.6L504.0 263.4L540.0 258.2L612.0 250.0L684.0 243.8L756.0 239.0L828.0 235.2L900.0 232.0" stroke="#9AA3AE" stroke-width="1.5" stroke-linejoin="round"></path>
+    <path d="M180 520L187.2 475.9L194.4 442.4L201.6 416.2L208.8 395.1L216.0 377.8L223.2 363.3L230.4 350.9L237.6 340.4L244.8 331.1L252.0 323.1L266.4 309.6L280.8 298.8L295.2 289.9L309.6 282.5L324.0 276.2L345.6 268.4L367.2 262.0L396.0 255.2L432.0 248.5L468.0 243.2L504.0 239.0L540.0 235.6L612.0 230.2L684.0 226.2L756.0 223.2L828.0 220.8L900.0 218.8" stroke="#9AA3AE" stroke-width="1.5" stroke-linejoin="round"></path>
+    <path d="M180 520L187.2 456.0L194.4 413.3L201.6 382.9L208.8 360.0L216.0 342.2L223.2 328.0L230.4 316.4L237.6 306.7L244.8 298.5L252.0 291.4L266.4 280.0L280.8 271.1L295.2 264.0L309.6 258.2L324.0 253.3L345.6 247.4L367.2 242.7L396.0 237.6L432.0 232.8L468.0 229.1L504.0 226.1L540.0 223.7L612.0 220.0L684.0 217.3L756.0 215.2L828.0 213.6L900.0 212.3" stroke="#C8501F" stroke-width="2.5" stroke-linejoin="round"></path>
+    <circle cx="252" cy="490.9" r="4" fill="#1F2A3A"></circle>
+    <circle cx="252" cy="428.6" r="3.5" fill="#9AA3AE"></circle>
+    <circle cx="252" cy="368.4" r="3.5" fill="#9AA3AE"></circle>
+    <circle cx="252" cy="323.1" r="3.5" fill="#9AA3AE"></circle>
+    <circle cx="252" cy="291.4" r="4" fill="#C8501F"></circle>
+    <circle cx="900" cy="360" r="4" fill="#1F2A3A"></circle>
+    <circle cx="900" cy="264" r="3.5" fill="#9AA3AE"></circle>
+    <circle cx="900" cy="232" r="3.5" fill="#9AA3AE"></circle>
+    <circle cx="900" cy="218.8" r="3.5" fill="#9AA3AE"></circle>
+    <circle cx="900" cy="212.3" r="4" fill="#C8501F"></circle>
+    <path d="M904 212.3L914 197" stroke="#C8501F" stroke-width="1"></path>
+    <path d="M904 218.8L914 217" stroke="#9AA3AE" stroke-width="1"></path>
+    <path d="M904 232L914 237" stroke="#9AA3AE" stroke-width="1"></path>
+    <path d="M904 264L914 264" stroke="#9AA3AE" stroke-width="1"></path>
+    <path d="M904 360L914 360" stroke="#1F2A3A" stroke-width="1"></path>
+  </svg>
+
+  <div style="position:absolute; left:190px; top:168px; font-size:12px; color:#8A93A0;">↑ λ：給實際作答（加權平均）的權重；1 − λ 給 p-IRT</div>
+  <div style="position:absolute; left:130px; top:192px; width:40px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">1.0</div>
+  <div style="position:absolute; left:130px; top:352px; width:40px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">0.5</div>
+  <div style="position:absolute; left:130px; top:512px; width:40px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">0</div>
+  <div style="position:absolute; left:160px; top:532px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">0</div>
+  <div style="position:absolute; left:340px; top:532px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">25</div>
+  <div style="position:absolute; left:520px; top:532px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">50</div>
+  <div style="position:absolute; left:700px; top:532px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">75</div>
+  <div style="position:absolute; left:880px; top:532px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">100</div>
+  <div style="position:absolute; left:600px; top:552px; width:300px; text-align:right; font-size:12px; color:#8A93A0;">看過的題數 n →</div>
+  <div style="position:absolute; left:262px; top:500px; white-space:nowrap; background-color:#FFFFFF; padding:0px 4px; font-size:12.5px; color:#6B7380;">n＝10：λ 已在 0.09 到 0.71 之間</div>
+
+  <div style="position:absolute; left:916px; top:188px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#C8501F;">b=0.05 · λ=0.96</div>
+  <div style="position:absolute; left:916px; top:208px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#6B7380;">b=0.04 · λ=0.94</div>
+  <div style="position:absolute; left:916px; top:228px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#6B7380;">b=0.03 · λ=0.90</div>
+  <div style="position:absolute; left:916px; top:255px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#6B7380;">b=0.02 · λ=0.80</div>
+  <div style="position:absolute; left:916px; top:351px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#1F2A3A;">b=0.01 · λ=0.50</div>
+  <div style="position:absolute; left:916px; top:380px; width:180px; font-size:12px; color:#8A93A0; line-height:1.5;">線尾是 n＝100 的 λ，<br>和圖 2 曲線的右端一致</div>
+
+  <div style="position:absolute; left:1120px; top:170px; width:420px; height:320px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 24px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-size:17px; font-weight:700; color:#1C2431;">怎麼讀這張圖</div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#1F2A3A; margin-top:2px;">01</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">λ 越大，越相信實際作答的加權平均；<br>剩下的 1 − λ 給 p-IRT。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#1F2A3A; margin-top:2px;">02</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">同一條線往右（題越多），λ 變大：<br>加權平均的變異隨題數下降。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#C8501F; margin-top:2px;">03</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">線越高（IRT 偏差 b 越大），<br>同樣的題數下越不信 p-IRT。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#1F2A3A; margin-top:2px;">04</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">題少時線最陡：前幾題讓加權平均的<br>變異降得最快（作者對圖 2 的讀法）。</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">加權平均：偏差低，題少時晃</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">錨點或隨機抽樣的加權平均幾乎無偏，<br>式子裡它的變異以 σ² ÷ n 計，題越少越晃。</div>
+    <div style="font-size:13px; color:#8A93A0;">錨點的變異較小：σ² 預設先除以 4。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:186px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">p-IRT：變異小，偏差不消失</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">θ 用很多情境的資料估，變異小；<br>IRT 設錯時的偏差，不會隨題數變小。</div>
+    <div style="font-size:13px; color:#8A93A0;">所以式子把它的變異近似成零。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">b 怎麼估：舊模型切兩半</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">一半擬合 IRT，另一半只看一半的題，<br>預測與實際的絕對差平均後再平方。</div>
+    <div style="font-size:13px; color:#8A93A0;">每個情境各估一個 b。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：曲線與 λ 值是整理者代入第 4.2 節的式子算的（σ²＝0.01，和圖 2 相同）；b 與 σ² 是估計值，論文的符號帶帽，實際使用時每個情境各估一次。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>gp-IRT（generalized p-IRT）是作者最後的估計量。挑完題、做完題之後，先算出兩個估計：第 3 章的加權平均（隨機抽樣或錨點），以及上一章的 p-IRT。gp-IRT 是兩者的凸組合：λ 乘上加權平均，加上 1 − λ 乘上 p-IRT；λ 介於 0 與 1 之間，選來讓這個估計量表現最好（式 4.4）。</p>
+    <p>怎麼選 λ，要看兩個估計各有什麼毛病。隨機抽樣或錨點的加權平均偏差低，但題目少時變異可能很大，題目變多，變異就下降。p-IRT 反過來：在訓練集給定的條件下它的變異小，θ 用很多情境的資料估時更小；但 IRT 模型設錯時偏差可能很大，而且不會隨題數增加而消失。所以好的 λ 應該隨看過的題數增加。</p>
+    <p>作者的 λ 來自 Song（1988）的推論 2 導出的經驗法則：兩個估計量的最佳線性組合（權重加總為 1），取決於兩者的偏差、變異與共變異。如果第一個估計量沒有偏差、第二個的變異是零，最佳的 λ 是「第二個的偏差平方」除以「第二個的偏差平方加上第一個的變異」。作者假設阻礙 gp-IRT 的主要因素，就是第一個估計量的變異與第二個的偏差，所以把第一個的偏差與第二個的變異都近似成零。第一個估計量來自隨機抽樣時，λ ＝ b² ÷（σ² ÷ n ＋ b²），n 是看過的題數，b² 與 σ² 都是從訓練資料估出來的常數（論文的符號帶帽）。σ² 是訓練集裡各模型正確度的樣本變異數的平均；b² 是 IRT 偏差平方的估計，作法如下：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>切兩組模型</strong>把訓練集的模型分成兩組。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>擬合與估能力</strong>第一組用所有情境的資料擬合 IRT；第二組的每個模型，只用所有情境一半的題估自己的能力。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>預測沒看過的題</strong>用這個 IRT 預測第二組模型在情境 j 沒看過的題的正確度，每個模型各自平均，得到預測的與實際的情境分數。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>取偏差</strong>每個模型取預測與實際的絕對差，模型之間再平均，最後平方，就是 b²。</div></div>
+    </div>
+
+    <p>圖 2 用 σ² ＝ 0.01 畫出 λ 隨 b 與 n 的變化，作者從圖上讀出兩件事：IRT 的偏差小時，p-IRT 拿到比較多權重；n 小時曲線比較陡，因為題數少的時候，每多一題，第一個估計量的變異降得最快。第 7 卡是整理者用同一個式子、同樣的 σ² 與圖 2 的五個 b 重算的曲線，n ＝ 100 的五個值（0.50、0.80、0.90、0.94、0.96）和圖 2 曲線的右端對得上。</p>
+    <p>第一個估計量若來自變異較小的方法，例如錨點，作者套用同一個式子，但先把 σ² 除以一個大於 1 的常數，預設是 4，等於把第一個估計量的標準差減半。依式子推，σ² 變小、λ 變大，所以同樣的題數下，錨點的加權平均會拿到比隨機抽樣更多的權重（這一句是整理者從式子推的）。</p>
+
+    <div class="codeblock">
+      <span class="file">gp-IRT · 教學用精簡版（整理者依第 4.2 節寫的，不是論文的程式）</span>
+<pre class="code"><span class="k">def</span> gp_irt(y_sel, w_sel, z_pirt, sigma2, b2, anchors=True):
+    raw = (w_sel * y_sel).sum()              <span class="c"># 錨點或隨機抽樣的加權平均</span>
+    <span class="k">if</span> anchors:
+        sigma2 = sigma2 / 4                  <span class="c"># 錨點的變異較小：預設除以 4</span>
+    lam = b2 / (sigma2 / len(y_sel) + b2)    <span class="c"># IRT 偏差越大、題越多，越信 raw</span>
+    <span class="k">return</span> lam * raw + (1 - lam) * z_pirt</pre>
+    </div>
+
+    <div class="pullquote bronze">
+      題少時信模型，題多時信作答；IRT 可能錯多少，決定兩者在哪裡換手。
+      <cite>整理自第 4.2 節</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="protocol" data-toc="評估流程">
+  <div class="container head">
+    <p class="chapter">Chapter 07 · Assessing Evaluation Strategies · Pipeline · Benchmarks and Models</p>
+    <h2><span class="seg">訓練集與測試集，</span><span class="seg">切的是模型</span></h2>
+    <p class="lede">每個基準先收集一批模型公開的逐題作答，再把模型分成訓練與測試。訓練模型用來挑錨點、估 IRT 參數；測試模型只做挑出來的題，估出的分數再和它考完整份的真實分數比。切法有兩種：隨機切，以及依日期切。</p>
+    
+  </div>
+  <div class="cardband" id="card-08"><div class="cardlabel"><span class="n">圖卡 08 / 12</span><span class="t">訓練與測試切的是模型</span><button type="button" class="zoom" data-card="08">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">訓練與測試，切的是模型</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 5 節：每個基準先收集公開的逐題作答；舊模型拿來挑題與擬合，測試模型只做挑出的題，再和它考完整份的真實分數比</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　收集作答紀錄</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">公開的逐題正確度，例如<br>Leaderboard 的 395 個模型</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　切模型</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">隨機切，或依日期切</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">切的是模型，不是題目</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　訓練模型</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">挑錨點（第 4 卡），<br>擬合 IRT 參數（第 5 卡）</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　測試模型</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">只做挑出來的題</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">六種策略各估一次</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　和真實分數比</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">估計誤差，以及排名的<br>Spearman 相關 r<sub>S</sub></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:300px; width:1480px; height:52px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">六種策略</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">三種挑題（random、correctness、IRT）× 兩個版本（原版、加上 gp-IRT 的 ++）；每個設定重跑 5 次，圖 3 畫的是平均</div>
+  </div>
+  <div style="position:absolute; left:60px; top:364px; width:1480px; height:52px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">四個基準</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">Open LLM Leaderboard：6 個情境、395 個模型；MMLU：57 個科目、同一批模型；HELM Lite：10 個情境、30 個模型；AlpacaEval 2.0：805 題、100 個模型</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:444px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:466px; font-size:20px; font-weight:700; color:#1C2431;">三種切法與評分的細節</div>
+
+  <div style="position:absolute; left:60px; top:506px; width:470px; height:240px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">依日期切：更貼近實際</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">最新的 25% 模型當測試集；<br>訓練與測試之間有分布偏移，比隨機切難，<br>作者說也更接近實際的用法。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">附錄 E.1：正文的測試期，Leaderboard 與 MMLU<br>約 3 週，AlpacaEval 約 2 個月。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:506px; width:470px; height:240px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">HELM：沒有日期，依機構切</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">同一個機構的模型全在訓練或全在測試，<br>例如 OpenAI 的模型；<br>隨機切時用 11 折交叉驗證。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">第 5 節用 30 個模型，附錄 D 寫資料有 37 個。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:506px; width:470px; height:240px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">AlpacaEval：題少，但每題都貴</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">805 題，每題都由 GPT-4 判定候選模型<br>與基準模型（也是 GPT-4）誰贏；<br>隨機切時用 4 折交叉驗證。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">分數是連續的偏好，擬合 IRT 前先二值化。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：「切的是模型」是整理者的說法；四個基準的規模照第 5 節，Leaderboard 與 MMLU 都是 75% 的模型訓練、25% 測試。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M1057 262L1057 296" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 5 節要回答的是：各種策略用少數題估出的分數，離真實分數多遠。對一個 LLM 與一個基準，每種策略只用這個 LLM 在指定題數上的評估結果去估，再和它在完整基準的表現比。</p>
+    <p>流程是這樣的。每個基準先收集一組 LLM 的公開正確度資料。其中一部分模型當「訓練」模型：用它們的正確度找出每個情境的錨點（第 3 章），並估出 IRT 參數（第 4 章）；之所以叫訓練，是因為它們的資料用來決定挑哪些題、擬合估計用的參數。其餘的「測試」模型用來量這些策略在實務上的誤差：只看測試模型在錨點上的正確度，照第 3 到 6 章的方法估出基準分數，再和它考完整份的真實分數比。</p>
+    <p>切模型的方式有兩種：(i) 隨機切；(ii) 依日期切，也就是拿最新的模型當測試。作者說後者更接近實際的用法，也更難：模型的能力隨時間進步，訓練與測試模型之間很可能有分布偏移，可能影響錨點與 IRT 模型的效果。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>第 5 節 · 基準</th><th>情境與題數</th><th>模型</th><th>分數怎麼算</th><th>怎麼切模型</th></tr></thead>
+        <tbody>
+          <tr><td>Open LLM Leaderboard</td><td>6 個情境，<br>約 2.9 萬題</td><td>395 個</td><td>各情境準確率的平均</td><td>75% 訓練、25% 測試；<br>隨機或依日期</td></tr>
+          <tr><td>MMLU</td><td>57 個科目（子情境），<br>約 1.4 萬題</td><td>同一批 395 個</td><td>各科目準確率的平均</td><td>同 Leaderboard</td></tr>
+          <tr><td>HELM Lite v1.0.0</td><td>10 個核心情境，<br>約 1 萬題</td><td>30 個</td><td>跨情境的 mean win rate；<br>指標可以不是二元（例如 F1）</td><td>沒有日期，依訓練機構切；<br>隨機切用 11 折</td></tr>
+          <tr><td>AlpacaEval 2.0</td><td>805 題</td><td>100 個</td><td>對基準模型的平均勝率；<br>連續的偏好分數</td><td>依日期取最新 25%；<br>隨機切用 4 折</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>幾個細節。MMLU 本來就是 Open LLM Leaderboard 的六個情境之一，用的也是同一批 395 個模型與同樣的切法；作者單獨看它，是因為比較 LLM 時它太常被引用，也被收進好幾個其他基準。HELM 的模型沒有加入日期，作者改依訓練模型的機構切，讓切法更難，例如 OpenAI 的模型不是全在訓練集，就是全在測試集；隨機切時用 11 折交叉驗證：把所有模型分成 11 份，每次拿一份當測試、其餘當訓練，再把結果平均。AlpacaEval 2.0 雖然題目少，評估卻很貴，因為每一題都要 GPT-4 當評審，比較候選模型與一個基準模型（當時也是 GPT-4）的回答、判定誰贏；隨機切時用 4 折交叉驗證。</p>
+    <p>附錄 D 補了資料的來源。Open LLM Leaderboard 的資料是 2024 年 1 月從平台下載的：先篩出 MMLU 分數高於 0.3 的模型，依平均表現排序後等距挑選，再只留六個情境（ARC、HellaSwag、MMLU、TruthfulQA、Winogrande、GSM8K）都有分數的模型；作者在註腳說明，他們用的是每個模型最後一次提交的分數，排行榜上顯示的則是最好的一次，所以數字可能和排行榜不同。第二輪另外收集了 40 個專門模型（第 9 章），兩批有重疊，總共 428 個 LLM。HELM Lite v1.0.0 的 10 個情境是 OpenbookQA、MMLU、NarrativeQA、NaturalQuestions（閉卷與開卷兩種）、Math、GSM8K、LegalBench、MedQA、WMT14。附錄 D 說這份資料有 37 個 LLM，第 5 節說用的是 30 個在所有情境都有成績的模型，兩處的數字不同，這一頁照寫。</p>
+    <p>比較的策略有六種：三種挑題法各有「原版」與「++」兩個版本。原版直接用測試模型在挑出的題上的（加權）表現當估計；++ 版再用第 6 章的 gp-IRT 調整。三種挑題法在圖上叫 random（分層隨機抽樣）、correctness（依對錯分群）、IRT（依 IRT 表示分群）。每個設定重跑 5 次取平均。</p>
+  </div>
+</section>
+
+
+<section id="key-findings" data-toc="100 題的結果">
+  <div class="container head">
+    <p class="chapter">Chapter 08 · Key Findings · Estimation Error Analysis · Appendix E.2–E.4</p>
+    <h2><span class="seg">每個情境 100 題，</span><span class="seg">誤差約 2%</span></h2>
+    <p class="lede">圖 3 把六種策略在四個基準、兩種切法下的估計誤差，隨題數畫出來。作者的結論是：表現最好的策略在每個情境 100 題以內，四個基準的誤差都在 2% 以內；以 IRT 為基礎的方法在各種設定下都穩，加上 gp-IRT 只會更好或持平。</p>
+    
+  </div>
+  <div class="cardband" id="card-09"><div class="cardlabel"><span class="n">圖卡 09 / 12</span><span class="t">圖 4：100 題的估計誤差</span><button type="button" class="zoom" data-card="09">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">每個情境 100 題，IRT++ 誤差都在 2% 內</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 4：tiny 版估最新的模型，格子是圖例印的平均誤差（換成 %）與 r<sub>S</sub>（排名的 Spearman 相關）；作者說這一次是 5 次重跑裡隨機抽樣表現較差的</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:240px repeat(6, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">基準</div>
+    <div style="grid-column:span 2; padding:0px 22px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">random（分層隨機抽樣）</div>
+    <div style="grid-column:span 2; padding:0px 22px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866; border-left:1.5px solid #D5DAE1;">IRT（IRT 錨點）</div>
+    <div style="grid-column:span 2; padding:0px 22px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F; border-left:1.5px solid #D5DAE1;">IRT++（IRT 錨點＋gp-IRT）</div>
+  </div>
+  <div style="position:absolute; left:60px; top:200px; width:1480px; height:36px; box-sizing:border-box; background-color:#F7F8FA; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(6, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:13px; color:#8A93A0;">每個情境 100 題</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">誤差</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">r<sub>S</sub></div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380; border-left:1.5px solid #D5DAE1;">誤差</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">r<sub>S</sub></div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380; border-left:1.5px solid #D5DAE1;">誤差</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#6B7380;">r<sub>S</sub></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:236px; width:1480px; height:76px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(6, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">Open LLM Leaderboard</div><div style="font-size:13px; color:#8A93A0;">6 個情境 · 共 600 題</div></div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2B3340;">1.7%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; color:#6B7380;">0.98</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2B3340; border-left:1.5px solid #D5DAE1;">1.0%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; color:#6B7380;">0.99</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2E7B4F; border-left:1.5px solid #D5DAE1;">0.8%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; color:#6B7380;">0.99</div>
+  </div>
+  <div style="position:absolute; left:60px; top:312px; width:1480px; height:76px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(6, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">MMLU</div><div style="font-size:13px; color:#8A93A0;">57 個科目 · 共 100 題</div></div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#C8501F;">4.2%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; color:#6B7380;">0.80</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2B3340; border-left:1.5px solid #D5DAE1;">2.7%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; color:#6B7380;">0.91</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2E7B4F; border-left:1.5px solid #D5DAE1;">1.9%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; color:#6B7380;">0.92</div>
+  </div>
+  <div style="position:absolute; left:60px; top:388px; width:1480px; height:76px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(6, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">HELM</div><div style="font-size:13px; color:#8A93A0;">10 個情境 · 共 1,000 題</div></div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2E7B4F;">0.7%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; color:#6B7380;">1.00</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2E7B4F; border-left:1.5px solid #D5DAE1;">0.7%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; color:#6B7380;">0.99</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2B3340; border-left:1.5px solid #D5DAE1;">0.8%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; color:#6B7380;">0.99</div>
+  </div>
+  <div style="position:absolute; left:60px; top:464px; width:1480px; height:76px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(6, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">AlpacaEval 2.0</div><div style="font-size:13px; color:#8A93A0;">1 個情境 · 共 100 題</div></div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2B3340;">2.2%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; color:#6B7380;">0.98</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2B3340; border-left:1.5px solid #D5DAE1;">1.5%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; color:#6B7380;">0.97</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:24px; font-weight:600; color:#2E7B4F; border-left:1.5px solid #D5DAE1;">1.3%</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; color:#6B7380;">0.97</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:552px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">誤差是預測分數與真實分數的平均差距（圖例的 0.019＝1.9%）；綠字是每一列誤差最低的格，橘字是全表最高的一格，都由整理者標出。HELM 的 random 與 IRT 同為 0.7%。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:186px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">MMLU：4.2% 降到 1.9%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">同樣 100 題，IRT++ 的誤差不到隨機抽樣<br>的一半，排名相關從 0.80 升到 0.92。</div>
+    <div style="font-size:13px; color:#8A93A0;">1.9% 與 0.92 就是圖 1 印的那兩個值。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:186px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">隨機抽樣要 2 到 4 倍的題</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">附錄 E.2：Leaderboard 每個情境要 400 題，<br>才追上 IRT++ 的 100 題；MMLU 要 400 以上。</div>
+    <div style="font-size:13px; color:#8A93A0;">AlpacaEval 是 200 對 100；倍數是整理者算的。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">HELM：三種都在 1% 內</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">這一次隨機抽樣是 0.7%、r<sub>S</sub> 1.00，<br>IRT++ 反而略高，是 0.8%。</div>
+    <div style="font-size:13px; color:#8A93A0;">「++ 只會更好或持平」說的是圖 3 的 5 次平均。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：圖 4 是單一種子，作者挑的是隨機抽樣表現較差的一次；四個基準的結論以圖 3 的 5 次平均為準，那張圖沒有標數字。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>作者從圖 3 讀出三個主要結論。第一，降低評估成本的做法有效：最好的策略在每個資料集或情境 100 題以內，所有基準的估計誤差都在 2% 內。以 MMLU 為例，評估成本降為 140 分之一（從 1.4 萬題到 100 題）；Open LLM Leaderboard 甚至每個情境 30 題就夠，成本降為 160 分之一（從 2.9 萬題到 180 題）。圖 3 的圖說也寫出每個情境 100 題對應的總題數：Leaderboard 2.9 萬題裡的 600 題、MMLU 1.4 萬題裡的 100 題、HELM 1 萬題裡的 1,000 題、AlpacaEval 2.0 800 題裡的 100 題（第 5 節寫的是 805 題）。</p>
+    <p>第二，訓練與測試模型之間有時間上的偏移時，多數策略仍然表現良好（圖 3 下排，依日期切）。作者說這表示這些方法在評估更新、更強的 LLM 時仍然實用，未來評估新模型或預訓練的 checkpoint 時，都能省下 GPU 時數。</p>
+    <p>第三，以 IRT 為基礎的兩個方法（IRT 與 IRT++）在各個基準與兩種切法下都表現穩定；gp-IRT 的「++」版本總是改善或追平它的原版，只多花幾秒鐘（附錄 E.3 的圖 13 顯示，擬合能力參數的平均時間可以忽略）。所以作者用 IRT 的錨點做了每個基準的 tiny 版（每個情境 100 題），連同 gp-IRT 工具一起釋出（第 10 章）。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>怎麼讀圖 3</h4>
+      <p>圖 3 有兩排、四欄：每一欄是一個基準，上排是隨機切、下排是依日期切（HELM 是依機構切）。橫軸是每個情境考幾題，最多 100 題；縱軸是估計誤差，從 0 到 0.10。每一組六個有顏色的點是六種策略，點上有誤差棒。點旁都沒有標數字，這一頁只轉述原文的結論；論文沒有說明圖 3 的誤差棒代表什麼，附錄 E.1 說它的圖 11 畫的是模型之間的標準差。附錄 E.4 的圖 14、15 把同樣的實驗改看排名的 Spearman 相關，作者說用很少的題就能有效率地替模型排名；附錄 F 把 Leaderboard 與 HELM 拆成各個情境，作者說有些情境方法的效果特別好。</p>
+    </div>
+
+    <p>圖 4 是唯一印出數字的結果：它評的是 tiny 版（每個情境 100 題），對四個基準畫出最新模型的預測分數對真實分數，圖例印了三種策略的平均誤差與 r<sub>S</sub>。要注意的是，作者說圖 4 是 5 次重跑裡「隨機抽樣表現較差」的那一次，不是平均；圖 3 才是 5 次的平均。下表照抄圖 4 的圖例，誤差換成百分比：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>圖 4 · 最新的模型</th><th>random<br>誤差 · r<sub>S</sub></th><th>IRT<br>誤差 · r<sub>S</sub></th><th>IRT++<br>誤差 · r<sub>S</sub></th></tr></thead>
+        <tbody>
+          <tr><td>Open LLM Leaderboard</td><td>1.7% · 0.98</td><td>1.0% · 0.99</td><td>0.8% · 0.99</td></tr>
+          <tr><td>MMLU</td><td>4.2% · 0.80</td><td>2.7% · 0.91</td><td>1.9% · 0.92</td></tr>
+          <tr><td>HELM</td><td>0.7% · 1.00</td><td>0.7% · 0.99</td><td>0.8% · 0.99</td></tr>
+          <tr><td>AlpacaEval 2.0</td><td>2.2% · 0.98</td><td>1.5% · 0.97</td><td>1.3% · 0.97</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>從這張表可以讀出三件事，這是整理者的觀察。IRT++ 在四個基準的誤差都在 2% 以內，最高的是 MMLU 的 1.9%，也就是圖 1 那一格。MMLU 上隨機抽樣的誤差 4.2%、r<sub>S</sub> 只有 0.80，IRT++ 把誤差降到一半以下、r<sub>S</sub> 升到 0.92。HELM 是例外：三種策略都在 1% 以內，隨機抽樣的 0.7% 與 r<sub>S</sub> 1.00 甚至是三者中最好的，IRT++ 的 0.8% 反而略高。這和「++ 總是改善或追平」的說法不衝突，因為那一句說的是圖 3 的 5 次平均，圖 4 只是其中一次。</p>
+    <p><strong>每個模型的誤差（圖 6）。</strong>作者另外看了表現最好的 IRT++ 在 MMLU、100 題時的誤差分布：隨機切出的 99 個測試模型，每個模型一個點，橫軸是真實準確率、縱軸是估計誤差。能力較強的模型估得稍微準一點，但沒有很強的關聯；除了一個表現極低的模型，誤差都沒有超過 4%，平均則是圖 3 的 2%。</p>
+    <p><strong>隨機抽樣要多考幾題才追得上（附錄 E.2）。</strong>這是 v2 新增、正文沒有引用的附錄。作者用隨機切（訓練與測試之間沒有分布偏移），把題數加到每個情境 400 題：Open LLM Leaderboard 上，隨機抽樣要每個情境 400 題（共 2,400 題；原文這裡把情境叫 task），才追上 IRT++ 每個情境 100 題（共 600 題）；MMLU 上隨機抽樣進步得很慢，要超過 400 題才追得上 IRT++ 的 100 題；AlpacaEval 上隨機抽 200 題追上 IRT++ 的 100 題，作者提醒它雖然只有 805 題，每題卻都要 GPT-4 評，所以仍然昂貴。換算成倍數，隨機抽樣要的題數是 IRT++ 的 4 倍、4 倍以上、2 倍（整理者算的）。</p>
+
+    <div class="thought">
+      <span class="label">思考題 · 02</span>
+      <h4>2% 的誤差，夠你分辨兩個版本嗎？</h4>
+      <p>假設你要比較同一個 agent 的兩個版本，完整評估上它們差 3 個百分點。如果每個版本都只考 tiny 版，各自有約 2% 的估計誤差，你還能相信「新版比較好」這個結論嗎？</p>
+      <p class="hint">先看你要偵測的差距有多大：差距比估計誤差大很多時，tiny 版就夠用；差距和誤差差不多時，改看排名相關，或對最後的候選版本跑一次完整評估。也要記得 2% 是平均，圖 6 裡個別模型最多到 4%。這個判斷方式是整理者的建議，論文沒有討論兩個版本的比較。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="distribution-shift" data-toc="新模型與專門模型">
+  <div class="container head">
+    <p class="chapter">Chapter 09 · Specialized LLMs · Appendix E.1 · Limitations</p>
+    <h2><span class="seg">換成專門模型，</span><span class="seg">對錯分群最先失準</span></h2>
+    <p class="lede">錨點是用舊模型的作答模式挑的，新模型的作答模式若不一樣，錨點就可能失準。作者做了三種檢查：依日期切、40 個專門模型、把測試期拉長到 3 到 6 個月。依對錯分群的錨點在專門模型上變差最多，IRT 的錨點只受一點影響。</p>
+    
+  </div>
+  <div class="cardband" id="card-10"><div class="cardlabel"><span class="n">圖卡 10 / 12</span><span class="t">專門模型與時間偏移</span><button type="button" class="zoom" data-card="10">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">換成專門模型，對錯分群最先失準</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 5 節、附錄 E.1 與第 6.2 節：錨點是用舊模型的作答模式挑的；作者用三種偏移檢查它對新模型準不準，也自己點出一個沒有測的破口</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:410px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:18px; font-weight:700; color:#FFFFFF;">要檢查的主張</div>
+  <div style="position:absolute; left:60px; top:198px; width:410px; height:280px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:20px 24px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:17px; font-weight:700; color:#1C2431; line-height:1.5;">「IRT 錨點加 gp-IRT，對比訓練集<br>更新、更不一樣的模型，也估得準」</div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">錨點用訓練模型的作答挑出來</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">IRT 參數也用訓練模型擬合</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340;">測試模型只做挑出來的題</div></div>
+    <div style="margin-top:6px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">train: older LLMs &#183; test: newer LLMs</div>
+    <div style="margin-top:2px; font-size:13px; color:#8A93A0;">↑ 三件事都綁在舊模型的作答模式上</div>
+  </div>
+
+  <div style="position:absolute; left:580px; top:120px; font-size:20px; font-weight:700; color:#1C2431;">四道檢查（綠＝通過，橘＝沒有測）</div>
+  <div style="position:absolute; left:580px; top:158px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">1</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">依日期切：最新的模型當測試</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">FIGURE 3</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">Leaderboard、MMLU 約 3 週，AlpacaEval 約 2 個月；作者說多數策略仍然表現良好　✓ 通過</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:250px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">2</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">40 個專門模型：程式、生物、金融</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">FIGURE 5</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">只看 MMLU；依對錯分群的錨點明顯變差，IRT 的錨點只受一點影響　✓ IRT 通過</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:342px; width:960px; height:80px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">3</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">測試期拉長到 3 到 6 個月</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">APPENDIX E.1</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">75% 的資料當測試；IRT++ 的結果和正文差不多，作者說相當穩健　✓ 通過</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:434px; width:960px; height:80px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:12px 24px; display:flex; align-items:center; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#C8501F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">4</div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">簡單題答錯、難題答對的模型</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">SECTION 6.2</div></div>
+      <div style="font-size:13.5px; color:#6B7380;">架構或預訓練資料大改、能力快速提升而要外插；作者預期誤差變大，沒有實驗　✗ 破口</div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:545px; width:480px; height:130px; box-sizing:border-box; background-color:#1F2A3A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#FFFFFF;">判定：在作者測到的模型上站得住</div>
+    <div style="font-size:14px; color:rgba(255,255,255,0.78); line-height:1.6;">三道檢查都過，但只測到作者手上的模型；<br>作答模式大變的模型，作者自己說會失準。</div>
+  </div>
+  <div style="position:absolute; left:580px; top:545px; width:960px; height:130px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">為什麼 IRT 錨點比較穩</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">對錯向量綁的是「哪些舊模型答對」，專門模型的對錯模式可能不同；<br>IRT 表示的是題目需要的能力與難度，tinyMMLU 的權重也比較平均（ESS 0.85 對 0.53，附錄 B）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:695px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:716px; font-size:20px; font-weight:700; color:#1C2431;">三條實務規則（整理者歸納）</div>
+  <div style="position:absolute; left:60px; top:752px; font-size:16px; color:#2B3340;">① 挑錨點用 IRT 表示，不用原始的對錯向量：換成專門模型時，差別最大。</div>
+  <div style="position:absolute; left:60px; top:784px; font-size:16px; color:#2B3340;">② 驗證 tiny 版時，測試模型要依日期切，才看得到實際用法下的誤差。</div>
+  <div style="position:absolute; left:60px; top:816px; font-size:16px; color:#2B3340;">③ 大改版之後跑一次完整評估，用新模型的逐題結果更新錨點與 IRT 參數（第 6.2 節的建議）。</div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：四道檢查的排法與判定是整理者的整理；第四道是作者在限制一節的預期，論文沒有做實驗。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M482 336L558 336" stroke="#9AA3AE" stroke-width="2" marker-end="url(#ag-c10)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>前面的實驗裡，測試模型不是隨機挑的一部分，就是最新的一批；兩種測試集裡，主要都是 base 模型與指令微調過的模型。作者接著測另一種情況：專門模型，也就是針對程式、生物、金融這類特定領域微調的模型。他們在 MMLU 上另外手挑了 40 個專門模型當測試集。這類模型可能有獨特的強項，在某些 MMLU 科目表現很好，在其他科目相對較差；它們的對錯模式可能和訓練集的模型不同，對這些評估策略是一個挑戰。</p>
+    <p>結果如作者預期（圖 5）：依對錯分群的錨點，在專門模型上明顯變差；IRT 的錨點只受到一點影響。作者說這顯示了 IRT 錨點的穩健，也支持他們用 IRT 錨點做 tiny 版的選擇。附錄 B 從另一個角度說明：tinyMMLU 的錨點權重比對錯版平均得多（第 10 章），權重平均，有助於評估對錯模式不同的模型，例如這批專門模型。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>怎麼讀圖 5</h4>
+      <p>圖 5 有兩張：左邊是 MMLU 上隨機挑的測試模型，右邊是 40 個專門模型。橫軸是題數，縱軸是準確率的估計誤差，六種策略各一種顏色，點旁沒有標數字。原文只說依對錯分群（correct.）受這個分布偏移的影響最大；整理者看圖的讀法是，右圖裡它的誤差棒拉得特別長。第 10 卡的四道檢查，是整理者把第 5 節、附錄 E.1 與第 6.2 節排在一起的畫法。</p>
+    </div>
+
+    <p><strong>拉長時間（附錄 E.1）。</strong>這是 v2 新增、正文沒有引用的附錄。作者把 75% 的資料放進測試集：對 Open LLM Leaderboard 與 MMLU，等於用 3 個月的「未來資料」當測試（正文依日期切時約 3 週）；對 AlpacaEval 2.0 則是 6 個月（正文約 2 個月）。作者說主要方法 IRT++ 在預測新模型的表現時，對這段期間的進展相當穩健，結果和正文沒有太大差別（圖 11，畫的是測試集裡的平均誤差與模型之間的標準差）。</p>
+    <p><strong>作者自己點出的破口（第 6.2 節）。</strong>這些方法的主要限制，是可能遇到嚴重的分布偏移。以 MMLU 為例，作者預期，一個簡單題答錯、難題卻答對的模型，會改變對錯模式，讓估計誤差變大；這可能來自架構或預訓練資料的大改。LLM 的能力快速提升，也可能造成外插的誤差，也就是新模型落在舊模型涵蓋的範圍之外。作者的建議是定期用較新的 LLM 的資料，更新挑好的題目與 IRT 參數。這一項論文沒有做實驗。</p>
+
+    <div class="thought">
+      <span class="label">思考題 · 03</span>
+      <h4>你的下一個模型，作答模式會和舊模型一樣嗎？</h4>
+      <p>想像你用過去一年各版本 agent 的逐題結果挑出一組錨點。下一版換了底層模型、加了一個新工具，或改成只做某個領域。</p>
+      <p class="hint">改動越接近「整體變強」，錨點越可能還準；改動越接近「某一類題突然會了、另一類題突然不會」，就越像作者說的破口。實務上可以在大改版之後跑一次完整評估，拿來檢查 tiny 版的誤差，順便把這一版加進訓練資料、更新錨點。這是整理者依第 6.2 節延伸的建議。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="release" data-toc="釋出的 tiny 版">
+  <div class="container head">
+    <p class="chapter">Chapter 10 · Conclusion · tinyMMLU（Appendix B）</p>
+    <h2><span class="seg">釋出的 tiny 版，</span><span class="seg">每個情境只留 100 題</span></h2>
+    <p class="lede">根據第 8 章的結果，作者用 IRT 錨點做出 Open LLM Leaderboard、MMLU、HELM、AlpacaEval 2.0 四個 tiny 版，每個情境 100 題，連同在這些基準上訓練好的 IRT 參數與 gp-IRT 程式一起釋出，在 CPU 上幾秒就能跑完。</p>
+    
+  </div>
+  <div class="cardband" id="card-11"><div class="cardlabel"><span class="n">圖卡 11 / 12</span><span class="t">四個 tiny 版與估計工具</span><button type="button" class="zoom" data-card="11">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">四個 tiny 版，MMLU 的題數少了 140 倍</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 3 圖說與第 5 節：每個情境 100 題；每一列是一個基準，綠點是 tiny 版的題數，灰點是完整基準（對數量尺，每一格 10 倍）</div>
+
+  <div style="position:absolute; left:60px; top:146px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>tiny 版（每個情境 100 題）</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#6B7380;"></div>完整基準</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #2E7B4F; box-sizing:border-box;"></div>Leaderboard 每個情境 30 題</div>
+    <div style="color:#8A93A0;">線上的倍數：140、160 是原文，其餘是整理者算的</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:206px; font-size:16px; font-weight:700; color:#1C2431;">Leaderboard</div>
+  <div style="position:absolute; left:60px; top:230px; font-size:12px; color:#8A93A0;">6 個情境</div>
+  <div style="position:absolute; left:654.8px; top:220px; width:741.1px; height:4px; background-color:#D5DAE1;"></div>
+  <div style="position:absolute; left:925px; top:194px; width:200px; text-align:center; white-space:nowrap; font-size:12.5px; color:#6B7380;">約 48 倍（整理者算）</div>
+  <div style="position:absolute; left:415.8px; top:213px; width:18px; height:18px; box-sizing:border-box; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #2E7B4F;"></div>
+  <div style="position:absolute; left:324.8px; top:234px; width:200px; text-align:center; white-space:nowrap; font-size:12.5px; color:#2E7B4F;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">180</span>（160 倍，原文）</div>
+  <div style="position:absolute; left:645.8px; top:213px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:614.8px; top:234px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">600</div>
+  <div style="position:absolute; left:1386.9px; top:213px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:1411px; top:212px; white-space:nowrap; font-size:13px; color:#2B3340;">約 2.9 萬</div>
+
+  <div style="position:absolute; left:60px; top:274px; font-size:16px; font-weight:700; color:#1C2431;">MMLU</div>
+  <div style="position:absolute; left:60px; top:298px; font-size:12px; color:#8A93A0;">1 個情境</div>
+  <div style="position:absolute; left:312.5px; top:288px; width:944.2px; height:4px; background-color:#B4D5C0;"></div>
+  <div style="position:absolute; left:684.6px; top:262px; width:200px; text-align:center; white-space:nowrap; font-size:12.5px; font-weight:700; color:#2E7B4F;">140 倍（原文）</div>
+  <div style="position:absolute; left:303.5px; top:281px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:272.5px; top:302px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">100</div>
+  <div style="position:absolute; left:1247.7px; top:281px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:1272px; top:280px; white-space:nowrap; font-size:13px; color:#2B3340;">約 1.4 萬</div>
+
+  <div style="position:absolute; left:60px; top:342px; font-size:16px; font-weight:700; color:#1C2431;">HELM</div>
+  <div style="position:absolute; left:60px; top:366px; font-size:12px; color:#8A93A0;">10 個情境</div>
+  <div style="position:absolute; left:752.5px; top:356px; width:440px; height:4px; background-color:#D5DAE1;"></div>
+  <div style="position:absolute; left:872.5px; top:330px; width:200px; text-align:center; white-space:nowrap; font-size:12.5px; color:#6B7380;">10 倍（整理者算）</div>
+  <div style="position:absolute; left:743.5px; top:349px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:712.5px; top:370px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">1,000</div>
+  <div style="position:absolute; left:1183.5px; top:349px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:1208px; top:348px; white-space:nowrap; font-size:13px; color:#2B3340;">約 1 萬</div>
+
+  <div style="position:absolute; left:60px; top:410px; font-size:16px; font-weight:700; color:#1C2431;">AlpacaEval</div>
+  <div style="position:absolute; left:60px; top:434px; font-size:12px; color:#8A93A0;">2.0 · 1 個情境</div>
+  <div style="position:absolute; left:312.5px; top:424px; width:398.5px; height:4px; background-color:#D5DAE1;"></div>
+  <div style="position:absolute; left:411.8px; top:398px; width:200px; text-align:center; white-space:nowrap; font-size:12.5px; color:#6B7380;">約 8 倍（整理者算）</div>
+  <div style="position:absolute; left:303.5px; top:417px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:272.5px; top:438px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">100</div>
+  <div style="position:absolute; left:702px; top:417px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:727px; top:416px; white-space:nowrap; font-size:13px; color:#2B3340;">805（圖說寫 800）</div>
+
+  <div style="position:absolute; left:180px; top:470px; width:1320px; height:36px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:479px; width:30px; text-align:left; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">50</div>
+  <div style="position:absolute; left:292.5px; top:479px; width:40px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">100</div>
+  <div style="position:absolute; left:722.5px; top:479px; width:60px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">1,000</div>
+  <div style="position:absolute; left:1157.5px; top:479px; width:70px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">10,000</div>
+  <div style="position:absolute; left:1414px; top:479px; width:80px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">50,000</div>
+  <div style="position:absolute; left:1200px; top:512px; width:300px; text-align:right; font-size:12px; color:#8A93A0;">題數（對數量尺）→</div>
+
+  <div style="position:absolute; left:60px; top:540px; width:1100px; font-size:13px; color:#8A93A0; line-height:1.6;">Leaderboard 的空心點：每個情境只考 30 題（共 180 題）時，最好的策略誤差也在 2% 內，原文說成本降為 160 分之一。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:186px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">tinyMMLU 的 ESS：0.85</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">IRT 錨點的權重比對錯版（0.53）平均，<br>較多題真的影響分數，對專門模型較穩。</div>
+    <div style="font-size:13px; color:#8A93A0;">圖 9 圖例印的值；附錄 B。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">估計工具：CPU 上幾秒</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">釋出程式與各基準上訓練好的 IRT 參數；<br>gp-IRT 只比原版多花幾秒鐘。</div>
+    <div style="font-size:13px; color:#8A93A0;">GitHub 套件、Hugging Face 資料集、Colab 示範。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">tinyMMLU 挑自最好的一次</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">取圖 3 上排 MMLU 實驗裡測試表現最好的<br>種子，用它的 IRT 錨點 100 題與權重。</div>
+    <div style="font-size:13px; color:#8A93A0;">對照組用對錯分群，同樣挑 100 題。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：對數量尺，每一格是 10 倍；題數照圖 3 的圖說與第 5 節，是 2024 年初的版本。48、10、8 倍是整理者用這些題數算的。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>結論一節先重申成果：借用教育測驗的心理計量模型，只用常見基準的一小部分題（有時小兩個數量級），就能準確評估 LLM 的能力。這直接省下評估 LLM 的金錢成本，也省下算力與環境成本；作者說對實務工作者來說，省下的算力特別方便，因為他們在微調與 prompt 工程時就能更常評估。</p>
+    <p>釋出的東西有兩樣。第一是 tinyBenchmarks：從幾個廣泛使用的 LLM 基準預先挑好的子集，就是一般的小資料集，直接拿來評 LLM 就很便宜。第二是改善估計的 IRT 工具：包含程式，以及在對應基準上訓練好的 IRT 參數，在 CPU 上幾秒就能跑完。論文的腳註列了取得的地方：GitHub 上的 Python 套件與教學、Hugging Face 上的 tiny 資料集，以及一個用 MMLU 示範的 Google Colab。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>圖 3 圖說 · 基準</th><th>tiny 版</th><th>完整基準</th><th>縮減</th></tr></thead>
+        <tbody>
+          <tr><td>Open LLM Leaderboard</td><td>600 題<br>（6 個情境 × 100）</td><td>約 2.9 萬題</td><td>約 48 倍（整理者算）；<br>每個情境 30 題時 160 倍（原文）</td></tr>
+          <tr><td>MMLU</td><td>100 題</td><td>約 1.4 萬題</td><td>140 倍（原文）</td></tr>
+          <tr><td>HELM</td><td>1,000 題<br>（10 個情境 × 100）</td><td>約 1 萬題</td><td>約 10 倍（整理者算）</td></tr>
+          <tr><td>AlpacaEval 2.0</td><td>100 題</td><td>805 題<br>（圖說寫 800）</td><td>約 8 倍（整理者算）</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="codeblock">
+      <span class="file">用 tiny 版估一個新模型 · 流程示意（整理者寫的，不是套件的實際 API）</span>
+<pre class="code"><span class="c"># 1. 只跑 tiny 版的題，記下每一題的正確度</span>
+y = [grade(model, q) <span class="k">for</span> q <span class="k">in</span> tiny_mmlu.questions]      <span class="c"># 100 題</span>
+
+<span class="c"># 2. IRT 錨點的加權平均（第 3 章），就是「IRT」版的估計</span>
+est_irt = sum(w * yi <span class="k">for</span> w, yi <span class="k">in</span> zip(tiny_mmlu.weights, y))
+
+<span class="c"># 3. 用釋出的 IRT 參數做 gp-IRT（第 5、6 章），就是「IRT++」版；CPU 上幾秒</span>
+est_gp = gp_irt_tool(y, pretrained_irt_params)</pre>
+    </div>
+
+    <p><strong>tinyMMLU 怎麼來的（附錄 B）。</strong>作者從圖 3 上排（隨機切）的 MMLU 實驗裡，找出測試表現最好的那個隨機種子，取它用 IRT 錨點法挑出的 100 題與權重，就是 tinyMMLU；另外用對錯分群的錨點法，同樣挑了 100 題當對照。權重非負、加總為 1，一題的權重是 0.1，就代表它在最後的估計分數裡佔 10%。</p>
+    <p>圖 9 比較兩組題目的權重分布：tinyMMLU 的權重比對錯版平均得多。作者用有效樣本數（effective sample size，ESS）量權重有多不平均；ESS 是 0.50，大致代表這個加權平均只受到一半（等權的）題目影響。圖 9 的圖例印出 tinyMMLU 的 ESS 是 0.85，對錯版是 0.53。作者說 tinyMMLU 較平均的權重，有助於它評估對錯模式不同的 LLM，例如第 9 章的專門模型。</p>
+    <p>圖 10 比較兩組題目在 MMLU 57 個科目上的總權重，作者說兩者的科目權重相當不同。正文說權重最高的三個科目是 high school psychology、elementary mathematics、professional law；圖 10 上有標名字的點裡，IRT 權重最高的三個則是 professional law、prehistory、professional medicine，elementary mathematics 沒有標出名字。v1 的文字與圖就已經是這樣，這一頁兩邊照寫。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>有效樣本數在算什麼</h4>
+      <p>假設 100 題裡有一題的權重是 0.5，其餘 99 題分剩下的一半，那麼估出來的分數有一半取決於那一題，實際上「有用到」的題比 100 少很多。ESS 就是把這種不平均換成一個比例：權重完全平均時是 1，越集中在少數題越小。論文沒有寫 ESS 的式子；常見的算法是權重總和的平方除以權重的平方和，再除以題數。這一段是整理者補的背景。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="related-work" data-toc="相關工作" class="nocard">
+  <div class="container">
+    <p class="chapter">Chapter 11 · Related Work</p>
+    <h2><span class="seg">先前用 IRT 排名次，</span><span class="seg">這篇用它估分數</span></h2>
+    <p class="lede">第 1.1 節把相關研究分成三條線：少考幾題的高效評估、IRT 在 NLP 的應用、動態挑題的主動測試。作者說，就他們所知，IRT 還沒有被用在 LLM 的高效評估裡估分數。</p>
+
+    <p><strong>高效評估 LLM。</strong>多資料集的基準隨著預訓練模型進入 NLP，一路跟著語言模型的能力演變；模型與資料集越來越大，評估成本跟著變高，也讓大家開始調整報告評估結果的方式來因應成本。Ye 等人研究過減少 Big-bench 的任務數；Perlitz 等人發現 HELM 的評估靠的是資料集之間的多樣性，但目前用的題數太多，這篇採用他們的分層抽樣當其中一種策略；Vivek 等人提出依模型對正確類別的信心把題目分群，加速分類任務的評估，這篇的其中一種方法，就是把它改到任務更多樣的 LLM 基準上。</p>
+    <p><strong>試題反應理論。</strong>IRT 是心理計量學發展成熟的一組統計模型，透過標準化考試量測個人的潛在能力，例如 GRE、SAT。近年它在 AI 與 NLP 越來越常見：Lalor 等人提議用 IRT 的潛在變數量語言模型的能力；Vania 等人用 IRT 研究常用基準的飽和，也就是分不出模型的好壞；Rodriguez 等人研究了 IRT 在語言模型的幾種應用，認為它能可靠地預測 LLM 對沒看過的題的反應、依難度或鑑別度替題目分類，以及替模型排名。更近的 Zhuang 等人用 IRT 做自適應測驗，讓測驗更有效率；作者指出他們沒有提出 LLM 的表現估計量，只依能力參數替模型排名。</p>
+    <p><strong>主動測試。</strong>另一條線和主動學習有關，特別是主動測試：用各種準則動態地挑評估題目，以降低標註成本。作者說這些方法和他們在第 6 節討論的自適應 IRT 有些相似（第 12 章）。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>研究線</th><th>代表工作</th><th>和這篇的關係</th></tr></thead>
+        <tbody>
+          <tr><td>高效評估</td><td>Ye 等人（Big-bench 的任務數）、<br>Perlitz 等人（HELM）、<br>Vivek 等人（Anchor Points）</td><td>分層隨機抽樣與對錯分群<br>都從這裡來（第 3 章）</td></tr>
+          <tr><td>IRT 在 NLP</td><td>Lalor、Vania、Rodriguez、<br>Zhuang 等人</td><td>先前多用來量能力、找飽和、排名；<br>這篇用它估分數（第 4 到 6 章）</td></tr>
+          <tr><td>主動測試</td><td>Ein-Dor、Ji、Kossen、<br>Zhuang 等人</td><td>動態挑題以降低標註成本，<br>和自適應 IRT 相近（第 12 章）</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+
+<section id="takeaways" data-toc="結論與限制">
+  <div class="container head">
+    <p class="chapter">Chapter 12 · Conclusion · Extensions · Limitations</p>
+    <h2><span class="seg">少考幾題可以，</span><span class="seg">錨點要跟著新模型更新</span></h2>
+    <p class="lede">作者的結論是：借用心理計量學的模型，只用基準的一小部分題就能準確評估 LLM。兩個延伸有初步結果：評估 prompt 模板，以及邊考邊挑題的自適應測驗。主要的限制是嚴重的分布偏移，作者建議定期用新模型的資料更新錨點與 IRT 參數。</p>
+    
+  </div>
+  <div class="cardband" id="card-12"><div class="cardlabel"><span class="n">圖卡 12 / 12</span><span class="t">三條原則與作者的方向</span><button type="button" class="zoom" data-card="12">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">少考幾題可以，錨點要跟著新模型更新</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 6 節：用心理計量學的模型挑題與補題，只考基準的一小部分就估得準；作者點名的限制是嚴重的分布偏移</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:360px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">01　挑題</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">挑題看作答模式，<br>不看題目表面</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">作答模式相同的題，只要考一題；<br>用 IRT 的能力需求與難度分群，<br>比原始的對錯向量穩，權重也較平均；<br>隨機抽樣要 2 到 4 倍的題才追得上。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 只在子情境裡隨機抽<br>✓ 依 IRT 表示取錨點、依群大小加權</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:360px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">02　估分</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">沒考的題，<br>用模型補上</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">p-IRT 用新模型在各情境的作答估能力，<br>預測其餘的題；gp-IRT 依題數與偏差，<br>決定信實際作答還是信模型；<br>++ 版只多花幾秒，總是更好或持平。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 只看考過的那幾題<br>✓ 加權平均與 IRT 預測一起用</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:360px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">03　維護</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">錨點要跟著<br>新模型更新</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">錨點與 IRT 參數都來自舊模型；<br>作答模式大變的新模型會讓誤差變大，<br>作者建議定期用新模型的資料更新；<br>驗證時依日期切，才看得到真實誤差。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">大改版之後跑一次完整評估來對帳，<br>這一句是整理者的建議。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; font-size:20px; font-weight:700; color:#1C2431;">作者點名的用途與方向（不排順序）</div>
+  <div style="position:absolute; left:60px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">SEC 1 · 5</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">監控預訓練 checkpoint</div>
+  </div>
+  <div style="position:absolute; left:360px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">SEC 6</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">微調與 prompt 工程時常評</div>
+  </div>
+  <div style="position:absolute; left:660px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">SEC 6.1</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">評估 prompt 模板</div>
+  </div>
+  <div style="position:absolute; left:960px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">SEC 6.1</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">自適應測驗，邊考邊挑題</div>
+  </div>
+  <div style="position:absolute; left:1260px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">SEC 6.2</div>
+    <div style="font-size:16px; font-weight:700; color:#2E7B4F;">定期更新錨點與 IRT</div>
+  </div>
+  <div style="position:absolute; left:60px; top:722px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">前兩格是作者說省下的算力可以拿來做的事（第 1、5、6 節）；中間兩格是第 6.1 節的延伸：評 prompt 在幾種分布偏移下仍有效率，自適應測驗有改善、但目前要跑 5 分鐘以上；最後一格是第 6.2 節的建議。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：上排三條原則是整理者歸納；下排五格照原文，不排順序。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>第 6.1 節提了兩個延伸。<strong>第一個是評估 prompt。</strong>用 prompt 評估模型時，一直有個難題：prompt 的寫法會影響模型的預測。作者認為前面的方法可以用來跨 prompt 設定做預測：只做少數幾次評估，就估出一個模型在一組新 prompt 上的表現，或一個新模型在某個 prompt 上的表現。為了測這個想法，他們在 Weber 等人的預測資料上訓練 IRT 模型：8 個 LLaMA 模型（原版，或用 Alpaca 的 self-instruct 資料做過指令微調）在 ANLI 資料集上的評估，750 題各用 15 種指令模板包裝，模板取自 promptsource（P3）。</p>
+    <p>和前面的實驗一樣，他們試了隨機切，以及幾種有分布偏移的切法：依模型大小切，把 7B、13B、30B 的模型放訓練、65B 的放測試；依模板切，一種是 2 折交叉驗證、輪換指令模板，另一種是讓 in-context 範例與輸入題目用相同或不同的模板，並在訓練與測試集之間交換這兩種做法。圖 7 的結果顯示，即使有幾種實際的分布偏移，用這篇的方法評估 prompt 仍然有效率，作者說這是有前景的應用。</p>
+    <p><strong>第二個是自適應測驗。</strong>與其在評估前先挑好一組題，也可以在評估的過程中動態挑題，許多標準化考試背後的電腦化測驗就是這樣做。作者在 MMLU 上用一個自適應的 IRT 變體做了初步實驗（圖 8，其他基準在附錄 E.5 的圖 16）：估計有改善，但目前的實作要跑 5 分鐘以上，實務上可能沒那麼吸引人。</p>
+    <p><strong>限制（第 6.2 節）。</strong>主要的限制是可能遇到嚴重的分布偏移：簡單題答錯、難題答對的模型，架構或預訓練資料的大改，以及能力快速提升造成的外插誤差（第 9 章）。作者的建議是定期用較新的 LLM 的資料，更新挑好的題目與 IRT 參數。</p>
+    <p>散在正文的前提，也放在一起看：挑錨點與擬合 IRT，都要一批考過完整份的模型的逐題資料，Leaderboard 有 395 個，HELM 只有 30 個；誤差是測試模型的平均，個別模型最多到 4%（圖 6）；圖 4 的數字來自作者挑的一個種子；非二元的分數要先二值化；AlpacaEval 就算只考 100 題，每一題仍然要 GPT-4 當評審。</p>
+
+    <dl class="faq">
+      <div><dt>每個情境 100 題一定夠嗎？</dt><dd>論文的結論是：表現最好的策略在每個情境 100 題以內，四個基準的平均誤差約 2%；Open LLM Leaderboard 甚至每個情境 30 題就夠。但這是測試模型的平均，圖 6 裡個別模型最多到 4%，另外有一個表現極低的模型例外。</dd></div>
+      <div><dt>用 tiny 版需要自己訓練什麼嗎？</dt><dd>不用。作者釋出了挑好的題與權重，也釋出在各基準上訓練好的 IRT 參數與 gp-IRT 程式，在 CPU 上幾秒就能跑完。要替新的基準做自己的 tiny 版，才需要一批模型的逐題作答來挑錨點、擬合 IRT。</dd></div>
+      <div><dt>新出的模型也能用嗎？</dt><dd>依日期切、專門模型、把測試期拉到 3 到 6 個月的實驗裡，IRT 系的方法都相當穩。作者也說，作答模式大變的模型可能讓誤差變大，建議定期用新模型的資料更新題目與 IRT 參數。</dd></div>
+    </dl>
+
+    <div class="explain">
+      <span class="label">整理者的讀法</span>
+      <h4>放回這一講：agentic benchmark 能不能少考幾題</h4>
+      <p>下面是整理者的連結，論文本身只做了靜態的 LLM 基準。這一講談的 agentic benchmark，每一題都要準備環境、跑一段多步驟的 agent 軌跡、再評分，一題的成本遠高於一道選擇題，少考幾題的誘因只會更大。但這篇的方法有兩個前提，放到 agentic benchmark 上要先檢查：第一，要有很多個模型或 agent 版本的逐題結果，錨點與 IRT 才有東西可學，而 agentic benchmark 常常題數少、公開的逐題結果也少；第二，scaffolding、工具或底層模型一換，作答模式就可能整個改變，正好是作者點名的分布偏移。比較穩的用法，是把 tiny 版當成開發期間的快速檢查，重要的比較仍然跑完整評估。</p>
+    </div>
+
+    <div class="pullquote bronze">
+      少考幾題之前，先確定手上的舊作答，還能代表下一個模型。
+      <cite>整理自第 5、6 節</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="glossary" class="nocard glossary" data-toc="名詞速查">
+  <div class="wide">
+    <p class="eyebrow">Reference · 名詞速查</p>
+    <h2>關鍵名詞與它們在論文裡的位置</h2>
+    <p class="lede">先列基準的結構與計分，再列三種挑題法、IRT 與兩個估計量，最後是實驗用到的指標與釋出的東西。</p>
+    <dl class="glossary-grid">
+      <div class="term"><dt>benchmark</dt><span class="zh-name">基準</span><dd>一整套考題與計分方式；這篇用 Open LLM Leaderboard、MMLU、HELM、AlpacaEval 2.0 四個。</dd></div>
+      <div class="term"><dt>scenario／sub-scenario</dt><span class="zh-name">情境與子情境</span><dd>基準裡的一份考卷，和考卷裡的分類；MMLU 算一個情境，57 個科目是子情境（第 2 節）。</dd></div>
+      <div class="term"><dt>example（item）</dt><span class="zh-name">題目</span><dd>一道題；IRT 的文獻叫 item。</dd></div>
+      <div class="term"><dt>correctness</dt><span class="zh-name">正確度</span><dd>模型在一道題的得分，0 或 1，或 0 到 1 之間；論文記作 Y。</dd></div>
+      <div class="term"><dt>balance weights</dt><span class="zh-name">平衡權重</span><dd>子情境題數不同時，讓每個子情境一樣重的題目權重（附錄 A）。</dd></div>
+      <div class="term"><dt>stratified random sampling</dt><span class="zh-name">分層隨機抽樣</span><dd>以子情境為層均勻地抽，題數最多差 1，每題權重相同；圖上的 random。</dd></div>
+      <div class="term"><dt>anchor points</dt><span class="zh-name">錨點</span><dd>分群後離每個群中心最近的題，權重是那一群佔的比例（第 3.2 節）。</dd></div>
+      <div class="term"><dt>K-means</dt><span class="zh-name">K 平均分群</span><dd>把向量分成 K 群、讓點靠近群中心的演算法；這篇用它挑錨點。</dd></div>
+      <div class="term"><dt>IRT</dt><span class="zh-name">試題反應理論</span><dd>心理計量學的模型，用考生的能力與題目的參數預測答對機率（第 4.1 節）。</dd></div>
+      <div class="term"><dt>θ（ability）</dt><span class="zh-name">能力參數</span><dd>每個模型一個 d 維向量，代表看不到的能力；新模型只要估它。</dd></div>
+      <div class="term"><dt>α、β</dt><span class="zh-name">能力需求與偏移</span><dd>每道題的參數：α 決定需要哪些能力，β 越大越難答對；合起來是題目向量。</dd></div>
+      <div class="term"><dt>variational inference</dt><span class="zh-name">變分推論</span><dd>用簡單的分布逼近參數分布的擬合方法；這篇取變分分布的平均當點估計（第 4.4 節）。</dd></div>
+      <div class="term"><dt>p-IRT</dt><span class="zh-name">表現 IRT 估計量</span><dd>看過的題用實際對錯、沒看過的用預測機率，依題數比例合成情境分數（式 4.3）。</dd></div>
+      <div class="term"><dt>gp-IRT</dt><span class="zh-name">廣義 p-IRT</span><dd>加權平均與 p-IRT 的凸組合，λ 依題數與 IRT 偏差決定（式 4.4）；圖上的「++」。</dd></div>
+      <div class="term"><dt>bias／variance</dt><span class="zh-name">偏差與變異</span><dd>估計值平均離真值多遠，以及重抽時晃得多大；gp-IRT 用它們選 λ。</dd></div>
+      <div class="term"><dt>estimation error</dt><span class="zh-name">估計誤差</span><dd>少數題估出的分數和完整基準真實分數的差距；圖上多是測試模型的平均。</dd></div>
+      <div class="term"><dt>Spearman（r<sub>S</sub>）</dt><span class="zh-name">等級相關</span><dd>只比排名的相關係數，1 代表估出的排名和真實排名完全一致。</dd></div>
+      <div class="term"><dt>distribution shift</dt><span class="zh-name">分布偏移</span><dd>要估的新模型和挑題用的舊模型不一樣；依日期切與專門模型都在測它。</dd></div>
+      <div class="term"><dt>specialized LLM</dt><span class="zh-name">專門模型</span><dd>針對程式、生物、金融等領域微調的模型；第 5 節手挑了 40 個。</dd></div>
+      <div class="term"><dt>mean win rate</dt><span class="zh-name">平均勝率</span><dd>HELM 的基準分數，彙整的是各情境的成績，不是題目的平均（第 5 節）。</dd></div>
+      <div class="term"><dt>ESS</dt><span class="zh-name">有效樣本數</span><dd>量權重有多不平均；tinyMMLU 是 0.85，對錯版是 0.53（圖 9）。</dd></div>
+      <div class="term"><dt>adaptive testing</dt><span class="zh-name">自適應測驗</span><dd>評估時依作答動態挑下一題；初步結果有改善，但要跑 5 分鐘以上（第 6.1 節）。</dd></div>
+      <div class="term"><dt>tinyBenchmarks</dt><span class="zh-name">tiny 版基準</span><dd>四個基準各自每個情境 100 題的子集，連同 IRT 參數與 gp-IRT 工具一起釋出。</dd></div>
+    </dl>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>資料來源：arXiv，〈tinyBenchmarks: evaluating LLMs with fewer examples〉，Felipe Maia Polo、Lucas Weber、Leshem Choshen、Yuekai Sun、Gongjun Xu、Mikhail Yurochkin（University of Michigan、University of Pompeu Fabra、IBM Research、MIT、MIT-IBM Watson AI Lab），2024-02-22（v2 2024-05-26；ICML 2024）。頁面上的內容與數字依 arXiv v2；會議名取自 abs 頁的註記與 v2 PDF 的第一頁。<br><a href="https://arxiv.org/abs/2402.14992">arxiv.org/abs/2402.14992</a></p>
+    <p class="credit">整理於 2026-09-24</p>
+    <p class="disclaimer">本頁為學習用的重述與整理，不是原文逐句翻譯。觀點與著作權屬於原作者。程式片段為教學用精簡版，實際用法請以原文與官方文件為準。</p>
+  </div>
+</footer>
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="圖卡大圖"><button type="button" class="close">關閉（Esc）</button><div class="frame"></div></div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fitFrames() {
+    var frames = document.querySelectorAll('.cardband .frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  var KEY = 'rearranged-article-mode';
+  function setMode(m, save) {
+    document.body.classList.toggle('mode-cards', m === 'cards');
+    var btns = document.querySelectorAll('.modebar button[data-mode]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-mode') === m ? 'true' : 'false');
+    }
+    if (save) { try { localStorage.setItem(KEY, m); } catch (e) {} }
+    fitFrames();
+  }
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  setMode(saved === 'cards' ? 'cards' : 'full', false);
+
+  var box = document.getElementById('lightbox');
+  var boxFrame = box.querySelector('.frame');
+  function fitLightbox() {
+    if (!box.classList.contains('open')) return;
+    var root = boxFrame.firstElementChild;
+    if (!root) return;
+    var s = Math.min(1, (window.innerWidth - 48) / W, (window.innerHeight - 48) / H);
+    root.style.transform = 'scale(' + s + ')';
+    boxFrame.style.width = Math.round(W * s) + 'px';
+    boxFrame.style.height = Math.round(H * s) + 'px';
+  }
+  function openLightbox(num) {
+    var bandEl = document.getElementById('card-' + num);
+    if (!bandEl) return;
+    var root = bandEl.querySelector('.frame > div');
+    boxFrame.innerHTML = '';
+    var clone = root.cloneNode(true);
+    clone.style.transform = '';
+    boxFrame.appendChild(clone);
+    box.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    fitLightbox();
+  }
+  function closeLightbox() {
+    box.classList.remove('open');
+    boxFrame.innerHTML = '';
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var b = t.closest('.modebar button[data-mode]');
+    if (b) { setMode(b.getAttribute('data-mode'), true); return; }
+    var z = t.closest('.cardlabel .zoom');
+    if (z) { openLightbox(z.getAttribute('data-card')); return; }
+    if (t.closest('.lightbox') && !t.closest('.lightbox .frame')) { closeLightbox(); }
+  });
+  document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') closeLightbox(); });
+  window.addEventListener('resize', function () { fitFrames(); fitLightbox(); });
+  window.addEventListener('load', fitFrames);
+  fitFrames();
+})();
+</script>
+</body>
+</html>
