@@ -37,6 +37,42 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "agentic-deanonymizers",
+      "path": "articles/agentic-deanonymizers/index.html",
+      "title": "Agentic LLM 是強大的去匿名化工具：能上網的 LLM 把 Anthropic Interviewer 資料集的訪談連回論文與作者",
+      "summary": "Anthropic 在 2025 年 12 月公開 1,250 份用 AI 做的訪談逐字稿。這篇四頁的論文只看其中 125 份科學家訪談，示範能上網搜尋的 LLM 能把 24 份提到論文的訪談裡的 6 份對上具體的論文，有些直接定到受訪者本人；作者的重點是門檻已經低到幾句自然語言、每份不到 0.5 美元，現有的防護也擋不住。這份整理依論文重述威脅模型、總體結果、對受訪者的傷害、向 Anthropic 通報的經過與待解的問題，不轉述任何可識別受訪者的細節；每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "arXiv · Tianshi Li（Northeastern University）",
+        "url": "https://arxiv.org/abs/2601.05918",
+        "date": "2026-01-09"
+      },
+      "date": "2026-09-29",
+      "tags": [
+        "privacy",
+        "re-identification",
+        "llm-agents",
+        "agent-safety",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 8,
+        "kind": "必讀",
+        "section": "Safety",
+        "lecture": "Agent Safety & Guardrails",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/agentic-deanonymizers/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "validating-llm-evaluators",
       "path": "articles/validating-llm-evaluators/index.html",
       "title": "誰來驗證評估器：EvalGen 用少量人工評分挑出 LLM 評估器，並發現評估標準會隨評分漂移",

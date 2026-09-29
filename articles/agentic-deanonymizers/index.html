@@ -1,0 +1,1346 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agentic LLMs as Powerful Deanonymizers（Li 2026）</title>
+<meta name="description" content="Anthropic 在 2025 年 12 月公開 1,250 份用 AI 做的訪談逐字稿。這篇四頁的論文只看其中 125 份科學家訪談，示範能上網搜尋的 LLM 能把 24 份提到論文的訪談裡的 6 份對上具體的論文，有些直接定到受訪者本人；作者的重點是門檻已經低到幾句自然語言、每份不到 0.5 美元，現有的防護也擋不住。這份整理依論文重述威脅模型、總體結果、對受訪者的傷害、向 Anthropic 通報的經過與待解的問題，不轉述任何可識別受訪者的細節；每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="privacy, re-identification, llm-agents, agent-safety, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2601.05918">
+<meta name="date" content="2026-09-29">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Theme: tech-modern 變體「測試報告語意色」
+   藍 = 主色 / 綠 = pass / 琥珀 = 注意 / 紅 = fail
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --paper: #ffffff;
+  --paper-soft: #f3f5f8;
+  --paper-shadow: #dde2e8;
+  --ink: #121821;
+  --ink-soft: #3b4450;
+  --ink-mute: #6b7481;
+  --primary: #1e56a8;
+  --primary-deep: #143a72;
+  --primary-bg: #e6eef9;
+  --accent: #157a52;
+  --accent-deep: #0d5236;
+  --accent-bg: #e1f3e9;
+  --warm: #b8620e;
+  --warm-deep: #7d4108;
+  --warm-bg: #fbeddc;
+  --danger: #b83228;
+  --danger-bg: #f9e3e0;
+  --stone: #5a6370;
+  --stone-bg: #eceff3;
+  --code-bg: #0f1720;
+  --code-ink: #e6edf3;
+  --code-mute: #8b98a8;
+  --code-blue: #7cc4ff;
+  --code-green: #7ee2b8;
+  --code-amber: #ffc46b;
+
+  --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-cjk: 'Noto Sans TC', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --content-width: 780px;
+  --wide-width: 1100px;
+  --gutter: 24px;
+}
+
+/* ---------- reset & 排版 ---------- */
+* { box-sizing: border-box; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+body {
+  margin: 0; padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-cjk);
+  font-size: 18px;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: var(--content-width); margin: 0 auto; padding: 0 var(--gutter); }
+.wide { max-width: var(--wide-width); margin: 0 auto; padding: 0 var(--gutter); }
+section { padding-block: 64px; }
+section + section { border-top: 1px solid var(--paper-shadow); }
+
+h1, h2, h3, h4 { font-family: var(--font-cjk); font-weight: 700; text-wrap: balance; }
+h1 { font-size: 56px; line-height: 1.14; margin: 0 0 24px; font-weight: 800; }
+h2 { font-size: 36px; line-height: 1.25; margin: 0 0 18px; letter-spacing: -0.01em; }
+h2 .seg { display: inline-block; }
+h3 { font-size: 25px; line-height: 1.35; margin: 44px 0 14px; }
+h4 { font-size: 20px; line-height: 1.4; margin: 26px 0 10px; }
+p { margin: 0 0 18px; }
+ul, ol { padding-left: 26px; margin: 0 0 18px; }
+li { margin-bottom: 8px; }
+em { font-style: normal; color: var(--primary-deep); font-weight: 600; }
+strong { font-weight: 700; }
+a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+code {
+  font-family: var(--font-mono); font-size: 0.86em;
+  background: var(--stone-bg); color: var(--primary-deep);
+  padding: 2px 6px; border-radius: 4px;
+}
+.mono { font-family: var(--font-mono); }
+
+/* ---------- Hero ---------- */
+.hero {
+  padding-block: 84px 60px;
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-soft) 100%);
+  border-bottom: 2px solid var(--primary-deep);
+  position: relative;
+}
+.hero::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: linear-gradient(90deg,
+    var(--primary) 0%, var(--primary) 25%,
+    var(--accent) 25%, var(--accent) 50%,
+    var(--warm) 50%, var(--warm) 75%,
+    var(--danger) 75%, var(--danger) 100%);
+}
+.hero-meta {
+  display: flex; flex-wrap: wrap; gap: 10px 22px;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  margin-bottom: 32px;
+}
+.hero-meta span::before { content: "—"; margin-right: 10px; color: var(--paper-shadow); }
+.hero-meta span:first-child::before { content: ""; margin: 0; }
+.hero h1 { font-size: 60px; font-weight: 800; word-break: keep-all; }
+.hero h1 .accent {
+  display: block; margin-top: 12px;
+  font-size: 0.55em; font-weight: 600; line-height: 1.3;
+  color: var(--primary-deep);
+}
+.hero .lede { font-size: 22px; max-width: 720px; }
+.hero-keystat {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 28px; margin: 44px 0 0; padding-top: 34px;
+  border-top: 1px dashed var(--paper-shadow);
+}
+.hero-keystat dt {
+  font-family: var(--font-sans);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--ink-mute); margin-bottom: 6px;
+}
+.hero-keystat dd {
+  margin: 0; font-family: var(--font-mono);
+  font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1;
+}
+.hero-keystat dd small { font-family: var(--font-cjk); font-size: 14px; color: var(--ink-mute); font-weight: 400; margin-left: 6px; }
+
+/* ---------- Chapter / lede / eyebrow ---------- */
+.chapter {
+  font-family: var(--font-mono);
+  font-size: 12.5px; color: var(--primary);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 0 0 10px;
+}
+.chapter::before { content: "§ "; color: var(--paper-shadow); margin-right: 4px; }
+.lede {
+  font-size: 22px; line-height: 1.6; color: var(--ink-soft);
+  margin: 0 0 28px; font-weight: 400;
+}
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--primary); margin: 0 0 14px;
+}
+
+/* ---------- Pull quote ---------- */
+.pullquote {
+  margin: 48px -16px; padding: 32px 40px;
+  font-family: var(--font-cjk);
+  font-size: 27px; line-height: 1.5; font-weight: 600;
+  color: var(--primary-deep);
+  border-left: 5px solid var(--primary);
+  background: linear-gradient(90deg, var(--primary-bg) 0%, transparent 100%);
+}
+.pullquote.bronze {
+  color: var(--accent-deep); border-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-bg) 0%, transparent 100%);
+}
+.pullquote.terra {
+  color: var(--warm-deep); border-color: var(--warm);
+  background: linear-gradient(90deg, var(--warm-bg) 0%, transparent 100%);
+}
+.pullquote cite {
+  display: block; margin-top: 16px; font-style: normal; font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  letter-spacing: 0.06em;
+}
+.pullquote cite::before { content: "— "; }
+
+/* ---------- English quote ---------- */
+.quote-en {
+  margin: 28px 0;
+  font-family: var(--font-sans); font-style: italic;
+  font-size: 21px; line-height: 1.5; color: var(--ink);
+  padding-left: 20px; border-left: 3px solid var(--accent);
+}
+.quote-en .zh {
+  display: block; margin-top: 10px;
+  font-family: var(--font-cjk); font-style: normal;
+  font-size: 15px; color: var(--ink-soft); line-height: 1.6;
+}
+
+/* ---------- Story ---------- */
+.story {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 14px;
+  padding: 38px 44px; margin: 48px 0;
+  position: relative;
+}
+.story::before {
+  content: "❝"; position: absolute; top: -6px; left: 24px;
+  font-size: 72px; color: var(--warm); line-height: 1;
+  font-family: var(--font-sans);
+}
+.story .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.18em;
+  color: var(--warm); margin-bottom: 10px; padding-left: 42px;
+}
+.story h4 { margin: 0 0 16px; font-size: 22px; color: var(--warm-deep); }
+.story p { margin-bottom: 14px; font-size: 17px; line-height: 1.7; }
+.story p:last-child { margin-bottom: 0; }
+
+/* ---------- Explain ---------- */
+.explain {
+  background: var(--primary-bg);
+  border-left: 4px solid var(--primary);
+  border-radius: 4px;
+  padding: 26px 30px; margin: 36px 0;
+  font-family: var(--font-cjk); position: relative;
+}
+.explain.bronze { background: var(--accent-bg); border-color: var(--accent); }
+.explain.terra { background: var(--warm-bg); border-color: var(--warm); }
+.explain.stone { background: var(--stone-bg); border-color: var(--stone); }
+.explain .label {
+  position: absolute; top: -12px; left: 16px;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.15em; padding: 4px 12px;
+  border-radius: 3px; text-transform: uppercase;
+}
+.explain.bronze .label { background: var(--accent); }
+.explain.terra .label { background: var(--warm); }
+.explain.stone .label { background: var(--stone); }
+.explain h4 { margin: 4px 0 12px; font-size: 19px; color: var(--primary-deep); }
+.explain.bronze h4 { color: var(--accent-deep); }
+.explain.terra h4 { color: var(--warm-deep); }
+.explain.stone h4 { color: var(--ink); }
+.explain p { font-size: 16.5px; }
+.explain p:last-child { margin-bottom: 0; }
+.explain ul, .explain ol { margin: 8px 0 0; padding-left: 22px; }
+.explain li { margin-bottom: 6px; font-size: 16px; }
+.explain code { background: rgba(255,255,255,0.75); }
+
+/* ---------- Stat grid ---------- */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.stat-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 28px 24px; text-align: center;
+  border-top: 4px solid var(--primary);
+}
+.stat-card.bronze { border-color: var(--accent); }
+.stat-card.terra { border-color: var(--warm); }
+.stat-card.danger { border-color: var(--danger); }
+.stat-card .big {
+  font-family: var(--font-mono);
+  font-size: 46px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1; margin-bottom: 10px;
+}
+.stat-card.bronze .big { color: var(--accent-deep); }
+.stat-card.terra .big { color: var(--warm-deep); }
+.stat-card.danger .big { color: var(--danger); }
+.stat-card .big small { font-family: var(--font-cjk); font-size: 16px; opacity: 0.75; margin-left: 4px; font-weight: 500; }
+.stat-card .label {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.stat-card .note { margin-top: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.55; }
+
+/* ---------- Compare table ---------- */
+.table-scroll { overflow-x: auto; margin: 36px 0; }
+.compare {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-cjk); font-size: 15.5px;
+  background: var(--paper-soft);
+  border-radius: 10px; overflow: hidden;
+  min-width: 560px;
+}
+.compare th, .compare td {
+  padding: 15px 18px; text-align: left;
+  border-bottom: 1px solid var(--paper-shadow);
+  vertical-align: top; line-height: 1.6;
+}
+.compare th {
+  background: var(--primary-deep); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+}
+.compare tr:last-child td { border-bottom: none; }
+.compare td:first-child { font-weight: 700; color: var(--primary-deep); width: 24%; }
+.compare .id { font-family: var(--font-mono); font-size: 13px; display: block; color: var(--ink-mute); font-weight: 500; margin-bottom: 2px; }
+.compare .yes { color: var(--accent-deep); font-weight: 700; }
+.compare .no { color: var(--danger); font-weight: 700; }
+
+/* ---------- Value cards ---------- */
+.values {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.value-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 26px 24px;
+  border-top: 5px solid var(--primary);
+}
+.value-card:nth-child(2) { border-top-color: var(--accent); }
+.value-card:nth-child(3) { border-top-color: var(--warm); }
+.value-card:nth-child(4) { border-top-color: var(--primary-deep); }
+.value-card:nth-child(5) { border-top-color: var(--stone); }
+.value-card .num {
+  font-family: var(--font-mono);
+  font-size: 38px; font-weight: 700;
+  color: var(--primary); line-height: 1; margin-bottom: 12px;
+}
+.value-card:nth-child(2) .num { color: var(--accent); }
+.value-card:nth-child(3) .num { color: var(--warm); }
+.value-card:nth-child(4) .num { color: var(--primary-deep); }
+.value-card:nth-child(5) .num { color: var(--stone); }
+.value-card .tag {
+  display: inline-block; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--primary); margin-bottom: 10px;
+}
+.value-card:nth-child(2) .tag { color: var(--accent); }
+.value-card:nth-child(3) .tag { color: var(--warm); }
+.value-card:nth-child(4) .tag { color: var(--primary-deep); }
+.value-card h4 { margin: 0 0 10px; font-size: 19px; line-height: 1.4; }
+.value-card p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin: 0; }
+
+/* ---------- 擴充檢查卡（附成本標籤） ---------- */
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px; margin: 40px 0;
+}
+.card {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 12px;
+  padding: 24px 24px 22px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.card .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card h4 { margin: 0; font-size: 18.5px; line-height: 1.4; }
+.card p { margin: 0; font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); }
+.card .signal { font-family: var(--font-mono); font-size: 12.5px; color: var(--primary-deep); background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 6px; padding: 6px 10px; margin-top: 4px; overflow-x: auto; white-space: nowrap; }
+.pill {
+  flex: none; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px;
+}
+.pill.fast { background: var(--accent-bg); color: var(--accent-deep); }
+.pill.mid { background: var(--warm-bg); color: var(--warm-deep); }
+.pill.slow { background: var(--danger-bg); color: var(--danger); }
+
+/* ---------- Thought ---------- */
+.thought {
+  background: var(--accent-bg);
+  border-left: 4px solid var(--accent);
+  padding: 26px 30px; margin: 40px 0;
+  border-radius: 4px; position: relative;
+}
+.thought .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--accent-deep); margin-bottom: 10px;
+}
+.thought h4 { font-size: 19px; margin: 0 0 14px; color: var(--accent-deep); line-height: 1.45; }
+.thought p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin-bottom: 8px; }
+.thought .hint {
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px dashed rgba(13, 82, 54, 0.3);
+  font-size: 14px; color: var(--accent-deep);
+}
+.thought .hint::before { content: "建議方向："; font-weight: 700; }
+
+/* ---------- Code block ---------- */
+.codeblock { margin: 30px 0; }
+.codeblock .file {
+  display: inline-block; font-family: var(--font-mono);
+  font-size: 12px; color: var(--ink-mute);
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow); border-bottom: none;
+  border-radius: 8px 8px 0 0; padding: 7px 14px;
+}
+pre.code {
+  margin: 0; background: var(--code-bg); color: var(--code-ink);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65;
+  padding: 22px 24px; border-radius: 0 10px 10px 10px;
+  overflow-x: auto; tab-size: 2; white-space: pre;
+}
+pre.code.solo { border-radius: 10px; }
+pre.code .c { color: var(--code-mute); }
+pre.code .k { color: var(--code-blue); }
+pre.code .s { color: var(--code-green); }
+pre.code .a { color: var(--code-amber); font-weight: 700; }
+
+/* ---------- Flow（eval 迴圈圖） ---------- */
+.flow { display: flex; align-items: stretch; margin: 40px 0; }
+.flow-step {
+  flex: 1 1 0; min-width: 0;
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow);
+  border-radius: 10px; padding: 18px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.flow-step .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--primary); letter-spacing: 0.1em; }
+.flow-step strong { font-size: 17px; line-height: 1.3; }
+.flow-step span.d { font-size: 14px; line-height: 1.55; color: var(--ink-soft); }
+.flow-step.score { border-color: var(--accent); background: var(--accent-bg); }
+.flow-step.score .k { color: var(--accent-deep); }
+.flow-arrow { flex: none; width: 30px; position: relative; }
+.flow-arrow::before {
+  content: ""; position: absolute; top: 50%; left: 2px; right: 2px; height: 2px;
+  background: var(--primary); transform: translateY(-50%);
+}
+.flow-arrow::after {
+  content: ""; position: absolute; top: 50%; right: 4px; width: 9px; height: 9px;
+  border-top: 2px solid var(--primary); border-right: 2px solid var(--primary);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+/* ---------- Cascade（編號步驟） ---------- */
+.cascade { display: flex; flex-direction: column; gap: 14px; margin: 32px 0; }
+.cascade-step {
+  display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px;
+}
+.cascade-step .n {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-mono); font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.cascade-step .t { font-size: 16.5px; line-height: 1.65; }
+.cascade-step .t strong { display: block; margin-bottom: 2px; }
+
+/* ---------- Checklist ---------- */
+.checklist { list-style: none; padding: 0; margin: 32px 0; display: flex; flex-direction: column; gap: 12px; }
+.checklist li {
+  display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px; margin: 0;
+  font-size: 16.5px; line-height: 1.65;
+}
+.checklist .box {
+  width: 24px; height: 24px; margin-top: 3px;
+  border: 2px solid var(--accent); border-radius: 6px; background: var(--paper);
+}
+.checklist strong { display: block; }
+.checklist small { display: block; color: var(--ink-soft); font-size: 15px; }
+
+/* ---------- Glossary ---------- */
+.glossary { background: var(--primary-deep); color: var(--paper); padding-block: 64px; }
+.glossary h2 { color: var(--paper); margin-top: 0; }
+.glossary .eyebrow { color: var(--accent-bg); }
+.glossary .lede { color: var(--paper); opacity: 0.8; }
+.glossary-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 26px; margin: 42px 0 0;
+}
+.term { border-top: 2px solid var(--accent); padding-top: 16px; }
+.term:nth-child(3n+2) { border-color: var(--warm); }
+.term:nth-child(3n+3) { border-color: var(--paper); }
+.term dt {
+  font-family: var(--font-mono);
+  font-size: 14px; font-weight: 700;
+  color: var(--accent-bg); letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+.term .zh-name { font-family: var(--font-cjk); font-size: 16px; font-weight: 600; color: var(--paper); margin-bottom: 8px; display: block; }
+.term dd { margin: 0; font-family: var(--font-cjk); font-size: 14.5px; line-height: 1.65; color: rgba(255, 255, 255, 0.8); }
+
+/* ---------- TOC ---------- */
+.toc {
+  position: fixed; right: 24px; top: 50%; transform: translateY(-50%); z-index: 10;
+  font-family: var(--font-sans); font-size: 12px;
+  background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 10px;
+  padding: 18px 20px; max-width: 236px;
+  box-shadow: 0 4px 18px rgba(18, 24, 33, 0.08);
+}
+.toc h5 { margin: 0 0 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-mute); }
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc -1; }
+.toc li { margin-bottom: 6px; counter-increment: toc; font-size: 12px; line-height: 1.45; display: flex; gap: 8px; }
+.toc li::before { content: counter(toc, decimal-leading-zero); font-family: var(--font-mono); color: var(--ink-mute); font-size: 10.5px; padding-top: 2px; }
+.toc a { color: var(--ink-soft); text-decoration: none; }
+.toc a:hover { color: var(--primary); }
+@media (max-width: 1340px) { .toc { display: none; } }
+
+/* ---------- Footer ---------- */
+footer {
+  padding-block: 48px 64px;
+  background: var(--paper-soft);
+  text-align: center;
+  font-family: var(--font-cjk);
+  font-size: 13.5px; color: var(--ink-mute);
+}
+footer p { margin: 0 0 8px; }
+footer .credit { font-family: var(--font-sans); }
+footer .disclaimer { margin-top: 14px; font-size: 12px; opacity: 0.75; max-width: 640px; margin-inline: auto; }
+
+/* ---------- 響應式 ---------- */
+@media (max-width: 768px) {
+  body { font-size: 17px; }
+  .hero { padding-block: 56px 42px; }
+  .hero h1 { font-size: 36px; }
+  .hero .lede { font-size: 18px; }
+  h2 { font-size: 27px; }
+  h3 { font-size: 22px; }
+  section { padding-block: 46px; }
+  .lede { font-size: 19px; }
+  .pullquote { font-size: 21px; margin: 34px 0; padding: 24px; }
+  .story { padding: 30px 24px; }
+  .stat-card .big { font-size: 36px; }
+  .flow { flex-direction: column; }
+  .flow-arrow { width: auto; height: 30px; }
+  .flow-arrow::before { top: 2px; bottom: 2px; left: 50%; right: auto; width: 2px; height: auto; transform: translateX(-50%); }
+  .flow-arrow::after { top: auto; bottom: 4px; left: 50%; right: auto; transform: translateX(-50%) rotate(135deg); }
+  .compare td:first-child { width: auto; }
+}
+
+/* ---------- 列印 ---------- */
+@media print {
+  .toc { display: none; }
+  body { font-size: 12pt; }
+  .hero, .glossary {
+    color: var(--ink) !important; background: white !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .glossary h2, .glossary .term dt, .glossary .lede, .glossary .term .zh-name { color: var(--ink) !important; }
+  .glossary .term dd { color: var(--ink-soft) !important; }
+  pre.code { background: #f3f5f8 !important; color: #121821 !important; border: 1px solid #ccd; white-space: pre-wrap; }
+  pre.code .c, pre.code .k, pre.code .s, pre.code .a { color: inherit !important; }
+  section { page-break-inside: avoid; }
+}
+
+/* ---------- 整合版：模式列、圖卡帶、燈箱 ---------- */
+.modebar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; padding: 10px var(--gutter); background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--paper-shadow); font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.modebar .brand { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.modebar .left { display: flex; align-items: center; gap: 14px; }
+.modebar .homelink { font-size: 12px; font-weight: 600; color: var(--ink-mute); text-decoration: none; }
+.modebar .homelink:hover { color: var(--primary); text-decoration: underline; }
+.modebar .switch { display: flex; gap: 6px; }
+.modebar button { font: inherit; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.modebar button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+.modebar button:focus-visible, .cardlabel .zoom:focus-visible, .lightbox .close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.modebar .canvaslink { font-size: 12px; color: var(--ink-mute); }
+.cardband { max-width: 1600px; margin: 4px auto 40px; padding: 0 var(--gutter); }
+.cardlabel { display: flex; align-items: baseline; gap: 14px; padding: 0 2px 8px; font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.cardlabel .n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--warm); }
+.cardlabel .zoom { margin-left: auto; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--paper-shadow); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; font-size: 16px; color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(18, 24, 33, 0.86); display: none; align-items: center; justify-content: center; padding: 24px; }
+.lightbox.open { display: flex; }
+.lightbox .frame { border: none; border-radius: 8px; max-width: none; width: auto; flex: none; }
+.lightbox .close { position: absolute; top: 14px; right: 18px; font: inherit; font-family: var(--font-sans); font-size: 13px; color: #FFFFFF; background: transparent; border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.faq { margin: 36px 0 8px; padding: 0; }
+.faq > div { padding: 18px 0; border-top: 1px solid var(--paper-shadow); }
+.faq > div:last-child { border-bottom: 1px solid var(--paper-shadow); }
+.faq dt { margin: 0 0 6px; font-weight: 700; font-size: 17px; color: var(--ink); }
+.faq dt::before { content: "問"; display: inline-block; margin-right: 10px; padding: 1px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; color: #FFFFFF; background: var(--primary); vertical-align: 2px; }
+.faq dd { margin: 0; font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+body.mode-cards section .prose { display: none; }
+body.mode-cards section.nocard { display: none; }
+body.mode-cards section { padding-block: 44px; }
+body.mode-cards .toc li.nocard { display: none; }
+@media (max-width: 768px) { .cardband { margin-bottom: 32px; } .modebar { font-size: 12px; } }
+@media print {
+  .modebar, .lightbox, .cardlabel .zoom { display: none !important; }
+  body.mode-cards section .prose { display: block !important; }
+  body.mode-cards section.nocard { display: block !important; }
+  section { page-break-inside: auto; }
+  .cardband, .story, .explain, .thought, .stat-grid, .values, .cards, .table-scroll { page-break-inside: avoid; }
+  .frame { height: auto !important; border: none; border-radius: 0; }
+  .frame > div { transform: none !important; zoom: 0.44; }
+}
+
+</style>
+</head>
+<body>
+<div class="modebar">
+  <div class="left"><a class="homelink" href="../../">← 首頁</a><span class="brand">Agentic Deanonymizers · 圖卡 + 教材</span></div>
+  <div class="switch" role="group" aria-label="閱讀模式">
+    <button type="button" data-mode="full" aria-pressed="true">圖卡＋詳解</button>
+    <button type="button" data-mode="cards" aria-pressed="false">只看圖卡</button>
+  </div>
+  <a class="canvaslink" href="cards.html">圖卡連續閱讀版</a>
+</div>
+<nav class="toc" aria-label="目錄">
+  <h5>目錄</h5>
+  <ol>
+    <li class="nocard"><a href="#prologue">為什麼讀這篇</a></li>
+    <li class="nocard"><a href="#release">公開與同意</a></li>
+    <li><a href="#low-barrier">門檻為什麼低</a></li>
+    <li><a href="#results">設定與結果</a></li>
+    <li><a href="#harms">對受訪者的傷害</a></li>
+    <li><a href="#disclosure">通報與回覆</a></li>
+    <li class="nocard"><a href="#publication">公開到哪裡</a></li>
+    <li><a href="#open-problems">三個待解問題</a></li>
+    <li class="nocard"><a href="#glossary">名詞速查</a></li>
+  </ol>
+</nav>
+<header class="hero">
+  <div class="container">
+    <div class="hero-meta">
+      <span>arXiv · 2026-01-09（v1）</span>
+      <span>研究論文（Northeastern University）</span>
+      <span>作者 Tianshi Li</span>
+    </div>
+    <p class="eyebrow">Agentic Deanonymizers · 圖卡＋教材整合版</p>
+    <h1>Agentic LLM 是強大的 去匿名化工具<span class="accent">用能上網的 LLM 重新識別 Anthropic Interviewer 資料集的受訪者</span></h1>
+    <p class="lede">2025 年 12 月，Anthropic 公開了 1,250 份由 AI 主持的訪談逐字稿。這篇四頁的論文只看其中 125 份科學家的訪談，示範接上網路搜尋的 LLM 能把提到論文的 24 份裡的 6 份，對上具體的論文與作者，有幾件直接定到受訪者本人。作者說，這篇的貢獻是指出門檻有多低：幾句自然語言、每份不到 0.5 美元，拆成看似無害的小任務，現有的防護也擋不住。本頁依論文重述威脅模型、總體結果、對受訪者的傷害、通報的經過與待解的問題，不轉述任何可識別受訪者的細節。每章開頭先放一張圖解卡講重點，往下是詳細說明；想速讀就切到「只看圖卡」。</p>
+    <dl class="hero-keystat">
+      <div><dt>公開的訪談</dt><dd>1,250<small>份</small></dd></div>
+      <div><dt>找回出處 · 24 份裡</dt><dd>6<small>份</small></dd></div>
+      <div><dt>每份的 API 成本</dt><dd>&lt;0.5<small>美元</small></dd></div>
+      <div><dt>每份約需時間</dt><dd>4<small>分鐘</small></dd></div>
+    </dl>
+  </div>
+</header>
+
+
+<section id="prologue" data-toc="為什麼讀這篇" class="nocard">
+  <div class="container">
+    <p class="chapter">Prologue · 整理者的引言</p>
+    <h2><span class="seg">能上網的 agent，</span><span class="seg">也能把資料連回人</span></h2>
+    <p class="lede">這是 Stanford CS 329Z 第 8 週〈Agent Safety &amp; Guardrails〉那一講的必讀。那一講的講題之一是工具存取的隱私風險，這篇四頁的論文給了一個真實的案例：一份公開的訪談資料集，被接上網路搜尋的 LLM 連回了受訪者。</p>
+
+    <p>這一講屬於 Safety 分區，講題包括工具存取的隱私風險、prompt injection（含間接注入）、<span style="white-space:nowrap">red-teaming</span>、沙箱與權限模型、輸出護欄、責任、負責任部署，以及 <span style="white-space:nowrap">human-in-the-loop</span>。同一講的必讀還有 Shao 等人的〈PrivacyLens〉，以及 Zhang 與 Yang 的〈Searching for Privacy Risks in LLM Agents via Simulation〉；選讀是 Wen 等人的〈Contextualized Privacy Defense for LLM Agents〉、OpenAI 的〈Understanding Prompt Injections〉，以及 Anthropic 的 Responsible Scaling Policy。</p>
+    <p>把這一講的講題對到論文裡的內容，大致如下。這張表是整理者的對照，論文沒有用這些講題分類。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>這一講的講題</th><th>論文裡對應的內容（整理者的對照；括號是本頁的章）</th></tr></thead>
+        <tbody>
+          <tr><td>工具存取的<br>隱私風險</td><td>接上網路搜尋的 LLM，能把訪談裡的研究專案描述對上公開的論文（第 2、3 章）</td></tr>
+          <tr><td>輸出護欄</td><td>把重新識別拆成看似無害的小任務，現有的防護就擋不住（第 2、7 章）</td></tr>
+          <tr><td><span style="white-space:nowrap">red-teaming</span></td><td>作者以外部研究者的身分，實際測試一份已公開的資料集，再通知釋出的一方（第 3、5 章）</td></tr>
+          <tr><td><span style="white-space:nowrap">human-in-the-loop</span></td><td>模型標為最高信心的候選，要經作者逐件人工核對才算數（第 3 章）</td></tr>
+          <tr><td>責任與<br>負責任部署</td><td>釋出資料的一方怎麼處理同意與遮蔽；研究者怎麼通報、公開到哪裡（第 1、5、6 章）</td></tr>
+          <tr><td>prompt injection、<br>沙箱與權限模型</td><td>這篇沒有處理</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>作者 Tianshi Li 來自 Northeastern University 的 Khoury College of Computer Sciences，論文只有這一位作者。整理者對照作者名單補一句：同一講的必讀〈PrivacyLens〉，第二作者也是 Tianshi Li。</p>
+    <p>論文在 2026 年 1 月 9 日貼上 arXiv，只有 v1，全文四頁，沒有表格也沒有圖；PDF 只標 Preprint，沒有會議資訊。本頁分九章：第 1 章是資料集與同意，第 2、3 章是門檻為什麼低、攻擊在概念上怎麼做與總體結果，第 4 章是對受訪者的傷害，第 5、6 章是作者怎麼通報、公開到哪裡，第 7 章是待解的問題。數字只用論文寫出的；整理者自己算的比例會標明。論文描述的是到 2026 年 1 月 8 日為止的狀況，之後資料集或它的說明有沒有變動，不在本頁的範圍內。</p>
+
+    <div class="explain terra">
+      <span class="label">本頁的處理方式</span>
+      <h4>為了保護受訪者，本頁不轉述任何可識別的細節</h4>
+      <p>這篇論文示範的是把真人受訪者連回身分。論文本身已經刻意扣住可直接識別的資訊，以及會讓攻擊容易重現的工具、程式碼與程序細節。本頁照同一條線整理，而且不再往下補：不寫任何受訪者的名字、論文題目、研究領域與機構，不引用也不轉述訪談內容，不寫哪一份訪談對到誰，只寫論文公開的總體數字。攻擊只寫到論文自己的概念層級，也就是它為什麼容易；不寫可以照做的步驟、搜尋語句、prompt 或工具設定。本頁只依論文整理，沒有查看資料集本身，也不附資料集的連結。</p>
+    </div>
+
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>先把六個名詞對齊</h4>
+      <ul>
+        <li><strong>匿名化與遮蔽</strong>：釋出資料前拿掉或改寫能認出人的資訊；遮蔽（redaction）是把特定的字詞塗掉或換掉。</li>
+        <li><strong>重新識別（<span style="white-space:nowrap">re-identification</span>）</strong>：把拿掉名字的資料，重新連回某個具體的人；也叫去匿名化。</li>
+        <li><strong>準識別子（<span style="white-space:nowrap">quasi-identifier</span>）</strong>：單獨看不是名字，合起來卻能把範圍縮到少數人、甚至一個人的資訊，例如郵遞區號加上生日。</li>
+        <li><strong>質性資料</strong>：訪談、開放式回答這類文字資料，細節多，每一份都不一樣。</li>
+        <li><strong>知情同意</strong>：受訪者了解用途與風險之後才同意參加；本文爭的是受訪者同意時知道了多少。</li>
+        <li><strong>負責任揭露</strong>：發現弱點的人先通知負責的一方，再決定公開什麼、公開多少。</li>
+      </ul>
+    </div>
+
+    <div class="pullquote">
+      資料公開以後，能不能認出人，要看別人手上的工具走到哪裡。
+      <cite>序章核心觀念</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="release" data-toc="公開與同意" class="nocard">
+  <div class="container">
+    <p class="chapter">Chapter 01 · 1 Introduction and Background</p>
+    <h2><span class="seg">受訪者同意公開，</span><span class="seg">卻可能以為是匿名</span></h2>
+    <p class="lede">Anthropic 把 1,250 份訪談逐字稿全部公開，依據是受訪者的同意。作者指出，完整的同意流程沒有公開，訪談腳本的說法又容易讓人以為資料是匿名的；遮掉的細節，至少有一部分很容易還原。</p>
+
+    <p>2025 年 12 月 4 日，Anthropic 推出 Anthropic Interviewer，一個用 AI 大規模進行質性訪談的工具。隨著這次發表，Anthropic 用它訪談了 1,250 位專業人士，主題是他們怎麼使用 AI，並把全部的訪談逐字稿公開在 Hugging Face 上。1,250 人分成三個子集：</p>
+
+    <div class="stat-grid">
+      <div class="stat-card"><div class="big">1,000<small>份</small></div><div class="label">一般工作者</div><div class="note">作者引的訪談腳本出自這個子集</div></div>
+      <div class="stat-card"><div class="big">125<small>份</small></div><div class="label">科學家</div><div class="note">本文只看這一個子集</div></div>
+      <div class="stat-card"><div class="big">125<small>份</small></div><div class="label">創作者</div><div class="note">本文沒有處理</div></div>
+    </div>
+
+    <p>作者先談同意。資料集的釋出以受訪者的同意為依據，但完整的同意流程並沒有公開。作者認為，受訪者可能很合理地以為這次釋出是匿名的，並舉一般工作者子集的訪談腳本為例：腳本向受訪者保證，訪談中分享的內容不會被歸到他個人名下，蒐集到的見解會用來了解 AI 在工作中的角色。作者說，這段話強調好處，卻淡化了被重新識別的風險。</p>
+    <p>整理者提醒一個細節：論文的註腳說，一般工作者與科學家是資料集裡兩個不同的子集。上面那段腳本出自一般工作者子集，本文攻擊的卻是科學家子集，論文沒有引用科學家子集的腳本。</p>
+    <p>再來是遮蔽。Anthropic 在釋出前做過匿名化的處理，例如把某些細節遮掉。作者的實驗顯示，被遮掉的資訊至少有一部分很容易還原；論文沒有舉例說明是哪些資訊。Anthropic 怎麼看待遮蔽，作者在第 5 節引述了回信的說法（第 5 章）。</p>
+    <p>作者把這個案例放在更大的背景裡：強大、通用的 LLM 工具已經隨手可得，用途又很難約束，釋出細節豐富的質性資料，就帶著實際的隱私風險。作者說，論文的主要目的是記錄這個案例，提醒研究社群與一般大眾這是一個嚴重而普遍的弱點，大家一起考慮它的影響與可能的緩解做法；這一句在 PDF 裡是粗體。</p>
+
+    <div class="explain stone">
+      <span class="label">補充說明</span>
+      <h4>訪談逐字稿為什麼特別難匿名</h4>
+      <p>表格型的資料可以逐欄處理：刪掉姓名欄、把生日改成年份。訪談是一大段自由的敘述，能認出人的線索散在內容裡，不在固定的欄位上；拿掉名字之後，專案的內容、時間與合作方式的描述都還在。這段是整理者的解釋，第 2 章會看到論文怎麼說明這些描述成了準識別子。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="low-barrier" data-toc="門檻為什麼低">
+  <div class="container head">
+    <p class="chapter">Chapter 02 · 2 Method: Intuition · 4 Implications</p>
+    <h2><span class="seg">專家花時間的比對，</span><span class="seg">變成幾句話的事</span></h2>
+    <p class="lede">研究專案的描述本身就是準識別子。以前要把它對上一篇論文，得靠懂技術也懂領域的人慢慢查；接上網路搜尋的 LLM 把這件事壓成幾句自然語言、幾分鐘，任何人都做得到。</p>
+    
+  </div>
+  <div class="cardband" id="card-02"><div class="cardlabel"><span class="n">圖卡 02 / 06</span><span class="t">比對靠的不再是專家</span><button type="button" class="zoom" data-card="02">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">比對靠的不再是專家，是幾句話和網路搜尋</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2 節的兩個觀察：研究專案的描述本身就是準識別子；接上網路搜尋的 LLM，把原本要專家花時間的搜尋、整合、比對、排序，壓成幾句自然語言與幾分鐘</div>
+
+  <div style="position:absolute; left:60px; top:134px; width:1480px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:4px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">同一件事</div>
+    <div style="font-size:15px; color:#2B3340;">把訪談裡的研究專案描述，對上一篇公開的論文；描述裡的領域術語、小眾的問題設定、獨特的貢獻，合起來就是準識別子</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:198px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">BEFORE · MANUAL</div>
+  <div style="position:absolute; left:60px; top:218px; font-size:20px; font-weight:700; color:#1C2431;">以前：靠懂技術、也懂領域的人</div>
+  <div style="position:absolute; left:840px; top:198px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">NOW · WEB-AUGMENTED LLM</div>
+  <div style="position:absolute; left:840px; top:218px; font-size:20px; font-weight:700; color:#1C2431;">現在：交給接上網路搜尋的 LLM</div>
+  <div style="position:absolute; left:800px; top:196px; width:0px; height:396px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:262px; width:700px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; padding:0px 18px; font-size:15px; font-weight:700; color:#1C2431;">輸入：訪談裡的研究專案描述</div>
+  <div style="position:absolute; left:60px; top:342px; width:145px; height:84px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:8px; padding:10px 14px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">搜尋</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">找可能的論文</div></div>
+  <div style="position:absolute; left:245px; top:342px; width:145px; height:84px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:8px; padding:10px 14px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">整合</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">讀懂專案與論文</div></div>
+  <div style="position:absolute; left:430px; top:342px; width:145px; height:84px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:8px; padding:10px 14px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">比對</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">逐項對照細節</div></div>
+  <div style="position:absolute; left:615px; top:342px; width:145px; height:84px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:8px; padding:10px 14px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">排序</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">挑出最像的候選</div></div>
+  <div style="position:absolute; left:60px; top:462px; width:700px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; padding:0px 18px; font-size:15px; font-weight:700; color:#1C2431;">輸出：可能對應的論文與作者</div>
+  <div style="position:absolute; left:60px; top:530px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">四步都要人來做：每一步都要懂技術、也要懂那個領域，而且很花時間。</div>
+
+  <div style="position:absolute; left:840px; top:262px; width:700px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; padding:0px 18px; font-size:15px; font-weight:700; color:#1C2431;">輸入：同樣的描述，加上幾句自然語言的提示</div>
+  <div style="position:absolute; left:840px; top:342px; width:700px; height:84px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:12px 22px; display:flex; flex-direction:column; justify-content:center; gap:8px;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">能上網的 LLM agent：四件事一次做完</div>
+    <div style="display:flex; gap:10px;">
+      <div style="padding:3px 12px; border-radius:4px; font-size:13px; font-weight:700; color:#FFFFFF; background-color:rgba(255,255,255,0.16);">搜尋</div>
+      <div style="padding:3px 12px; border-radius:4px; font-size:13px; font-weight:700; color:#FFFFFF; background-color:rgba(255,255,255,0.16);">整合</div>
+      <div style="padding:3px 12px; border-radius:4px; font-size:13px; font-weight:700; color:#FFFFFF; background-color:rgba(255,255,255,0.16);">比對</div>
+      <div style="padding:3px 12px; border-radius:4px; font-size:13px; font-weight:700; color:#FFFFFF; background-color:rgba(255,255,255,0.16);">排序</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:840px; top:462px; width:700px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; padding:0px 18px; font-size:15px; font-weight:700; color:#1C2431;">輸出：可能對應的論文與作者</div>
+  <div style="position:absolute; left:840px; top:530px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">幾分鐘、任何人都做得到；不寫程式、直接用有網路搜尋的聊天服務，也一樣成功。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">以前：大量的手工與專業</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">第 6 節：資料集的去匿名化，過去要大量的手工與專業。<br>質性資料的開放式細節會變成準識別子，早有研究示範。</div>
+    <div style="font-size:13px; color:#8A93A0;">例：Netflix Prize 資料集；ChatGPT 對話紀錄對上已發表文章。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">現在：每份不到 <span style="white-space:nowrap">0.5 美元</span></div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">第 4 節：用程式呼叫 LLM API，每份一次嘗試約 <span style="white-space:nowrap">4 分鐘</span>。<br>不寫程式、直接用有網路搜尋的聊天服務，也一樣成功。</div>
+    <div style="font-size:13px; color:#8A93A0;">先前研究：agent 已能彙整公開資訊做側寫、寫釣魚信。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">防護：拆成無害的小任務就過</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">第 1 節：重新識別被拆成幾個看起來無害的任務，<br>防護就擋不住：工具是兩用的，意圖無從查證。</div>
+    <div style="font-size:13px; color:#8A93A0;">怎麼拆，論文刻意不寫，本組也不寫。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：四個動詞（搜尋、整合、比對、排序）取自第 2 節；畫成「人工四步」對「一個 agent」是整理者的畫法。論文只在高層次描述攻擊，本組也只寫到概念層級。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M132 306V340" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M219 376L231 384L219 392Z" fill="#9AA3AE"></path>
+    <path d="M404 376L416 384L404 392Z" fill="#9AA3AE"></path>
+    <path d="M589 376L601 384L589 392Z" fill="#9AA3AE"></path>
+    <path d="M687 426V460" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1190 306V340" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1190 426V460" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>作者說這個攻擊靠兩個觀察。第一，研究專案通常用領域的專門術語、小眾的問題設定與獨特的貢獻來描述，這些描述在技術上就是有效的準識別子：它們沒有寫名字，卻能把範圍縮到很少的人。第二，接上網路搜尋的 LLM 能大幅加快重新識別需要的四件事：搜尋、整合、比對與排序。原本要同時具備技術與領域專業、很花時間的手工流程，變成幾句自然語言的提示、幾分鐘，任何人都能做。這最後一句，作者在 PDF 裡設成粗體。</p>
+    <p>論文第 6 節把這件事放進一條更長的脈絡。過去資料集的去匿名化要大量的手工與專業，作者引的例子是 Narayanan 與 Shmatikov 對 Netflix Prize 資料集的研究。質性資料的開放式細節會變成準識別子，也早有研究示範過：Brigham 等人把 ChatGPT 的對話紀錄，連到含有機器生成內容的已發表文章。作者說，現在的 agent 有了工具使用、規劃，以及接近專家水準的推理，連高層次的描述都足以做連結，發動這類攻擊所需的時間、心力與專業都大幅減少。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>論文引用的研究</th><th>論文怎麼描述它</th><th>本文的位置</th></tr></thead>
+        <tbody>
+          <tr><td>Narayanan 與 Shmatikov<br>（2006）</td><td>Netflix Prize 資料集的去匿名化；作者說當時要大量手工與專業</td><td>「以前」的例子</td></tr>
+          <tr><td>Brigham 等<br>（2024）</td><td>把 ChatGPT 對話紀錄連到含機器生成內容的已發表文章</td><td>質性資料的細節<br>是準識別子</td></tr>
+          <tr><td>Mireshghallah 與 Li（2025）、<br>Kim 等（2025）</td><td>LLM 加上 agent 能力，能協助彙整公開資訊，用來建使用者側寫、客製化釣魚信</td><td>侵犯隱私的彙整</td></tr>
+          <tr><td>本文<br>（2026）</td><td>把訪談裡的研究專案描述，連回論文與作者</td><td>用在重新識別的<br>具體例子</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>門檻低到什麼程度，第 4 節給了數字。作者的實驗用程式呼叫 LLM 的 API，每份逐字稿做一次重新識別的嘗試，成本不到 0.5 美元，執行時間大約 4 分鐘。作者另外試了不寫程式的版本：直接對有網路搜尋功能、面向一般使用者的 LLM 服務下提示，結果同樣成功；這一句在 PDF 裡也是粗體。作者說，先前的研究已經顯示 LLM 加上 agent 能力能協助彙整公開資訊，做建使用者側寫、客製化釣魚信這類侵犯隱私的事；這篇提供的是一個用在重新識別、會造成實際傷害的具體例子。</p>
+
+    <div class="stat-grid">
+      <div class="stat-card"><div class="big">&lt;0.5<small>美元</small></div><div class="label">每份逐字稿一次嘗試的 API 成本</div><div class="note">作者用程式呼叫 LLM API 的實驗</div></div>
+      <div class="stat-card"><div class="big">4<small>分鐘</small></div><div class="label">每份的執行時間（約）</div><div class="note">不寫程式的版本也一樣成功</div></div>
+    </div>
+
+    <div class="explain terra">
+      <span class="label">為什麼防護擋不住</span>
+      <h4>拆成看似無害的小任務，每一步都說得通</h4>
+      <p>論文第 1 節說，LLM 內建的防護可以被繞過，做法是把重新識別拆成幾個看起來無害的任務。作者點出兩個原因：資訊檢索工具本來就是兩用的，同樣的搜尋也服務正當的用途；使用者的意圖本質上無從查證。第 6 節把它列成待解的問題：惡意的目標可以重新包裝成無害的任務，模型與 agent 的護欄要怎麼處理這種意圖上的模糊（第 7 章）。怎麼拆、每一步長什麼樣子，論文刻意不寫，本頁也不寫。</p>
+    </div>
+
+    <div class="pullquote">
+      門檻降低的不是某一個步驟，是整條比對需要的專業。
+      <cite>整理自第 2、6 節</cite>
+    </div>
+
+    <div class="thought">
+      <span class="label">思考題 · 01</span>
+      <h4>你手上的文字資料裡，有哪些「沒寫名字卻認得出人」的描述？</h4>
+      <p>想一份你可能公開的質性資料，例如使用者訪談、客服紀錄或問卷的開放題。挑三份來讀，問自己：拿掉名字之後，哪些句子仍然只可能出自某一個人？</p>
+      <p class="hint">整理者的建議：照論文的觀察找三類線索：專門術語、很少人做的問題設定、只有一個人或一個團隊做過的事。這三類都不會出現在姓名欄裡。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="results" data-toc="設定與結果">
+  <div class="container head">
+    <p class="chapter">Chapter 03 · 2 Method · 3 Results</p>
+    <h2><span class="seg">24 份提到論文的訪談，</span><span class="seg">6 份被找回出處</span></h2>
+    <p class="lede">作者只看 125 份科學家訪談，先挑出提到已發表作品的 24 份，再讓能上網的 agent 找可能對應的出版品。模型標為最高信心的 7 件，作者人工核對後確認 6 件，佔 24 份的 25%。</p>
+    
+  </div>
+  <div class="cardband" id="card-03"><div class="cardlabel"><span class="n">圖卡 03 / 06</span><span class="t">24 份裡，6 份被找回出處</span><button type="button" class="zoom" data-card="03">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">24 份提到論文的訪談，6 份被找回出處</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2、3 節：只看科學家子集。先挑出提到已發表作品的訪談，再讓能上網的 agent 找候選出版品、標信心；最高一級才交給作者人工核對</div>
+
+  <div style="position:absolute; left:366px; top:128px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">只看這個子集</div>
+  <div style="position:absolute; left:654px; top:128px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">模型判斷</div>
+  <div style="position:absolute; left:942px; top:128px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">agent 上網找、標信心</div>
+  <div style="position:absolute; left:1230px; top:128px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">作者人工核對</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:150px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 20px; display:flex; flex-direction:column; align-items:flex-start; gap:2px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:36px; font-weight:600; color:#1C2431; line-height:1.2;">1,250</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">公開的訪談逐字稿</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">一般工作者、科學家、創作者<br>三個子集，全部公開</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:150px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 20px; display:flex; flex-direction:column; align-items:flex-start; gap:2px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:36px; font-weight:600; color:#1C2431; line-height:1.2;">125</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">科學家子集</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">每份從「講一個最近的<br>研究專案」開始</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:150px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 20px; display:flex; flex-direction:column; align-items:flex-start; gap:2px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:36px; font-weight:600; color:#1C2431; line-height:1.2;">24</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">提到已發表作品</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">論文、學位論文等，至少一件；<br>重新識別只對這 24 份做</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:150px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 20px; display:flex; flex-direction:column; align-items:flex-start; gap:2px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:36px; font-weight:600; color:#1C2431; line-height:1.2;">7</div>
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">模型標為最高信心</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">最高一級 very high，<br>是作者設的門檻</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:150px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 20px; display:flex; flex-direction:column; align-items:flex-start; gap:2px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:36px; font-weight:600; color:#FFFFFF; line-height:1.2;">6</div>
+    <div style="font-size:15px; font-weight:700; color:#FFFFFF;">人工核對確認</div>
+    <div style="font-size:12.5px; color:rgba(255,255,255,0.75); line-height:1.5;">找回所談的具體出版品；<br>佔 24 份的 <span style="white-space:nowrap">25%</span></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:342px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">對得上的面向</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">方法、流程、主要貢獻、成果、時間線、團隊組成；有具體的關鍵字，也有字面對不上、語意卻一致的描述。</div>
+  </div>
+  <div style="position:absolute; left:60px; top:422px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">25% 是論文對 24 份算的；以全部 125 份科學家訪談算，6 份約 4.8%（整理者算的）。論文沒有公開任何一件的細節。</div>
+
+  <div style="position:absolute; left:60px; top:492px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:512px; font-size:20px; font-weight:700; color:#1C2431;">結果裡的三個細節</div>
+
+  <div style="position:absolute; left:60px; top:554px; width:470px; height:208px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">學位論文：找到論文就找到人</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">有些對到的是學位論文。<br>學位論文只有一位作者，找到論文，<br>就等於唯一定位到受訪者本人。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">其他情況是縮小範圍，先對到論文的作者群。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:554px; width:470px; height:208px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">追問讓細節越堆越多</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">好幾件的受訪者並沒有一次講完。<br>AI 訪談者的追問一點一點補上資訊，<br>合起來讓專案變得高度可識別。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">訪談的設計本來就是要引出豐富的專案細節。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:554px; width:470px; height:208px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">7 件裡有 1 件沒算</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">那件的主要專案很可能還在審查中，<br>但方法找到作者群高度重疊、<br>研究脈絡相符的其他論文。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者沒算它成功，但說論文發表後仍然很可能。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：數字全部來自第 3 節，4.8% 是整理者算的。論文為保護受訪者，刻意不寫擴大規模與繞過防護的操作細節；本組的流程只寫到概念層級。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 227L343 235L331 243Z" fill="#9AA3AE"></path>
+    <path d="M619 227L631 235L619 243Z" fill="#9AA3AE"></path>
+    <path d="M907 227L919 235L907 243Z" fill="#9AA3AE"></path>
+    <path d="M1195 227L1207 235L1195 243Z" fill="#9AA3AE"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>先看威脅模型。攻擊對象是科學家子集。這個子集的每一份訪談，都由 AI 訪談者請受訪者講一個最近做過的研究專案，從最初的想法一路講到最後的產出；訪談的設計本來就是要引出豐富的專案資訊。攻擊者手上的輔助資料，作者假設是公開網路上的任何資訊，實際上透過能搜尋、擷取與摘要出版品的聯網 LLM 服務取得。</p>
+    <p>程序分兩段，本頁只寫到論文自己的概念層級。第一段，由模型判斷哪些訪談提到具體的已發表作品，例如論文或學位論文，留下這些訪談。第二段，對每一份留下的訪談，讓有網路搜尋能力的 agent 找出和描述相符的候選出版品並排序，每個候選附一個信心等級；只有最高一級（very high）才算可能的重新識別。作者說，為了降低受訪者曝光的風險，論文刻意省略擴大規模與繞過 LLM 防護的操作細節；論文裡其餘較細的操作設定，本頁也不寫。</p>
+    <p>125 份科學家逐字稿裡，24 份被判定提到至少一件出版品，作者對這 24 份做重新識別，找回其中 6 份所談的具體出版品，也就是 25%。分母要看清楚：25% 是對 24 份算的；以全部 125 份科學家訪談算，6 份約是 4.8%，這個比例是整理者算的。作者特別指出，有些對到的是學位論文，學位論文只有一位作者，找到論文就等於唯一定位到受訪者。</p>
+    <p>信心怎麼判斷。模型最後把 7 件標為最高信心，作者逐件人工核對，確認其中 6 件確實是非常高信心的重新識別。作者說，這些訪談的描述和對應的出版品在好幾個面向上吻合：方法、流程、主要貢獻、成果、時間線與團隊組成。吻合的方式有兩種：具體的關鍵字，以及用更豐富的自然語言表達、無法簡單歸類、也對不上論文字面用語的語意描述。人工核對時，作者同時讀完整的逐字稿與原始論文，確認細緻而不尋常的細節彼此一致，技術用語與行話也大量重疊。</p>
+
+    <div class="story">
+      <div class="label">關鍵觀念 · 一</div>
+      <h4>追問讓細節一點一點累積</h4>
+      <p>作者觀察到，好幾件的受訪者並沒有一次把細節講完；是 AI 訪談者的追問引出更多資訊，這些資訊合起來，讓專案變得高度可識別。</p>
+      <p>對設計 AI 訪談工具的人，這是一個直接的提醒：訪談越會追問，逐字稿越豐富，也越容易連回人。這層意思是整理者的讀法，論文只描述了追問的效果。</p>
+    </div>
+
+    <p>7 件裡有 1 件沒算成功。那一件，受訪者的描述和作者的搜尋結果都顯示，受訪者主要談的專案很可能還在審查中，所以對不到那篇論文；但方法仍然找到了作者群高度重疊的其他論文，研究方法與貢獻的脈絡和訪談描述很吻合。作者沒有把它算成成功，但說重新識別仍然很可能，尤其是那篇論文發表之後。</p>
+
+    <div class="explain stone">
+      <span class="label">論文沒有公開的</span>
+      <h4>6 件是誰、對到哪篇，論文一件都沒寫</h4>
+      <p>論文只公開總體數字與吻合的面向，沒有公開任何一件的細節，也沒有說哪一份訪談對到哪一篇論文。作者在第 5 節說，寄給 Anthropic 的信裡附了幾個重新識別的例子供對方驗證；論文本身不收錄。本頁同樣只寫總體結果。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="harms" data-toc="對受訪者的傷害">
+  <div class="container head">
+    <p class="chapter">Chapter 04 · 4 Implications: Harms to participants</p>
+    <h2><span class="seg">一旦被認出，</span><span class="seg">傷害不只是曝光</span></h2>
+    <p class="lede">這批訪談談的是受訪者自己怎麼在工作上用 AI。作者列出這些自述一旦連回名字，受訪者可能受的五種傷害，並提醒風險會隨時間增加。</p>
+    
+  </div>
+  <div class="cardband" id="card-04"><div class="cardlabel"><span class="n">圖卡 04 / 06</span><span class="t">五種傷害，還會隨時間變大</span><button type="button" class="zoom" data-card="04">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">五種傷害，還會隨時間變大</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4 節：訪談談的是受訪者自己怎麼在工作上用 AI；這些自述一旦連回名字，影響從曝光一路延伸到名譽與人際關係</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:280px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">傷害</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">連回本人之後，暴露的是什麼</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">為什麼會傷人（論文的理由）</div>
+  </div>
+  <div style="position:absolute; left:60px; top:206px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:280px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">意料之外的曝光</div><div style="font-size:12px; color:#8A93A0;">Unexpected exposure</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.45;"><div>同意受訪時，沒料到會被認出的身分</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.45;"><div>期待落空，是隱私傷害的主要類別之一<br>（作者引 Citron 與 Solove）</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:270px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:280px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">情緒困擾</div><div style="font-size:12px; color:#8A93A0;">Emotional distress</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.45;"><div>身分和自述的 AI 用法連在一起</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.45;"><div>工作上用 AI 是敏感話題，常被隱藏、可能帶汙名；<br>受訪者會擔心別人怎麼看自己</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:334px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:280px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">名譽傷害</div><div style="font-size:12px; color:#8A93A0;">Reputational harms</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.45;"><div>對自己能力與 AI 用法的描述</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.45;"><div>可能被看成過度依賴 AI，<br>招來對研究品質與特定論文的質疑</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:398px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:280px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">人際關係的傷害</div><div style="font-size:12px; color:#8A93A0;">Relationship harms</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.45;"><div>對同事、合作者與研究做法的看法；<br>對 AI 的立場</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.45;"><div>被當事人知道，可能傷到信任與關係；<br>對 AI 的看法各不相同，也可能引起摩擦</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:462px; width:1480px; height:64px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:280px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">暴露可能的違規</div><div style="font-size:12px; color:#8A93A0;">Revelation of policy violations</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.45;"><div>落在灰色地帶的 AI 用法</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.45;"><div>例如資料交給第三方 AI 工具、用 AI 寫論文草稿；<br>作者說這一項比較推測</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:526px; width:1480px; height:64px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:0px 0px 8px 8px; display:grid; grid-template-columns:280px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:17px; font-weight:700; color:#C8501F;">風險會隨時間增加</div><div style="font-size:12px; color:#8A93A0;">Risks may increase over time</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.45;"><div>還在進行或審查中的論文</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.45;"><div>論文發表後，更多訪談變得可識別；<br>未來的模型更強，拿得到付費牆後與內部的資料</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:624px; width:470px; height:176px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">代價落在受訪者身上</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">五種傷害，承擔的都是受訪者本人；<br>他們同意受訪時，未必料到會被認出。</div>
+    <div style="font-size:13px; color:#8A93A0;">期待落空，本身就是一種隱私傷害。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:624px; width:470px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">違規那一項最推測</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">逐字稿沒有法律或程序上的細節，<br>只是某些說法可能招來懷疑與檢視。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者自己在第 4 節加了這個保留。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:624px; width:470px; height:176px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">今天對不上，明天可能對上</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">審查中的論文一發表，更多訪談變得可識別；<br>更強的模型與工具，也讓連結更容易。</div>
+    <div style="font-size:13px; color:#8A93A0;">第 03 卡沒算成功的那一件，就是這種情況。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：五種傷害與隨時間增加的風險都是第 4 節的小標，欄位與中文措辭是整理者的。論文沒有指出哪一份訪談有哪一種情況，本組也不寫。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>作者在第 4 節列出受訪者被重新識別後可能受的傷害。論文用的是概括的描述，沒有指出哪一份訪談有哪一種情況；本頁照這個層級整理，只寫哪一類內容連回本人之後，會變成什麼傷害。</p>
+
+    <div class="values">
+      <div class="value-card"><span class="tag">曝光</span><h4>意料之外的曝光</h4><p>受訪者同意時，未必料到身分會被認出。作者引 Citron 與 Solove 的分類：期待落空，本身就是隱私傷害的主要類別之一。</p></div>
+      <div class="value-card"><span class="tag">情緒</span><h4>情緒困擾</h4><p>在工作上用 AI 是敏感的話題，人們常會隱藏，也可能帶著汙名（作者引 Zhang 等人的研究）。身分和自述的 AI 用法連在一起，受訪者可能擔心別人怎麼看自己。</p></div>
+      <div class="value-card"><span class="tag">名譽</span><h4>名譽傷害</h4><p>訪談裡對自己能力與 AI 用法的描述，連回本人之後，可能被看成不被接受的做法或過度依賴 AI，招來對研究品質的懷疑，以及對特定論文更多的檢視。</p></div>
+      <div class="value-card"><span class="tag">人際</span><h4>人際關係的傷害</h4><p>訪談裡對同事、合作者與研究做法的看法，被當事人知道，可能傷到信任與關係。每個人對 AI 的看法不同，無意間透露自己的立場，也可能引起摩擦。</p></div>
+      <div class="value-card"><span class="tag">違規</span><h4>暴露可能的違規</h4><p>有些 AI 用法落在灰色地帶。作者的例子：用 AI 做資料分析，可能以違反機構政策的方式把資料交給第三方 AI 工具；用 AI 寫論文草稿，可能違反會議或期刊的規定。</p></div>
+      <div class="value-card"><span class="tag">時間</span><h4>風險會隨時間增加</h4><p>有些論文還在進行或審查中，發表之後，更多訪談會變得可識別。未來的模型與系統更強，也更能取得工具與資訊，例如付費牆後的資料或內部資料庫。</p></div>
+    </div>
+
+    <p>作者對第五種特別加了保留：逐字稿沒有提供法律或程序上的細節，所以這一項比較推測，只是某些說法可能招來懷疑與檢視。第六項講的是趨勢：今天對不上的訪談，明天可能對得上。第 3 章那一件沒算成功的例子，就是論文還在審查中的情況。</p>
+
+    <div class="explain stone">
+      <span class="label">整理者的讀法</span>
+      <h4>傷害來自連結，不來自新的外洩</h4>
+      <p>這六項都不需要任何新的資料外洩：逐字稿本來就公開，傷害發生在它被連回一個名字的那一刻。所以第 1 章的遮蔽與同意，以及第 7 章的第二個待解問題（受訪者能不能真的拿掉隱含的識別資訊），談的都是連結發生之前能做什麼。這段是整理者把幾章接起來的讀法。</p>
+    </div>
+
+    <div class="thought">
+      <span class="label">思考題 · 02</span>
+      <h4>如果你是受訪者，哪一類內容最不希望被連回自己？</h4>
+      <p>假設你接受一場「你在工作上怎麼用 AI」的訪談，逐字稿會公開，名字會拿掉。</p>
+      <p class="hint">整理者的建議：對照這一章的五類傷害，想你會說的內容各落在哪一類；再想想，只拿掉名字，擋得住其中哪幾類。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="disclosure" data-toc="通報與回覆">
+  <div class="container head">
+    <p class="chapter">Chapter 05 · 5 Responsible Disclosure</p>
+    <h2><span class="seg">釋出隔天就通報，</span><span class="seg">回覆是受訪者已同意</span></h2>
+    <p class="lede">作者在資料集公開隔天聯絡 Anthropic，建議撤下資料、重新取得同意。論文轉述的回信說，受訪者同意公開原始逐字稿，遮蔽只是額外的客套；結果是資料集的說明改寫，到 2026 年 1 月 8 日沒有進一步的行動。</p>
+    
+  </div>
+  <div class="cardband" id="card-05"><div class="cardlabel"><span class="n">圖卡 05 / 06</span><span class="t">同一份同意，兩種讀法</span><button type="button" class="zoom" data-card="05">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">同一份同意，作者和回信讀法不同</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 5 節：作者在釋出隔天通報，附上幾個重新識別的例子供對方驗證；回信由資料集的主要聯絡人與 Anthropic 隱私團隊共同署名</div>
+
+  <div style="position:absolute; left:60px; top:134px; width:1480px; height:46px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">同一份釋出：1,250 份原始訪談逐字稿公開在 Hugging Face，依據是受訪者的同意（<span style="white-space:nowrap">2025-12-04</span>）</div>
+
+  <div style="position:absolute; left:60px; top:198px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">THE AUTHOR</div>
+  <div style="position:absolute; left:60px; top:218px; font-size:20px; font-weight:700; color:#1C2431;">作者：受訪者可能以為是匿名</div>
+  <div style="position:absolute; left:840px; top:198px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">THE REPLY · AS REPORTED</div>
+  <div style="position:absolute; left:840px; top:218px; font-size:20px; font-weight:700; color:#1C2431;">回信：同意涵蓋原始逐字稿的公開</div>
+  <div style="position:absolute; left:800px; top:196px; width:0px; height:396px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:262px; width:700px; height:38px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; padding:0px 16px; font-size:14px; color:#2B3340;">完整的同意流程沒有公開（第 1 節）</div>
+  <div style="position:absolute; left:60px; top:306px; width:700px; height:38px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; padding:0px 16px; font-size:14px; color:#2B3340;">腳本保證分享的內容不會歸到個人（出自一般工作者子集）</div>
+  <div style="position:absolute; left:60px; top:350px; width:700px; height:38px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; padding:0px 16px; font-size:14px; color:#2B3340;">遮掉的細節，至少有一部分很容易還原（作者的實驗）</div>
+  <div style="position:absolute; left:60px; top:400px; width:700px; height:96px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 20px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">兩項建議</div>
+    <div style="font-size:15px; color:#1C2431; line-height:1.7;"><div>① 撤下資料集，或至少暫時隱藏</div><div>② 向受訪者事後說明，並重新取得同意</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:512px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">作者說，腳本強調好處，卻淡化了被重新識別的風險。</div>
+
+  <div style="position:absolute; left:840px; top:262px; width:700px; height:38px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; padding:0px 16px; font-size:14px; color:#2B3340;">受訪者同意公開原始的訪談逐字稿</div>
+  <div style="position:absolute; left:840px; top:306px; width:700px; height:38px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; padding:0px 16px; font-size:14px; color:#2B3340;">事先建議：想保持匿名，就不要分享能識別自己的資訊</div>
+  <div style="position:absolute; left:840px; top:350px; width:700px; height:38px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; padding:0px 16px; font-size:14px; color:#2B3340;">遮蔽是額外的客套，不是隱私保護措施</div>
+  <div style="position:absolute; left:840px; top:400px; width:700px; height:96px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 20px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">結果</div>
+    <div style="font-size:15px; color:#1C2431; line-height:1.7;"><div>資料集的 README 改寫，寫明同意涵蓋原始逐字稿的公開</div><div>到 <span style="white-space:nowrap">2026-01-08</span>，沒有進一步的行動</div></div>
+  </div>
+  <div style="position:absolute; left:840px; top:512px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">右欄是論文轉述的回信內容；回信的日期，論文沒有寫。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">12 月 5 日：釋出隔天</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">信裡說明方法、結果與影響，附上例子供驗證；<br>之後持續聯繫隱私團隊與開發工具的團隊。</div>
+    <div style="font-size:13px; color:#8A93A0;">例子附在信裡，論文本身不收錄。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">唯一的改變是 README</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">溝通的結果是資料集的說明改寫，<br>寫明同意涵蓋的是原始逐字稿的公開。</div>
+    <div style="font-size:13px; color:#8A93A0;">論文在 <span style="white-space:nowrap">2026-01-09</span> 貼上 arXiv。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">分歧在誰認得出線索</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">回信靠同意加上事先的提醒；作者問的是，<br>受訪者能不能認出隱含的識別資訊。</div>
+    <div style="font-size:13px; color:#8A93A0;">這個對照是整理者的讀法（第 06 卡的第二題）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：右欄全部來自論文的轉述，不是 Anthropic 另外發表的聲明；本組描述的是論文寫到的 2026 年 1 月 8 日為止的狀況。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>作者在工具與資料集初次釋出的隔天聯絡 Anthropic。信裡說明攻擊的方法、結果與影響，附上幾個重新識別的例子讓對方驗證，並提出兩項具體的緩解建議。論文第 7 節補充，作者之後持續聯繫 Anthropic 的隱私團隊，以及開發這個工具、維護資料集的 Societal Impacts 團隊研究者。依論文的描述，事情的順序是：</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>2025-12-04 釋出。</strong>Anthropic 推出 Anthropic Interviewer，公開 1,250 份訪談逐字稿。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>2025-12-05 第一次聯絡。</strong>作者說明方法、結果與影響，附上幾個例子供驗證，是釋出後一天之內。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>作者的兩項建議。</strong>撤下資料集，或至少暫時隱藏；向受訪者事後說明，並重新取得同意。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>回信。</strong>由資料集的主要聯絡人與 Anthropic 隱私團隊共同署名；論文沒有寫回信的日期。</div></div>
+      <div class="cascade-step"><div class="n">5</div><div class="t"><strong>結果。</strong>資料集的 README 改寫；到 2026-01-08 沒有進一步的行動。論文在 2026-01-09 貼上 arXiv。</div></div>
+    </div>
+
+    <p>論文轉述的回信有三點。第一，受訪者同意公開原始的訪談逐字稿。第二，受訪者事先被建議，如果想保持匿名，就不要分享能識別自己的資訊。第三，回信把遮蔽定位成額外的客套，不是隱私保護措施：</p>
+
+    <div class="quote-en">
+      "an additional courtesy, not a privacy safeguard"
+      <span class="zh">回信對遮蔽的定位：額外的客套，不是隱私保護措施。出自論文第 5 節對回信的引述。</span>
+    </div>
+
+    <p>溝通的結果，是資料集的研究團隊更新了 Hugging Face 上的 README，說明受訪者的同意涵蓋的是原始逐字稿的公開；論文在「原始逐字稿」這幾個字上用了斜體。到 2026 年 1 月 8 日為止，沒有進一步的行動。</p>
+
+    <div class="explain stone">
+      <span class="label">整理者的讀法</span>
+      <h4>兩邊的分歧，在誰認得出隱含的線索</h4>
+      <p>把第 1 節和這一節放在一起看：回信的立場是同意加上事先的提醒，想匿名的人就別說出識別資訊；作者的疑問是，受訪者能不能真的認出並拿掉隱含的識別資訊，例如自己研究專案的描述（第 7 章的第二個問題）。本章關於回信的內容全部來自論文的轉述，這段對照是整理者的讀法。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="publication" data-toc="公開到哪裡" class="nocard">
+  <div class="container">
+    <p class="chapter">Chapter 06 · 7 Ethics Considerations</p>
+    <h2>只公開證明風險所需的細節</h2>
+    <p class="lede">作者評估，公開這篇論文的邊際風險有限：工具人人拿得到，也不需要特殊的設施。公開的是足以證明可行性、規模、信心與影響的描述，扣住的是可直接識別的資訊，以及會讓攻擊容易重現的細節。</p>
+
+    <p>論文最後一節是倫理考量。作者說，和任何談資安或隱私攻擊的研究一樣，要先考慮兩件事：公開會不會降低濫用的門檻、增加傷害？這些風險能不能被預期的社會效益抵過？</p>
+    <p>作者的判斷是公開的邊際風險有限，理由有兩個：LLM agent 系統與工具已經普遍可得；這個攻擊不需要特殊的基礎設施或高深的技術，有動機的攻擊者自己發現它是合理的事，甚至可能已經在做。反過來，透明的報告能讓社群認出這個威脅，在受控的條件下重現與量測它，發展有效的緩解做法、偵測策略與最佳做法。作者因此認為，負責任公開的預期效益大於風險。</p>
+    <p>為了進一步限制風險，作者交代了公開到哪裡為止：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>內容</th><th>論文怎麼處理</th><th>作者給的理由</th></tr></thead>
+        <tbody>
+          <tr><td>方法的描述</td><td>公開，細到足以證明<br>可行性、規模、信心與影響</td><td>讓社群認出威脅，<br>也能量測它</td></tr>
+          <tr><td>可直接識別<br>受訪者的資訊</td><td>刻意扣住</td><td>降低對受訪者<br>個人的傷害</td></tr>
+          <tr><td>工具、程式碼、<br>程序細節</td><td>刻意扣住</td><td>不讓攻擊容易重現</td></tr>
+          <tr><td>詳細的 prompt、<br>繞過防護的步驟</td><td>不公開</td><td>攻擊門檻很低，<br>連不寫程式的路徑都有</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>本頁照同一條線整理（見序章），範圍收得更窄：論文公開的程序描述，本頁也只取到概念層級。</p>
+
+    <div class="thought">
+      <span class="label">思考題 · 03</span>
+      <h4>如果是你發現一份資料能被重新識別，你會公開多少？</h4>
+      <p>想像你在某個公開資料集裡發現同樣的問題。你會先通知誰？論文裡要放哪些數字，才足以讓別人相信風險是真的？</p>
+      <p class="hint">整理者的建議：照作者問的兩件事走，公開會不會明顯降低濫用的門檻、效益抵不抵得過風險；再把「證明風險需要的」和「讓人照做需要的」分成兩張清單，只公開前一張。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="open-problems" data-toc="三個待解問題">
+  <div class="container head">
+    <p class="chapter">Chapter 07 · 6 Open Problems</p>
+    <h2><span class="seg">下一次釋出之前，</span><span class="seg">有三個問題要先回答</span></h2>
+    <p class="lede">作者提醒，這次雖然被說成一次性的計畫，卻可能成為先例：下一階段已經開始收資料。論文點出三個待解的問題：質性資料能給什麼隱私保證、怎麼讓受訪者真的知道風險、護欄怎麼面對說不清的意圖。</p>
+    
+  </div>
+  <div class="cardband" id="card-06"><div class="cardlabel"><span class="n">圖卡 06 / 06</span><span class="t">下一次釋出前的三個問題</span><button type="button" class="zoom" data-card="06">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">下一次釋出之前，三個問題要先有答案</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 6 節：作者請讀者把眼光放到這一次之外，看 LLM agent 的時代要怎麼負責任地釋出質性資料；論文列了三個待解的問題</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:320px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 32px 24px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">01 · PRIVACY GUARANTEES</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">質性資料能給<br>什麼樣的隱私保證</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">過去的遮蔽做法已經證明不足以匿名化。<br>釋出質性資料時，要在隱私與資料的用處之間，<br>給出實際做得到的保證。</div>
+    <div style="margin-top:auto; padding-top:12px; border-top:1px solid #E5E9EE; font-size:13px; color:#8A93A0; line-height:1.6;">起因：遮掉的資訊，至少有一部分很容易還原（第 1 節）。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:320px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 32px 24px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">02 · MEANINGFUL CONSENT</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">受訪者怎麼<br>真的知道風險</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">要讓受訪者有意義地了解風險，<br>想匿名時真的能拿掉隱含的識別資訊；<br>至少，對重新識別的風險有實際的預期。</div>
+    <div style="margin-top:auto; padding-top:12px; border-top:1px solid #E5E9EE; font-size:13px; color:#8A93A0; line-height:1.6;">起因：研究專案的描述本身就是準識別子（第 02 卡）。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:320px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 32px 24px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">03 · AMBIGUOUS INTENT</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">護欄怎麼面對<br>說不清的意圖</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">惡意的目標可以包裝成無害的任務，<br>繞過現有的防護；模型與 agent 的護欄，<br>要能處理使用者意圖的模糊。</div>
+    <div style="margin-top:auto; padding-top:12px; border-top:1px solid #E5E9EE; font-size:13px; color:#8A93A0; line-height:1.6;">起因：檢索工具是兩用的，意圖無從查證（第 02 卡）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:528px; font-size:20px; font-weight:700; color:#1C2431;">這一次可能成為先例</div>
+  <div style="position:absolute; left:60px; top:568px; width:460px; height:72px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:12px 20px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:rgba(255,255,255,0.6);">NOW</div>
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">本次：被說成一次性的獨立計畫</div>
+  </div>
+  <div style="position:absolute; left:570px; top:568px; width:460px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 20px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">NEXT</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">下一階段：已經開始收資料</div>
+  </div>
+  <div style="position:absolute; left:1080px; top:568px; width:460px; height:72px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 20px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">FAQ</div>
+    <div style="font-size:16px; font-weight:700; color:#C8501F;">發表的結果，可能收錄匿名化的回答</div>
+  </div>
+  <div style="position:absolute; left:60px; top:656px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">發表頁說，會有更多人在 Claude.ai 看到邀請受訪的彈出視窗；作者要這一階段暴露的問題盡快被處理，保護未來的受訪者。</div>
+
+  <div style="position:absolute; left:60px; top:702px; width:1480px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#1F2A3A; background-color:#FFFFFF;">作者的呼籲</div>
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">在這些問題造成更多傷害、或變成常態之前，研究社群要承認它們，並且系統性地研究。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三個問題照第 6 節的順序，標題與「起因」是整理者的歸納；「一次性的獨立計畫」與 FAQ 的說法，是論文引述 Anthropic 發表頁的內容。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M539 596L551 604L539 612Z" fill="#9AA3AE"></path>
+    <path d="M1049 596L1061 604L1049 612Z" fill="#9AA3AE"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>作者說，這次釋出雖然被描述成一次獨立、一次性的計畫，卻可能替未來類似的資料集釋出立下先例。Anthropic Interviewer 的下一階段已經開始收資料：發表頁說，會有更多人在 Claude.ai 看到邀請他們參加訪談的彈出視窗；FAQ 也寫著，發表的結果裡可能收錄匿名化的回答。作者認為，這一階段暴露的問題要盡快被承認、被處理，才能保護未來的受訪者。</p>
+    <p>接著作者請讀者把眼光放到這一次之外，看整個研究社群在 LLM agent 的時代負責任地釋出質性資料，會碰到哪些挑戰；第 2 章的歷史脈絡就出自這一段。論文列了三個待解的問題：</p>
+
+    <div class="values">
+      <div class="value-card"><span class="tag">隱私保證</span><h4>能給什麼樣的保證</h4><p>既然過去的遮蔽做法已經證明不足以匿名化，釋出質性資料時，在隱私與資料的用處之間，能實際提供什麼樣的隱私保證？</p></div>
+      <div class="value-card"><span class="tag">告知受訪者</span><h4>怎麼真的知道風險</h4><p>怎麼有意義地讓受訪者知道風險，確保他們想保持匿名時，真的能拿掉隱含的識別資訊？至少，要讓他們對重新識別的風險有實際的預期。</p></div>
+      <div class="value-card"><span class="tag">模糊的意圖</span><h4>護欄怎麼面對</h4><p>惡意的目標可以包裝成無害的任務，繞過現有的防護。模型與 agent 的安全護欄，要怎麼處理使用者意圖的模糊？</p></div>
+    </div>
+
+    <p>論文以一句呼籲收尾，作者在 PDF 裡設成粗體：在這些問題造成更多傷害、或變成常態之前，研究社群要承認它們，並且系統性地研究。</p>
+
+    <div class="pullquote">
+      遮掉名字只是起點；能上網的 agent，讓專案描述本身就認得出人。
+      <cite>整理自第 1、2、6 節</cite>
+    </div>
+
+    <dl class="faq">
+      <div><dt>受訪者不是已經同意公開了嗎？</dt><dd>論文轉述的回信說，受訪者同意公開原始逐字稿，也事先被建議想匿名就別分享識別資訊。作者的論點是，完整的同意流程沒有公開，腳本的說法容易讓人以為是匿名的，而研究專案的描述這類隱含的線索，受訪者未必認得出來。</dd></div>
+      <div><dt>論文公開了誰被認出來嗎？</dt><dd>沒有。作者刻意扣住可直接識別的資訊，也不公開工具、程式碼、程序細節與詳細的 prompt；重新識別的例子附在寄給 Anthropic 的信裡供驗證，論文本身不收錄。</dd></div>
+      <div><dt>這個攻擊要很懂技術嗎？</dt><dd>作者說不用：任何能用有網路搜尋的 LLM agent 的人，用少數幾句自然語言就能穩定做到；不寫程式的版本也一樣成功。用 API 做的實驗，每份不到 0.5 美元、約 4 分鐘。</dd></div>
+    </dl>
+  </div>
+</section>
+
+
+<section id="glossary" class="nocard glossary" data-toc="名詞速查">
+  <div class="wide">
+    <p class="eyebrow">Reference · 名詞速查</p>
+    <h2><span class="seg">二十個名詞，</span><span class="seg">看懂重新識別的風險</span></h2>
+    <p class="lede">依「資料與同意、攻擊的概念、結果、傷害與揭露」的順序排，解釋是整理者依論文的用法寫的。</p>
+    <dl class="glossary-grid">
+      <div class="term"><dt>Anthropic Interviewer</dt><span class="zh-name">AI 訪談工具</span><dd>用 AI 大規模進行質性訪談的工具，2025 年 12 月 4 日推出，同時公開 1,250 份訪談逐字稿。</dd></div>
+      <div class="term"><dt>Qualitative data</dt><span class="zh-name">質性資料</span><dd>訪談、開放式回答這類細節豐富的文字資料；作者說它的開放式細節常常就是準識別子。</dd></div>
+      <div class="term"><dt>Scientist subset</dt><span class="zh-name">科學家子集</span><dd>資料集裡 125 份科學家的訪談；本文只攻擊這一個子集。</dd></div>
+      <div class="term"><dt>Informed consent</dt><span class="zh-name">知情同意</span><dd>受訪者了解用途與風險後同意參加；本文爭的是受訪者同意時，知不知道可能被認出。</dd></div>
+      <div class="term"><dt>Anonymization</dt><span class="zh-name">匿名化</span><dd>釋出前拿掉能認出人的資訊；作者說過去的遮蔽做法已證明不足以匿名化。</dd></div>
+      <div class="term"><dt>Redaction</dt><span class="zh-name">遮蔽</span><dd>把特定細節塗掉或拿掉；論文轉述的回信把它定位成額外的客套，不是隱私保護。</dd></div>
+      <div class="term"><dt>Re-identification</dt><span class="zh-name">重新識別</span><dd>把拿掉名字的資料連回具體的人；本文的主題。</dd></div>
+      <div class="term"><dt>De-anonymization</dt><span class="zh-name">去匿名化</span><dd>和重新識別同義；論文標題的 deanonymizer，就是做這件事的工具。</dd></div>
+      <div class="term"><dt>Quasi-identifier</dt><span class="zh-name">準識別子</span><dd>單獨看不是名字、合起來能縮到少數人的資訊；作者說研究專案的描述就是一種。</dd></div>
+      <div class="term"><dt>Auxiliary data</dt><span class="zh-name">輔助資料</span><dd>攻擊者拿來比對的外部資料；本文假設是公開網路上的任何資訊。</dd></div>
+      <div class="term"><dt>Web-augmented LLM</dt><span class="zh-name">聯網 LLM</span><dd>能上網搜尋、擷取與摘要資料的 LLM 服務；作者說它把專家的比對壓成幾句話。</dd></div>
+      <div class="term"><dt>Agentic capabilities</dt><span class="zh-name">agent 能力</span><dd>使用工具、規劃與推理的能力；作者說它讓高層次的描述也足以做連結。</dd></div>
+      <div class="term"><dt>Confidence rating</dt><span class="zh-name">信心等級</span><dd>替每個候選出版品標的信心；本文以最高一級 very high 當門檻。</dd></div>
+      <div class="term"><dt>Manual verification</dt><span class="zh-name">人工核對</span><dd>作者逐件讀逐字稿與原始論文，確認模型標為最高信心的 7 件裡有 6 件成立。</dd></div>
+      <div class="term"><dt>No-code variant</dt><span class="zh-name">不寫程式的版本</span><dd>直接對有網路搜尋、面向一般使用者的 LLM 服務下提示；作者說同樣成功。</dd></div>
+      <div class="term"><dt>Dual-use</dt><span class="zh-name">兩用</span><dd>同一種工具既能做正當的事，也能拿來傷害人；作者說資訊檢索工具就是。</dd></div>
+      <div class="term"><dt>Safeguards</dt><span class="zh-name">防護、護欄</span><dd>模型與 agent 內建的安全限制；作者說把任務拆成看似無害的小任務就能繞過。</dd></div>
+      <div class="term"><dt>Thwarted expectations</dt><span class="zh-name">期待落空</span><dd>受訪者的預期被打破；作者引 Citron 與 Solove，說它是隱私傷害的主要類別之一。</dd></div>
+      <div class="term"><dt>Responsible disclosure</dt><span class="zh-name">負責任揭露</span><dd>先通知負責的一方，再決定公開什麼；作者在釋出隔天就通報。</dd></div>
+      <div class="term"><dt>Marginal risk</dt><span class="zh-name">邊際風險</span><dd>公開一項研究額外增加的風險；作者判斷本文的邊際風險有限。</dd></div>
+    </dl>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>資料來源：arXiv，〈Agentic LLMs as Powerful Deanonymizers: Re-identification of Participants in the Anthropic Interviewer Dataset〉，Tianshi Li（Northeastern University），2026-01-09（v1）。頁面上的數字依 arXiv v1；論文描述的是 2026 年 1 月 8 日為止的狀況。<br><a href="https://arxiv.org/abs/2601.05918">arxiv.org/abs/2601.05918</a></p>
+    <p class="credit">整理於 2026-09-29</p>
+    <p class="disclaimer">本頁為學習用的重述與整理，不是原文逐句翻譯。觀點與著作權屬於原作者。程式片段為教學用精簡版，實際用法請以原文與官方文件為準。</p>
+  </div>
+</footer>
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="圖卡大圖"><button type="button" class="close">關閉（Esc）</button><div class="frame"></div></div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fitFrames() {
+    var frames = document.querySelectorAll('.cardband .frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  var KEY = 'rearranged-article-mode';
+  function setMode(m, save) {
+    document.body.classList.toggle('mode-cards', m === 'cards');
+    var btns = document.querySelectorAll('.modebar button[data-mode]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-mode') === m ? 'true' : 'false');
+    }
+    if (save) { try { localStorage.setItem(KEY, m); } catch (e) {} }
+    fitFrames();
+  }
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  setMode(saved === 'cards' ? 'cards' : 'full', false);
+
+  var box = document.getElementById('lightbox');
+  var boxFrame = box.querySelector('.frame');
+  function fitLightbox() {
+    if (!box.classList.contains('open')) return;
+    var root = boxFrame.firstElementChild;
+    if (!root) return;
+    var s = Math.min(1, (window.innerWidth - 48) / W, (window.innerHeight - 48) / H);
+    root.style.transform = 'scale(' + s + ')';
+    boxFrame.style.width = Math.round(W * s) + 'px';
+    boxFrame.style.height = Math.round(H * s) + 'px';
+  }
+  function openLightbox(num) {
+    var bandEl = document.getElementById('card-' + num);
+    if (!bandEl) return;
+    var root = bandEl.querySelector('.frame > div');
+    boxFrame.innerHTML = '';
+    var clone = root.cloneNode(true);
+    clone.style.transform = '';
+    boxFrame.appendChild(clone);
+    box.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    fitLightbox();
+  }
+  function closeLightbox() {
+    box.classList.remove('open');
+    boxFrame.innerHTML = '';
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var b = t.closest('.modebar button[data-mode]');
+    if (b) { setMode(b.getAttribute('data-mode'), true); return; }
+    var z = t.closest('.cardlabel .zoom');
+    if (z) { openLightbox(z.getAttribute('data-card')); return; }
+    if (t.closest('.lightbox') && !t.closest('.lightbox .frame')) { closeLightbox(); }
+  });
+  document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') closeLightbox(); });
+  window.addEventListener('resize', function () { fitFrames(); fitLightbox(); });
+  window.addEventListener('load', fitFrames);
+  fitFrames();
+})();
+</script>
+</body>
+</html>
