@@ -1,0 +1,1480 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Effective Harnesses for Long-Running Agents</title>
+<meta name="description" content="Anthropic 2025 年 11 月的工程文章：agent 要跨好幾個 context window 做完一個大專案，每個新 session 卻都不記得前一個做了什麼。作者用兩種 agent 解決：第一個 session 的初始化 agent 搭好功能清單、進度檔、init.sh 與 git，之後每個 session 的 coding agent 一次只做一個功能、像使用者一樣測過、收尾留下 commit 與進度。從兩種失敗、功能清單、端對端測試、每個 session 的開場，到四種失敗的分工表與未來方向，每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="coding-agents, agent-harness, long-running-agents, anthropic, cs329z">
+<meta name="source" content="https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents">
+<meta name="date" content="2026-09-29">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Theme: tech-modern 變體「測試報告語意色」
+   藍 = 主色 / 綠 = pass / 琥珀 = 注意 / 紅 = fail
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --paper: #ffffff;
+  --paper-soft: #f3f5f8;
+  --paper-shadow: #dde2e8;
+  --ink: #121821;
+  --ink-soft: #3b4450;
+  --ink-mute: #6b7481;
+  --primary: #1e56a8;
+  --primary-deep: #143a72;
+  --primary-bg: #e6eef9;
+  --accent: #157a52;
+  --accent-deep: #0d5236;
+  --accent-bg: #e1f3e9;
+  --warm: #b8620e;
+  --warm-deep: #7d4108;
+  --warm-bg: #fbeddc;
+  --danger: #b83228;
+  --danger-bg: #f9e3e0;
+  --stone: #5a6370;
+  --stone-bg: #eceff3;
+  --code-bg: #0f1720;
+  --code-ink: #e6edf3;
+  --code-mute: #8b98a8;
+  --code-blue: #7cc4ff;
+  --code-green: #7ee2b8;
+  --code-amber: #ffc46b;
+
+  --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-cjk: 'Noto Sans TC', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --content-width: 780px;
+  --wide-width: 1100px;
+  --gutter: 24px;
+}
+
+/* ---------- reset & 排版 ---------- */
+* { box-sizing: border-box; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+body {
+  margin: 0; padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-cjk);
+  font-size: 18px;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: var(--content-width); margin: 0 auto; padding: 0 var(--gutter); }
+.wide { max-width: var(--wide-width); margin: 0 auto; padding: 0 var(--gutter); }
+section { padding-block: 64px; }
+section + section { border-top: 1px solid var(--paper-shadow); }
+
+h1, h2, h3, h4 { font-family: var(--font-cjk); font-weight: 700; text-wrap: balance; }
+h1 { font-size: 56px; line-height: 1.14; margin: 0 0 24px; font-weight: 800; }
+h2 { font-size: 36px; line-height: 1.25; margin: 0 0 18px; letter-spacing: -0.01em; }
+h2 .seg { display: inline-block; }
+h3 { font-size: 25px; line-height: 1.35; margin: 44px 0 14px; }
+h4 { font-size: 20px; line-height: 1.4; margin: 26px 0 10px; }
+p { margin: 0 0 18px; }
+ul, ol { padding-left: 26px; margin: 0 0 18px; }
+li { margin-bottom: 8px; }
+em { font-style: normal; color: var(--primary-deep); font-weight: 600; }
+strong { font-weight: 700; }
+a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+code {
+  font-family: var(--font-mono); font-size: 0.86em;
+  background: var(--stone-bg); color: var(--primary-deep);
+  padding: 2px 6px; border-radius: 4px;
+}
+.mono { font-family: var(--font-mono); }
+
+/* ---------- Hero ---------- */
+.hero {
+  padding-block: 84px 60px;
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-soft) 100%);
+  border-bottom: 2px solid var(--primary-deep);
+  position: relative;
+}
+.hero::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: linear-gradient(90deg,
+    var(--primary) 0%, var(--primary) 25%,
+    var(--accent) 25%, var(--accent) 50%,
+    var(--warm) 50%, var(--warm) 75%,
+    var(--danger) 75%, var(--danger) 100%);
+}
+.hero-meta {
+  display: flex; flex-wrap: wrap; gap: 10px 22px;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  margin-bottom: 32px;
+}
+.hero-meta span::before { content: "—"; margin-right: 10px; color: var(--paper-shadow); }
+.hero-meta span:first-child::before { content: ""; margin: 0; }
+.hero h1 { font-size: 60px; font-weight: 800; word-break: keep-all; }
+.hero h1 .accent {
+  display: block; margin-top: 12px;
+  font-size: 0.55em; font-weight: 600; line-height: 1.3;
+  color: var(--primary-deep);
+}
+.hero .lede { font-size: 22px; max-width: 720px; }
+.hero-keystat {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 28px; margin: 44px 0 0; padding-top: 34px;
+  border-top: 1px dashed var(--paper-shadow);
+}
+.hero-keystat dt {
+  font-family: var(--font-sans);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--ink-mute); margin-bottom: 6px;
+}
+.hero-keystat dd {
+  margin: 0; font-family: var(--font-mono);
+  font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1;
+}
+.hero-keystat dd small { font-family: var(--font-cjk); font-size: 14px; color: var(--ink-mute); font-weight: 400; margin-left: 6px; }
+
+/* ---------- Chapter / lede / eyebrow ---------- */
+.chapter {
+  font-family: var(--font-mono);
+  font-size: 12.5px; color: var(--primary);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 0 0 10px;
+}
+.chapter::before { content: "§ "; color: var(--paper-shadow); margin-right: 4px; }
+.lede {
+  font-size: 22px; line-height: 1.6; color: var(--ink-soft);
+  margin: 0 0 28px; font-weight: 400;
+}
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--primary); margin: 0 0 14px;
+}
+
+/* ---------- Pull quote ---------- */
+.pullquote {
+  margin: 48px -16px; padding: 32px 40px;
+  font-family: var(--font-cjk);
+  font-size: 27px; line-height: 1.5; font-weight: 600;
+  color: var(--primary-deep);
+  border-left: 5px solid var(--primary);
+  background: linear-gradient(90deg, var(--primary-bg) 0%, transparent 100%);
+}
+.pullquote.bronze {
+  color: var(--accent-deep); border-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-bg) 0%, transparent 100%);
+}
+.pullquote.terra {
+  color: var(--warm-deep); border-color: var(--warm);
+  background: linear-gradient(90deg, var(--warm-bg) 0%, transparent 100%);
+}
+.pullquote cite {
+  display: block; margin-top: 16px; font-style: normal; font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  letter-spacing: 0.06em;
+}
+.pullquote cite::before { content: "— "; }
+
+/* ---------- English quote ---------- */
+.quote-en {
+  margin: 28px 0;
+  font-family: var(--font-sans); font-style: italic;
+  font-size: 21px; line-height: 1.5; color: var(--ink);
+  padding-left: 20px; border-left: 3px solid var(--accent);
+}
+.quote-en .zh {
+  display: block; margin-top: 10px;
+  font-family: var(--font-cjk); font-style: normal;
+  font-size: 15px; color: var(--ink-soft); line-height: 1.6;
+}
+
+/* ---------- Story ---------- */
+.story {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 14px;
+  padding: 38px 44px; margin: 48px 0;
+  position: relative;
+}
+.story::before {
+  content: "❝"; position: absolute; top: -6px; left: 24px;
+  font-size: 72px; color: var(--warm); line-height: 1;
+  font-family: var(--font-sans);
+}
+.story .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.18em;
+  color: var(--warm); margin-bottom: 10px; padding-left: 42px;
+}
+.story h4 { margin: 0 0 16px; font-size: 22px; color: var(--warm-deep); }
+.story p { margin-bottom: 14px; font-size: 17px; line-height: 1.7; }
+.story p:last-child { margin-bottom: 0; }
+
+/* ---------- Explain ---------- */
+.explain {
+  background: var(--primary-bg);
+  border-left: 4px solid var(--primary);
+  border-radius: 4px;
+  padding: 26px 30px; margin: 36px 0;
+  font-family: var(--font-cjk); position: relative;
+}
+.explain.bronze { background: var(--accent-bg); border-color: var(--accent); }
+.explain.terra { background: var(--warm-bg); border-color: var(--warm); }
+.explain.stone { background: var(--stone-bg); border-color: var(--stone); }
+.explain .label {
+  position: absolute; top: -12px; left: 16px;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.15em; padding: 4px 12px;
+  border-radius: 3px; text-transform: uppercase;
+}
+.explain.bronze .label { background: var(--accent); }
+.explain.terra .label { background: var(--warm); }
+.explain.stone .label { background: var(--stone); }
+.explain h4 { margin: 4px 0 12px; font-size: 19px; color: var(--primary-deep); }
+.explain.bronze h4 { color: var(--accent-deep); }
+.explain.terra h4 { color: var(--warm-deep); }
+.explain.stone h4 { color: var(--ink); }
+.explain p { font-size: 16.5px; }
+.explain p:last-child { margin-bottom: 0; }
+.explain ul, .explain ol { margin: 8px 0 0; padding-left: 22px; }
+.explain li { margin-bottom: 6px; font-size: 16px; }
+.explain code { background: rgba(255,255,255,0.75); }
+
+/* ---------- Stat grid ---------- */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.stat-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 28px 24px; text-align: center;
+  border-top: 4px solid var(--primary);
+}
+.stat-card.bronze { border-color: var(--accent); }
+.stat-card.terra { border-color: var(--warm); }
+.stat-card.danger { border-color: var(--danger); }
+.stat-card .big {
+  font-family: var(--font-mono);
+  font-size: 46px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1; margin-bottom: 10px;
+}
+.stat-card.bronze .big { color: var(--accent-deep); }
+.stat-card.terra .big { color: var(--warm-deep); }
+.stat-card.danger .big { color: var(--danger); }
+.stat-card .big small { font-family: var(--font-cjk); font-size: 16px; opacity: 0.75; margin-left: 4px; font-weight: 500; }
+.stat-card .label {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.stat-card .note { margin-top: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.55; }
+
+/* ---------- Compare table ---------- */
+.table-scroll { overflow-x: auto; margin: 36px 0; }
+.compare {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-cjk); font-size: 15.5px;
+  background: var(--paper-soft);
+  border-radius: 10px; overflow: hidden;
+  min-width: 560px;
+}
+.compare th, .compare td {
+  padding: 15px 18px; text-align: left;
+  border-bottom: 1px solid var(--paper-shadow);
+  vertical-align: top; line-height: 1.6;
+}
+.compare th {
+  background: var(--primary-deep); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+}
+.compare tr:last-child td { border-bottom: none; }
+.compare td:first-child { font-weight: 700; color: var(--primary-deep); width: 24%; }
+.compare .id { font-family: var(--font-mono); font-size: 13px; display: block; color: var(--ink-mute); font-weight: 500; margin-bottom: 2px; }
+.compare .yes { color: var(--accent-deep); font-weight: 700; }
+.compare .no { color: var(--danger); font-weight: 700; }
+
+/* ---------- Value cards ---------- */
+.values {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.value-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 26px 24px;
+  border-top: 5px solid var(--primary);
+}
+.value-card:nth-child(2) { border-top-color: var(--accent); }
+.value-card:nth-child(3) { border-top-color: var(--warm); }
+.value-card:nth-child(4) { border-top-color: var(--primary-deep); }
+.value-card:nth-child(5) { border-top-color: var(--stone); }
+.value-card .num {
+  font-family: var(--font-mono);
+  font-size: 38px; font-weight: 700;
+  color: var(--primary); line-height: 1; margin-bottom: 12px;
+}
+.value-card:nth-child(2) .num { color: var(--accent); }
+.value-card:nth-child(3) .num { color: var(--warm); }
+.value-card:nth-child(4) .num { color: var(--primary-deep); }
+.value-card:nth-child(5) .num { color: var(--stone); }
+.value-card .tag {
+  display: inline-block; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--primary); margin-bottom: 10px;
+}
+.value-card:nth-child(2) .tag { color: var(--accent); }
+.value-card:nth-child(3) .tag { color: var(--warm); }
+.value-card:nth-child(4) .tag { color: var(--primary-deep); }
+.value-card h4 { margin: 0 0 10px; font-size: 19px; line-height: 1.4; }
+.value-card p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin: 0; }
+
+/* ---------- 擴充檢查卡（附成本標籤） ---------- */
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px; margin: 40px 0;
+}
+.card {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 12px;
+  padding: 24px 24px 22px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.card .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card h4 { margin: 0; font-size: 18.5px; line-height: 1.4; }
+.card p { margin: 0; font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); }
+.card .signal { font-family: var(--font-mono); font-size: 12.5px; color: var(--primary-deep); background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 6px; padding: 6px 10px; margin-top: 4px; overflow-x: auto; white-space: nowrap; }
+.pill {
+  flex: none; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px;
+}
+.pill.fast { background: var(--accent-bg); color: var(--accent-deep); }
+.pill.mid { background: var(--warm-bg); color: var(--warm-deep); }
+.pill.slow { background: var(--danger-bg); color: var(--danger); }
+
+/* ---------- Thought ---------- */
+.thought {
+  background: var(--accent-bg);
+  border-left: 4px solid var(--accent);
+  padding: 26px 30px; margin: 40px 0;
+  border-radius: 4px; position: relative;
+}
+.thought .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--accent-deep); margin-bottom: 10px;
+}
+.thought h4 { font-size: 19px; margin: 0 0 14px; color: var(--accent-deep); line-height: 1.45; }
+.thought p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin-bottom: 8px; }
+.thought .hint {
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px dashed rgba(13, 82, 54, 0.3);
+  font-size: 14px; color: var(--accent-deep);
+}
+.thought .hint::before { content: "建議方向："; font-weight: 700; }
+
+/* ---------- Code block ---------- */
+.codeblock { margin: 30px 0; }
+.codeblock .file {
+  display: inline-block; font-family: var(--font-mono);
+  font-size: 12px; color: var(--ink-mute);
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow); border-bottom: none;
+  border-radius: 8px 8px 0 0; padding: 7px 14px;
+}
+pre.code {
+  margin: 0; background: var(--code-bg); color: var(--code-ink);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65;
+  padding: 22px 24px; border-radius: 0 10px 10px 10px;
+  overflow-x: auto; tab-size: 2; white-space: pre;
+}
+pre.code.solo { border-radius: 10px; }
+pre.code .c { color: var(--code-mute); }
+pre.code .k { color: var(--code-blue); }
+pre.code .s { color: var(--code-green); }
+pre.code .a { color: var(--code-amber); font-weight: 700; }
+
+/* ---------- Flow（eval 迴圈圖） ---------- */
+.flow { display: flex; align-items: stretch; margin: 40px 0; }
+.flow-step {
+  flex: 1 1 0; min-width: 0;
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow);
+  border-radius: 10px; padding: 18px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.flow-step .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--primary); letter-spacing: 0.1em; }
+.flow-step strong { font-size: 17px; line-height: 1.3; }
+.flow-step span.d { font-size: 14px; line-height: 1.55; color: var(--ink-soft); }
+.flow-step.score { border-color: var(--accent); background: var(--accent-bg); }
+.flow-step.score .k { color: var(--accent-deep); }
+.flow-arrow { flex: none; width: 30px; position: relative; }
+.flow-arrow::before {
+  content: ""; position: absolute; top: 50%; left: 2px; right: 2px; height: 2px;
+  background: var(--primary); transform: translateY(-50%);
+}
+.flow-arrow::after {
+  content: ""; position: absolute; top: 50%; right: 4px; width: 9px; height: 9px;
+  border-top: 2px solid var(--primary); border-right: 2px solid var(--primary);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+/* ---------- Cascade（編號步驟） ---------- */
+.cascade { display: flex; flex-direction: column; gap: 14px; margin: 32px 0; }
+.cascade-step {
+  display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px;
+}
+.cascade-step .n {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-mono); font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.cascade-step .t { font-size: 16.5px; line-height: 1.65; }
+.cascade-step .t strong { display: block; margin-bottom: 2px; }
+
+/* ---------- Checklist ---------- */
+.checklist { list-style: none; padding: 0; margin: 32px 0; display: flex; flex-direction: column; gap: 12px; }
+.checklist li {
+  display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px; margin: 0;
+  font-size: 16.5px; line-height: 1.65;
+}
+.checklist .box {
+  width: 24px; height: 24px; margin-top: 3px;
+  border: 2px solid var(--accent); border-radius: 6px; background: var(--paper);
+}
+.checklist strong { display: block; }
+.checklist small { display: block; color: var(--ink-soft); font-size: 15px; }
+
+/* ---------- Glossary ---------- */
+.glossary { background: var(--primary-deep); color: var(--paper); padding-block: 64px; }
+.glossary h2 { color: var(--paper); margin-top: 0; }
+.glossary .eyebrow { color: var(--accent-bg); }
+.glossary .lede { color: var(--paper); opacity: 0.8; }
+.glossary-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 26px; margin: 42px 0 0;
+}
+.term { border-top: 2px solid var(--accent); padding-top: 16px; }
+.term:nth-child(3n+2) { border-color: var(--warm); }
+.term:nth-child(3n+3) { border-color: var(--paper); }
+.term dt {
+  font-family: var(--font-mono);
+  font-size: 14px; font-weight: 700;
+  color: var(--accent-bg); letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+.term .zh-name { font-family: var(--font-cjk); font-size: 16px; font-weight: 600; color: var(--paper); margin-bottom: 8px; display: block; }
+.term dd { margin: 0; font-family: var(--font-cjk); font-size: 14.5px; line-height: 1.65; color: rgba(255, 255, 255, 0.8); }
+
+/* ---------- TOC ---------- */
+.toc {
+  position: fixed; right: 24px; top: 50%; transform: translateY(-50%); z-index: 10;
+  font-family: var(--font-sans); font-size: 12px;
+  background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 10px;
+  padding: 18px 20px; max-width: 236px;
+  box-shadow: 0 4px 18px rgba(18, 24, 33, 0.08);
+}
+.toc h5 { margin: 0 0 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-mute); }
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc -1; }
+.toc li { margin-bottom: 6px; counter-increment: toc; font-size: 12px; line-height: 1.45; display: flex; gap: 8px; }
+.toc li::before { content: counter(toc, decimal-leading-zero); font-family: var(--font-mono); color: var(--ink-mute); font-size: 10.5px; padding-top: 2px; }
+.toc a { color: var(--ink-soft); text-decoration: none; }
+.toc a:hover { color: var(--primary); }
+@media (max-width: 1340px) { .toc { display: none; } }
+
+/* ---------- Footer ---------- */
+footer {
+  padding-block: 48px 64px;
+  background: var(--paper-soft);
+  text-align: center;
+  font-family: var(--font-cjk);
+  font-size: 13.5px; color: var(--ink-mute);
+}
+footer p { margin: 0 0 8px; }
+footer .credit { font-family: var(--font-sans); }
+footer .disclaimer { margin-top: 14px; font-size: 12px; opacity: 0.75; max-width: 640px; margin-inline: auto; }
+
+/* ---------- 響應式 ---------- */
+@media (max-width: 768px) {
+  body { font-size: 17px; }
+  .hero { padding-block: 56px 42px; }
+  .hero h1 { font-size: 36px; }
+  .hero .lede { font-size: 18px; }
+  h2 { font-size: 27px; }
+  h3 { font-size: 22px; }
+  section { padding-block: 46px; }
+  .lede { font-size: 19px; }
+  .pullquote { font-size: 21px; margin: 34px 0; padding: 24px; }
+  .story { padding: 30px 24px; }
+  .stat-card .big { font-size: 36px; }
+  .flow { flex-direction: column; }
+  .flow-arrow { width: auto; height: 30px; }
+  .flow-arrow::before { top: 2px; bottom: 2px; left: 50%; right: auto; width: 2px; height: auto; transform: translateX(-50%); }
+  .flow-arrow::after { top: auto; bottom: 4px; left: 50%; right: auto; transform: translateX(-50%) rotate(135deg); }
+  .compare td:first-child { width: auto; }
+}
+
+/* ---------- 列印 ---------- */
+@media print {
+  .toc { display: none; }
+  body { font-size: 12pt; }
+  .hero, .glossary {
+    color: var(--ink) !important; background: white !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .glossary h2, .glossary .term dt, .glossary .lede, .glossary .term .zh-name { color: var(--ink) !important; }
+  .glossary .term dd { color: var(--ink-soft) !important; }
+  pre.code { background: #f3f5f8 !important; color: #121821 !important; border: 1px solid #ccd; white-space: pre-wrap; }
+  pre.code .c, pre.code .k, pre.code .s, pre.code .a { color: inherit !important; }
+  section { page-break-inside: avoid; }
+}
+
+/* ---------- 整合版：模式列、圖卡帶、燈箱 ---------- */
+.modebar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; padding: 10px var(--gutter); background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--paper-shadow); font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.modebar .brand { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.modebar .left { display: flex; align-items: center; gap: 14px; }
+.modebar .homelink { font-size: 12px; font-weight: 600; color: var(--ink-mute); text-decoration: none; }
+.modebar .homelink:hover { color: var(--primary); text-decoration: underline; }
+.modebar .switch { display: flex; gap: 6px; }
+.modebar button { font: inherit; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.modebar button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+.modebar button:focus-visible, .cardlabel .zoom:focus-visible, .lightbox .close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.modebar .canvaslink { font-size: 12px; color: var(--ink-mute); }
+.cardband { max-width: 1600px; margin: 4px auto 40px; padding: 0 var(--gutter); }
+.cardlabel { display: flex; align-items: baseline; gap: 14px; padding: 0 2px 8px; font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.cardlabel .n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--warm); }
+.cardlabel .zoom { margin-left: auto; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--paper-shadow); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; font-size: 16px; color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(18, 24, 33, 0.86); display: none; align-items: center; justify-content: center; padding: 24px; }
+.lightbox.open { display: flex; }
+.lightbox .frame { border: none; border-radius: 8px; max-width: none; width: auto; flex: none; }
+.lightbox .close { position: absolute; top: 14px; right: 18px; font: inherit; font-family: var(--font-sans); font-size: 13px; color: #FFFFFF; background: transparent; border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.faq { margin: 36px 0 8px; padding: 0; }
+.faq > div { padding: 18px 0; border-top: 1px solid var(--paper-shadow); }
+.faq > div:last-child { border-bottom: 1px solid var(--paper-shadow); }
+.faq dt { margin: 0 0 6px; font-weight: 700; font-size: 17px; color: var(--ink); }
+.faq dt::before { content: "問"; display: inline-block; margin-right: 10px; padding: 1px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; color: #FFFFFF; background: var(--primary); vertical-align: 2px; }
+.faq dd { margin: 0; font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+body.mode-cards section .prose { display: none; }
+body.mode-cards section.nocard { display: none; }
+body.mode-cards section { padding-block: 44px; }
+body.mode-cards .toc li.nocard { display: none; }
+@media (max-width: 768px) { .cardband { margin-bottom: 32px; } .modebar { font-size: 12px; } }
+@media print {
+  .modebar, .lightbox, .cardlabel .zoom { display: none !important; }
+  body.mode-cards section .prose { display: block !important; }
+  body.mode-cards section.nocard { display: block !important; }
+  section { page-break-inside: auto; }
+  .cardband, .story, .explain, .thought, .stat-grid, .values, .cards, .table-scroll { page-break-inside: avoid; }
+  .frame { height: auto !important; border: none; border-radius: 0; }
+  .frame > div { transform: none !important; zoom: 0.44; }
+}
+
+</style>
+</head>
+<body>
+<div class="modebar">
+  <div class="left"><a class="homelink" href="../../">← 首頁</a><span class="brand">Agent Harnesses · 圖卡 + 教材</span></div>
+  <div class="switch" role="group" aria-label="閱讀模式">
+    <button type="button" data-mode="full" aria-pressed="true">圖卡＋詳解</button>
+    <button type="button" data-mode="cards" aria-pressed="false">只看圖卡</button>
+  </div>
+  <a class="canvaslink" href="cards.html">圖卡連續閱讀版</a>
+</div>
+<nav class="toc" aria-label="目錄">
+  <h5>目錄</h5>
+  <ol>
+    <li class="nocard"><a href="#prologue">為什麼讀這篇</a></li>
+    <li><a href="#long-running-problem">光有壓縮不夠</a></li>
+    <li><a href="#two-agents">兩種 agent</a></li>
+    <li><a href="#feature-list">功能清單</a></li>
+    <li><a href="#incremental">一次一個功能</a></li>
+    <li><a href="#testing">端對端測試</a></li>
+    <li><a href="#getting-up-to-speed">每個 session 的開場</a></li>
+    <li><a href="#failure-modes">四種失敗與分工</a></li>
+    <li class="nocard"><a href="#future-work">未來方向</a></li>
+    <li class="nocard"><a href="#practice">動手做</a></li>
+    <li class="nocard"><a href="#glossary">名詞速查</a></li>
+  </ol>
+</nav>
+<header class="hero">
+  <div class="container">
+    <div class="hero-meta">
+      <span>Anthropic Engineering · 2025-11-26</span>
+      <span>工程實務指南</span>
+      <span>作者 Justin Young</span>
+    </div>
+    <p class="eyebrow">Agent Harnesses · 圖卡＋教材整合版</p>
+    <h1>Effective Harnesses for <span style="white-space:nowrap">Long-Running</span> Agents<span class="accent">每個新的工作階段都從零開始 交接要寫在檔案裡</span></h1>
+    <p class="lede">一個大專案，agent 要跨好幾個 context window 才做得完，每個新的 session 卻都不記得前一個做了什麼。Anthropic 這篇工程文章分享他們讓 Claude 長時間寫程式的做法：第一個 session 的初始化 agent 搭好功能清單、進度檔、init.sh 與 git，之後每個 session 的 coding agent 一次只做一個功能，像使用者一樣測過，收尾留下 commit 與進度。本頁分十一章重述。每章開頭先放一張圖解卡講重點，往下是詳細作法；想速讀就切到「只看圖卡」。</p>
+    <dl class="hero-keystat">
+      <div><dt>功能清單的項目</dt><dd>200+<small>項</small></dd></div>
+      <div><dt>每個 session 只做</dt><dd>1<small>個功能</small></dd></div>
+      <div><dt>表格整理的失敗</dt><dd>4<small>種</small></dd></div>
+      <div><dt>agent 的角色</dt><dd>2<small>種</small></dd></div>
+    </dl>
+  </div>
+</header>
+
+<section id="prologue" data-toc="為什麼讀這篇" class="nocard">
+  <div class="container">
+    <p class="chapter">Prologue · 整理者的引言</p>
+    <h2><span class="seg">長任務的難處，</span><span class="seg">在 session 之間的交接</span></h2>
+    <p class="lede">一個 context window 裝不下整個專案，agent 只能分好幾個 session 做，而每個新的 session 都不記得上一個。這篇講的是怎麼把交接做好，讓工作接得下去。</p>
+    <p>這篇是 Stanford CS 329Z 第 9 週的選讀，屬於 Coding Agents &amp; Proactive Agents 分區的〈Coding &amp; Software Agents〉那一講。那一講的題目有：coding agent 從頭到尾怎麼運作；<span style="white-space:nowrap">SWE-agent</span>、Claude Code、OpenHands 的架構；scaffold 是一種設計決策；<span style="white-space:nowrap">SWE-bench</span> 與「<span style="white-space:nowrap">4-tuple</span> framework」的實戰；以及 agent 時代軟體開發的未來。同一講的必讀是 Yang 等人的〈<span style="white-space:nowrap">SWE-agent</span>: <span style="white-space:nowrap">Agent-Computer</span> Interfaces Enable Automated Software Engineering〉與 Wang 等人的〈OpenHands: An Open Platform for AI Software Developers as Generalist Agents〉；另兩篇選讀是 Anthropic 的〈Claude Code: Best Practices for Agentic Coding〉，以及 Jimenez 等人的〈<span style="white-space:nowrap">SWE-bench</span>: Can Language Models Resolve <span style="white-space:nowrap">Real-World</span> GitHub Issues?〉。</p>
+    <p>整理者把講題和原文對了一下。「scaffold 是設計決策」這一題，這篇給了一個具體的例子：它沒有談換模型，改的是模型外面那一層，也就是兩份不同的開場提示、初始化 agent 建好的檔案，以及測試用的瀏覽器工具（本頁第 2 到 6 章）。原文把這一層叫 harness，只在一處把初始化 agent 搭好的環境稱作 scaffolding。「coding agent 從頭到尾怎麼運作」對應第 6 章每個 session 的開場與第 4 章的收尾；「軟體開發的未來」對應第 8 章作者留下的開放問題。SWE-agent、OpenHands、Claude Code 的架構，以及 SWE-bench 與 <span style="white-space:nowrap">4-tuple</span> framework，這篇都沒有談；<span style="white-space:nowrap">4-tuple</span> framework 是課程的用語，原文沒有出現，要看同一講的其他讀物。</p>
+    <p>原文是 Anthropic 工程部落格 2025 年 11 月 26 日的文章，文末寫明由 Justin Young 執筆。它分享的是 Anthropic 內部的實驗，文中關於 Claude、Claude Agent SDK、Opus 4.5 這些自家產品與模型的說法，以及實驗裡的觀察，本頁都寫成「作者說」；產品名照原文，Opus 4.5 是寫作當時的模型。原文附的程式範例放在另一個 quickstart 專案，本頁沒有引用；頁面上的程式片段都是依正文改寫的教學用精簡版。</p>
+    <p>原文分四大段：先講長時程 agent 的問題與兩段式的解法，再細講環境裡的三樣東西（功能清單、漸進推進、測試），接著講每個 session 怎麼快速進入狀況，最後是一張四種失敗的整理表與未來方向。本頁照這個順序走，把第一大段拆成「失敗」與「解法」兩章，表格獨立成第 7 章。</p>
+    <p>整理者的補充：本站的〈<a href="../context-engineering/">Effective context engineering for AI agents</a>〉談 compaction 與結構化筆記這類長時程任務的做法，〈<a href="../effective-agents/">Building effective agents</a>〉談 agent 的基本模式，〈<a href="../demystifying-agent-evals/">Demystifying evals for AI agents</a>〉談怎麼評估 agent，Letta 的〈<a href="../agent-memory/">Agent Memory: How to Build Agents That Learn and Remember</a>〉談 agent 的記憶；本頁不用它們的內容擴寫。</p>
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>先把六個名詞對齊</h4>
+      <ul>
+        <li><strong>Context window</strong>：模型一次看得到的內容上限。原文說大部分複雜的專案，沒辦法在一個視窗裡做完。</li>
+        <li><strong>Session</strong>：agent 的一段工作，從一個新的 context window 開始；新的 session 不記得前一個發生過什麼。</li>
+        <li><strong>Compaction（壓縮）</strong>：一種 context 管理的能力，讓 agent 做一件事時不會把 context window 用完。第 1 章會講它為什麼不夠。</li>
+        <li><strong>Agent harness</strong>：包在模型外面、讓它能當 agent 運作的那一層系統。原文說 Claude Agent SDK 是一個通用的 agent harness。</li>
+        <li><strong>初始化 agent 與 coding agent</strong>：原文的兩種 agent。前者只在第一個 session 搭環境，後者在之後每個 session 寫程式。</li>
+        <li><strong>git commit</strong>：把程式碼目前的樣子存成一個版本，附一段訊息說明改了什麼；之後可以退回任何一個存過的版本。</li>
+      </ul>
+    </div>
+    <div class="pullquote">
+      新的 session 不記得過去，所以過去要寫在它讀得到的地方。
+      <cite>序章核心觀念</cite>
+    </div>
+  </div>
+</section>
+
+<section id="long-running-problem" data-toc="光有壓縮不夠">
+  <div class="container head">
+    <p class="chapter">Chapter 01 · Introduction · The <span style="white-space:nowrap">long-running</span> agent problem</p>
+    <h2><span class="seg">光有 compaction，</span><span class="seg">長任務還是會失敗</span></h2>
+    <p class="lede">Claude Agent SDK 有 compaction，照理說能一直做下去。作者的實驗是另一回事：只給一句高階的 prompt，連 Opus 4.5 都做不出上線品質的 web app，失敗的樣子有兩種。</p>
+    
+  </div>
+  <div class="cardband" id="card-02"><div class="cardlabel"><span class="n">圖卡 02 / 08</span><span class="t">兩種失敗：做太多、太早收工</span><button type="button" class="zoom" data-card="02">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">壓縮留不住工作狀態：一次做太多，或太早收工</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">Opus 4.5 在 Claude Agent SDK 上跨好幾個 context window 迴圈地跑，只拿到一句高階 prompt（做一個 claude.ai 的複製品），做不出上線品質的 web app；作者看到兩種失敗</div>
+
+  <div style="position:absolute; left:100px; top:170px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0; letter-spacing:0.1em;">CONTEXT WINDOWS &#183; SESSION 1 &#8594; N</div>
+  <div style="position:absolute; left:180px; top:240px; width:378px; height:60px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">Session 1</div>
+  <div style="position:absolute; left:562px; top:240px; width:374px; height:60px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">Session 2</div>
+  <div style="position:absolute; left:940px; top:240px; width:376px; height:60px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#4B5866;">Session 3 &#8230;</div>
+  <div style="position:absolute; left:1320px; top:240px; width:180px; height:60px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">Session N</div>
+
+  <div style="position:absolute; left:60px; top:342px; width:240px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">想一次做完整個 app</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center; line-height:1.5;">只拿到一句高階 prompt，<br>想一口氣把 app 做出來</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">常在實作中途用完 context</div>
+  </div>
+  <div style="position:absolute; left:442px; top:342px; width:240px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">接手做一半的功能</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center; line-height:1.5;">沒有紀錄，只能先猜<br>上一輪做了什麼</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">還要花時間讓 app 重新能跑</div>
+  </div>
+  <div style="position:absolute; left:820px; top:342px; width:240px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">功能陸續做出來</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center; line-height:1.5;">有些功能已經做好，<br>專案走到後期</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">中間的 session</div>
+  </div>
+  <div style="position:absolute; left:1200px; top:342px; width:240px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">看到進度，就宣布完成</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center; line-height:1.5;">後來的 agent 看了看，<br>發現已經有進度</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">就說整個工作做完了</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:470px; width:1480px; font-size:14px; color:#6B7380; line-height:1.6;">失敗一跨過兩個 session：context 用完的地方，就是下一個 session 接手的地方；compaction 交給下一個 agent 的指示，不一定完全清楚。</div>
+
+  <div style="position:absolute; left:60px; top:540px; width:470px; height:184px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#C8501F;">失敗一：一次做太多</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">想一口氣把 app 做完，context 常在實作中途用完；<br>下一個 session 接到做一半、沒紀錄的功能。</div>
+    <div style="font-size:13px; color:#8A93A0;">它得先猜發生了什麼，再花時間讓 app 重新能跑。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:540px; width:470px; height:184px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#C8501F;">失敗二：太早宣布完成</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">已經做好一些功能之後，後來的 agent<br>看了看四周、發現有進度，就宣布工作完成。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文說這種失敗常出現在專案後期。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:540px; width:470px; height:184px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">compaction 不夠</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">它讓 agent 做事時不會用完 context window，<br>但交給下一個 agent 的指示不一定完全清楚。</div>
+    <div style="font-size:13px; color:#8A93A0;">所以失敗一在有 compaction 時也會發生。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">共同前提：Opus 4.5 在 Claude Agent SDK 上迴圈執行，只給一句高階 prompt；把兩種失敗排在 session 的時間線上是整理者的畫法，事件都出自原文。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M100 320H1500" stroke="#D5DAE1" stroke-width="2"></path>
+    <circle cx="180" cy="320" r="9" fill="#C8501F" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="562" cy="320" r="9" fill="#C8501F" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="940" cy="320" r="9" fill="#9AA3AE" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="1320" cy="320" r="9" fill="#C8501F" stroke="#FFFFFF" stroke-width="3"></circle>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>開發者越來越常把要做好幾個小時、甚至好幾天的複雜任務交給 agent，但讓 agent 在好幾個 context window 之間穩定地往前推，至今仍是還沒解決的問題。難處在於 agent 只能一段一段地工作：每個 session 是分開的，新的 session 開始時，不記得前一個發生過什麼。context window 有上限，大部分複雜的專案又沒辦法在一個視窗裡做完，所以 agent 需要一個方法，跨過兩個 session 之間的缺口。</p>
+    <div class="story">
+      <div class="label">關鍵觀念 · 一</div>
+      <h4>每一班都不記得上一班的工程師</h4>
+      <p>作者的比喻：想像一個軟體專案由輪班的工程師負責，每個新來的工程師，都完全不記得上一班發生了什麼。長時程的 agent 就是這個處境，每個 session 是一班。</p>
+      <p>這個比喻也預告了解法的方向。作者在第一大段的結尾說，他們的做法取自優秀的軟體工程師每天在做的事（第 2 章）。</p>
+    </div>
+    <p>實驗用的是 Claude Agent SDK。作者說它是一個強大、通用的 agent harness，擅長寫程式，也能做其他需要用工具蒐集脈絡、規劃、執行的任務；它有 compaction 這類 context 管理的能力，讓 agent 做一件事時不會把 context window 用完。照理說，有了這些，agent 應該能一直做有用的事，做多久都行。</p>
+    <p>實驗的結果不是這樣。作者說 compaction 不夠：直接拿來用，即使是 Opus 4.5 這樣的前沿模型，在 Agent SDK 上跨好幾個 context window 迴圈地跑，如果只拿到一句高階的 prompt，例如「做一個 claude.ai 的複製品」，也做不出上線品質的 web app。作者看到的失敗有兩種：</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>失敗</th><th>什麼時候</th><th>發生什麼</th></tr></thead>
+        <tbody>
+          <tr><td><span style="white-space:nowrap">一次做太多</span></td><td><span style="white-space:nowrap">專案一開始</span></td><td>想一口氣把整個 app 做出來，常在實作到一半時用完 context；下一個 session 接到一個做了一半、沒有紀錄的功能，只能猜上一輪做了什麼，還要花不少時間讓基本的 app 重新能跑</td></tr>
+          <tr><td><span style="white-space:nowrap">太早宣布完成</span></td><td><span style="white-space:nowrap">專案後期</span></td><td>已經做好一些功能之後，後來的 agent 看了看四周，發現已經有進度，就宣布工作完成</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>第一種失敗，有 compaction 也會發生。作者說，compaction 交給下一個 agent 的指示，不一定完全清楚；上一個 session 停在一個做了一半的功能上，下一個 session 看到的是沒有說明的程式碼。第 02 卡把兩種失敗排在一條 session 的時間線上。</p>
+    <div class="explain stone">
+      <span class="label">補充說明</span>
+      <h4>實驗的條件</h4>
+      <p>這兩種失敗出現在同一組條件下：模型是 Opus 4.5，跑在 Claude Agent SDK 上，跨好幾個 context window 迴圈執行，而使用者只給了一句高階的 prompt。後面幾章的做法，都加在模型外面這一層：換開場的提示、先建好檔案、給測試工具；原文沒有談換模型。</p>
+    </div>
+  </div>
+</section>
+
+<section id="two-agents" data-toc="兩種 agent">
+  <div class="container head">
+    <p class="chapter">Chapter 02 · The <span style="white-space:nowrap">long-running</span> agent problem · Footnote 1</p>
+    <h2><span class="seg">第一個 session 搭環境，</span><span class="seg">之後每次推進一點</span></h2>
+    <p class="lede">作者把問題拆成兩半：先搭一個替所有功能打好地基的環境，再要每個 agent 推進一點、收尾時留下乾淨的狀態。第一個 session 的初始化 agent 做前者，之後每個 session 的 coding agent 做後者。</p>
+    
+  </div>
+  <div class="cardband" id="card-03"><div class="cardlabel"><span class="n">圖卡 03 / 08</span><span class="t">交接靠檔案與 git 歷史</span><button type="button" class="zoom" data-card="03">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">交接不靠記憶，靠檔案與 git 歷史</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">作者把問題拆成兩半：先替所有功能打好地基，再要每個 agent 推進一點、收尾時留下乾淨的狀態；第一個 session 與之後的 session，各用一種 agent</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:330px; height:124px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Session 1　初始化 agent</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">用專門的提示搭好環境：<br>腳本、進度檔、清單與 git</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">只跑一次</div>
+  </div>
+  <div style="position:absolute; left:440px; top:160px; width:330px; height:124px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Session 2　coding agent</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">讀進度、只做一項功能，<br>收尾留下結構化的更新</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">每個 session</div>
+  </div>
+  <div style="position:absolute; left:820px; top:160px; width:330px; height:124px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Session 3　coding agent</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">新的 context window，<br>從檔案接手，不靠記憶</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">每個 session</div>
+  </div>
+  <div style="position:absolute; left:1200px; top:160px; width:330px; height:124px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Session N　coding agent</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">每個 session 都一樣：<br>先讀、再做、最後寫</div>
+  </div>
+
+  <div style="position:absolute; left:233px; top:302px; font-size:12px; font-weight:700; color:#6B7380;">寫</div>
+  <div style="position:absolute; left:568px; top:302px; font-size:12px; font-weight:700; color:#6B7380;">讀</div>
+  <div style="position:absolute; left:658px; top:302px; font-size:12px; font-weight:700; color:#6B7380;">寫</div>
+  <div style="position:absolute; left:948px; top:302px; font-size:12px; font-weight:700; color:#6B7380;">讀</div>
+  <div style="position:absolute; left:1038px; top:302px; font-size:12px; font-weight:700; color:#6B7380;">寫</div>
+  <div style="position:absolute; left:1328px; top:302px; font-size:12px; font-weight:700; color:#6B7380;">讀</div>
+  <div style="position:absolute; left:1418px; top:302px; font-size:12px; font-weight:700; color:#6B7380;">寫</div>
+
+  <div style="position:absolute; left:60px; top:340px; width:1470px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">專案環境</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">init.sh &#183; claude-progress.txt &#183; 功能清單（feature_list.json）&#183; git 歷史：存在檔案裡，不在 context 裡；上一個 session 寫，下一個 session 讀</div>
+  </div>
+  <div style="position:absolute; left:60px; top:418px; width:1470px; font-size:14px; color:#6B7380; line-height:1.6;">新的 session 不記得前一個做了什麼；做到哪、下一項做什麼，都從這幾個檔案讀回來。</div>
+
+  <div style="position:absolute; left:60px; top:462px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:478px; font-size:20px; font-weight:700; color:#1C2431;">兩種 agent，一套 harness</div>
+
+  <div style="position:absolute; left:60px; top:520px; width:470px; height:212px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">初始化 agent：只跑一次</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.65;">第一個 session 用專門的提示搭好環境：<br>init.sh、記錄進度的 claude-progress.txt、<br>第一次 git commit，還有一份功能清單。</div>
+    <div style="font-size:13px; color:#8A93A0;">功能清單的欄位見第 04 卡。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:520px; width:470px; height:212px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">coding agent：每次推進一點</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.65;">之後的每個 session 只推進一小步，<br>收尾時留下結構化的更新：<br>描述清楚的 commit，加上進度摘要。</div>
+    <div style="font-size:13px; color:#8A93A0;">收尾見第 05 卡，開場見第 07 卡。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:520px; width:470px; height:212px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">兩個 agent，只差第一則提示</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.65;">原文註腳：system prompt、工具、<br>整個 agent harness 都一樣，<br>只有一開始的 user prompt 不同。</div>
+    <div style="font-size:13px; color:#8A93A0;">兩個 agent 是兩種角色，不是兩套系統。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：原文說最重要的領悟，是讓新的 context window 很快看懂工作做到哪，靠的是 claude-progress.txt 加上 git 歷史；讀寫的虛線是整理者的畫法。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M409 214L421 222L409 230Z" fill="#9AA3AE"></path>
+    <path d="M789 214L801 222L789 230Z" fill="#9AA3AE"></path>
+    <path d="M1169 214L1181 222L1169 230Z" fill="#9AA3AE"></path>
+    <path d="M225 286V338" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c03)"></path>
+    <path d="M560 340V286" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c03)"></path>
+    <path d="M650 286V338" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c03)"></path>
+    <path d="M940 340V286" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c03)"></path>
+    <path d="M1030 286V338" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c03)"></path>
+    <path d="M1320 340V286" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c03)"></path>
+    <path d="M1410 286V338" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c03)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>兩種失敗讓作者把問題拆成兩部分。第一部分是一開始就搭好環境，替這個 prompt 需要的所有功能打好地基，讓 agent 能一步一步、一個功能一個功能地做。第二部分是要每個 agent 朝目標推進一點，同時在 session 結束時，把環境留在乾淨的狀態。</p>
+    <div class="explain terra">
+      <span class="label">原文的定義</span>
+      <h4>「乾淨的狀態」長什麼樣</h4>
+      <p>作者說的乾淨，是可以直接合併進 main branch 的那種程式碼：沒有大的 bug，程式整齊、有文件；一般來說，下一位開發者要開始做新功能時，不必先收拾一堆不相干的爛攤子。</p>
+    </div>
+    <p>作者在內部實驗時，用兩種 agent 做這兩部分：</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>面向</th><th><span style="text-transform:none">初始化 agent</span></th><th><span style="text-transform:none">coding agent</span></th></tr></thead>
+        <tbody>
+          <tr><td><span style="white-space:nowrap">什麼時候跑</span></td><td><span style="white-space:nowrap">第一個 session</span></td><td><span style="white-space:nowrap">之後的每一個 session</span></td></tr>
+          <tr><td><span style="white-space:nowrap">提示要它做什麼</span></td><td><span style="white-space:nowrap">用一份專門的提示，</span><br><span style="white-space:nowrap">搭好初始環境</span></td><td><span style="white-space:nowrap">推進一點，</span><br><span style="white-space:nowrap">再留下結構化的更新</span></td></tr>
+          <tr><td><span style="white-space:nowrap">留下什麼</span></td><td><code>init.sh</code> 腳本、<br>記錄 agent 做過什麼的<br><code style="white-space:nowrap">claude-progress.txt</code>、<br>一次列出新增檔案的 git commit；<br>第 3 章還有一份功能清單</td><td><span style="white-space:nowrap">git commit 與進度摘要</span><br><span style="white-space:nowrap">（第 4 章）</span></td></tr>
+          <tr><td><span style="white-space:nowrap">和另一個差在哪</span></td><td colspan="2">只差一開始的 user prompt；system prompt、工具、整個 agent harness 都一樣（原文註腳 1）</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>註腳解釋了為什麼說「兩個」agent：只因為它們拿到的第一則 user prompt 不同。system prompt、工具組合、整個 agent harness，兩者都一樣。整理者的讀法：這裡的兩個 agent 是同一套系統的兩種角色，不是兩套系統；要換的只有開場那一則提示。</p>
+    <p>作者說，這裡最重要的領悟，是找到方法讓 agent 在全新的 context window 開始時，很快看懂工作做到哪裡；他們靠的是 <code>claude-progress.txt</code> 加上 git 的歷史。這些做法的靈感，來自優秀的軟體工程師每天在做的事。</p>
+    <div class="pullquote">
+      交接不靠 agent 的記憶，靠它讀得到的進度檔與 git 歷史。
+      <cite>整理自原文 The long-running agent problem</cite>
+    </div>
+  </div>
+</section>
+
+<section id="feature-list" data-toc="功能清單">
+  <div class="container head">
+    <p class="chapter">Chapter 03 · Environment management · Feature list</p>
+    <h2><span class="seg">「做完了沒」，</span><span class="seg">交給功能清單回答</span></h2>
+    <p class="lede">初始化 agent 把使用者的一句 prompt 展開成完整的功能清單，claude.ai 複製品有 200 多項，一開始全部標成 failing。coding agent 只能改每一項的 passes 欄位，後來的 agent 看得出還剩多少沒做。</p>
+    
+  </div>
+  <div class="cardband" id="card-04"><div class="cardlabel"><span class="n">圖卡 04 / 08</span><span class="t">功能清單：只准改 passes</span><button type="button" class="zoom" data-card="04">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">「做完了」由清單的 passes 說，不由 agent 說</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">初始化 agent 把使用者的一句 prompt 展開成完整的功能需求檔：claude.ai 複製品超過 200 項，每一項一開始都標成 failing</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:440px; height:350px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:10px;"></div>
+  <div style="position:absolute; left:80px; top:164px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0; letter-spacing:0.12em;">PROJECT DIRECTORY</div>
+  <div style="position:absolute; left:80px; top:192px; width:400px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; gap:12px;"><div style="font-size:14px; font-weight:700; color:#4B5866;">init.sh</div><div style="font-size:12.5px; color:#6B7380;">啟動 dev server 的腳本</div></div>
+  <div style="position:absolute; left:80px; top:244px; width:400px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; gap:12px;"><div style="font-size:14px; font-weight:700; color:#4B5866;">claude-progress.txt</div><div style="font-size:12.5px; color:#6B7380;">agent 做過什麼的紀錄</div></div>
+  <div style="position:absolute; left:80px; top:296px; width:400px; height:62px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; padding:0px 14px; display:flex; align-items:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">feature_list.json（功能清單）</div><div style="font-size:12.5px; color:#6B7380;">200 多項功能，passes 全部是 false</div></div></div>
+  <div style="position:absolute; left:80px; top:366px; width:400px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; gap:12px;"><div style="font-size:14px; font-weight:700; color:#4B5866;">git repo</div><div style="font-size:12.5px; color:#6B7380;">第一次 commit 列出新增的檔案</div></div>
+  <div style="position:absolute; left:80px; top:426px; width:400px; font-size:13px; color:#6B7380; line-height:1.55;">四樣都是初始化 agent 在第一個 session 建的；<br>之後每個 session 都從這裡接手。</div>
+
+  <div style="position:absolute; left:505px; top:304px; width:66px; text-align:center; font-size:12.5px; color:#8A93A0;">展開</div>
+
+  <div style="position:absolute; left:580px; top:150px; width:500px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:17px; font-weight:700; color:#FFFFFF;">展開一項功能：四個欄位</div>
+  <div style="position:absolute; left:580px; top:198px; width:500px; height:302px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:14px 22px; display:flex; flex-direction:column; justify-content:center; gap:14px;">
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">1</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">類別</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">CATEGORY</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">功能屬於哪一類，原文的例子是 functional</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">2</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">描述</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">DESCRIPTION</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">一句話講這個功能：按 New Chat 會開一段新對話</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">3</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">測試步驟</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">STEPS</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">照使用者的路徑一步步驗：打開主畫面、點按鈕、<br>確認新對話出現；原文的例子有五步</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">4</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#2E7B4F;">通過了沒</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">PASSES</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">一開始都是 false；coding agent 唯一能改的欄位</div></div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:1140px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0; letter-spacing:0.12em;">WRITERS</div>
+  <div style="position:absolute; left:1140px; top:178px; width:400px; height:76px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#FFFFFF;">初始化 agent</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">把使用者的 prompt 展開成整份清單，全標 failing</div></div>
+  <div style="position:absolute; left:1140px; top:280px; width:400px; height:76px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#2E7B4F;">coding agent</div><div style="font-size:12.5px; color:#6B7380;">仔細測過之後，只把 passes 改成 true</div></div>
+  <div style="position:absolute; left:1140px; top:382px; width:400px; height:76px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px dashed #E6B49A; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#C8501F;">✗ 刪掉或改寫測試</div><div style="font-size:12.5px; color:#6B7380;">提示裡寫明不可接受：會漏掉功能或留下 bug</div></div>
+  <div style="position:absolute; left:1140px; top:474px; width:400px; font-size:13px; color:#6B7380; line-height:1.55;">三條路裡，只有一條會改到 passes；<br>「做完了沒」看這個欄位，不看 agent 怎麼說。</div>
+
+  <div style="position:absolute; left:60px; top:560px; width:470px; height:182px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">200 多項，全部先標 failing</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">claude.ai 複製品的清單超過 200 項，一開始全是 failing；<br>後來的 agent 看得出完整的功能長什麼樣。</div>
+    <div style="font-size:13px; color:#8A93A0;">針對一口氣做完、太早收工兩種失敗。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:560px; width:470px; height:182px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">只准改 passes 一個欄位</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">提示寫得很強硬：刪掉或改寫測試不可接受，<br>因為這可能讓功能漏掉，或留下 bug。</div>
+    <div style="font-size:13px; color:#8A93A0;">coding agent 只能把 false 改成 true。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:560px; width:470px; height:182px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">用 JSON，不用 Markdown</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">作者試過之後選 JSON：和 Markdown 相比，<br>模型比較不會不當地改動或覆寫 JSON 檔。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文沒有再解釋原因。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左邊的目錄與右邊三種寫法是整理者的畫法；欄位依原文的 JSON 精簡改寫，檔名 feature_list.json 取自原文的 log。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+      <marker id="an-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+      <marker id="ao-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+    </defs>
+    <path d="M482 327H576" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1138 216H1084" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c04)"></path>
+    <path d="M1138 318H1084" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c04)"></path>
+    <path d="M1138 420H1084" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c04)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>更新版的 Claude 4 prompting guide 分享過跨多個 context window 工作的做法，其中一種 harness 結構，是第一個 context window 用一份不同的 prompt。作者說，這份不同的 prompt 要初始化 agent 把之後的 coding agent 需要的脈絡全部備好；原文這一大段挑了這種環境裡的幾個重要元件細講，第一個是功能清單。</p>
+    <p>功能清單針對的是第 1 章的兩種失敗：一口氣做完整個 app，以及太早認定專案完成。作者要初始化 agent 寫一份完整的功能需求檔，把使用者最初的 prompt 展開。以 claude.ai 的複製品為例，清單超過 200 項，例如「使用者可以開一段新對話、輸入問題、按 Enter，看到 AI 的回應」。每一項一開始都標成 failing，後來的 coding agent 就有一份清楚的大綱，知道完整的功能長什麼樣。原文列了清單裡的一項，下面是精簡改寫的版本：</p>
+    <div class="codeblock">
+      <span class="file">示意 · 功能清單的一項（依原文 JSON 精簡改寫，內容與註解是整理者的中文）</span>
+<pre class="code">{
+  <span class="k">"category"</span>: <span class="s">"functional"</span>,
+  <span class="k">"description"</span>: <span class="s">"按下 New Chat 會開一段新對話"</span>,
+  <span class="k">"steps"</span>: [
+    <span class="s">"打開主畫面，點 New Chat"</span>,
+    <span class="s">"確認出現新對話，聊天區是歡迎畫面"</span>,
+    <span class="s">"確認側欄列出這段對話"</span>
+  ],
+  <span class="k">"passes"</span>: <span class="a">false</span>    <span class="c">// coding agent 唯一能改的欄位</span>
+}</pre>
+    </div>
+    <p>作者要 coding agent 編輯這份檔案時，只能改 <code>passes</code> 這個欄位的狀態；提示裡還用了很強硬的措辭，說刪掉或改寫測試是不可接受的，理由是那可能讓功能漏掉或出 bug。</p>
+    <div class="quote-en">
+      "It is unacceptable to remove or edit tests"
+      <span class="zh">「刪掉或改寫測試，是不可接受的。」這是作者給 coding agent 的指示裡的一句，後面接的理由是可能漏掉功能或留下 bug。</span>
+    </div>
+    <p>檔案格式也是試出來的。作者說，做了一些實驗之後，他們選了 JSON：和 Markdown 比起來，模型比較不會不當地改動或覆寫 JSON 檔。原文沒有再解釋原因。</p>
+    <div class="explain bronze">
+      <span class="label">整理者的讀法</span>
+      <h4>清單同時管住兩件事</h4>
+      <p>「全部先標 failing」讓每個 session 都看得到還剩多少沒做；「只准改 passes」讓這份進度表不會被 agent 自己改寫。兩者合起來，「做完了沒」由清單回答，不由某一個 session 的 agent 看一看就決定。第 7 章的表格裡，功能清單也同時對上兩種失敗。</p>
+    </div>
+  </div>
+</section>
+
+<section id="incremental" data-toc="一次一個功能">
+  <div class="container head">
+    <p class="chapter">Chapter 04 · Environment management · Incremental progress</p>
+    <h2><span class="seg">一次只做一個功能，</span><span class="seg">做完就 commit</span></h2>
+    <p class="lede">作者說，這是對付「一次做太多」的關鍵。每一步都用描述清楚的訊息 commit、把進度摘要寫進進度檔：改壞了能用 git 退回能動的版本，下一個 session 也不必再猜。</p>
+    
+  </div>
+  <div class="cardband" id="card-05"><div class="cardlabel"><span class="n">圖卡 05 / 08</span><span class="t">一次一個功能，壞了就退回</span><button type="button" class="zoom" data-card="05">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">一次只做一個功能，壞了就用 git 退回</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">有了功能清單，coding agent 一次只做一項；作者說這是對付「一次做太多」的關鍵，commit 加進度摘要則讓下一個 session 不必再猜</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 一次做很多</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 一次一個功能</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:320px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:230px; top:196px; width:360px; height:48px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">Session：想一口氣做出整個 app</div>
+  <div style="position:absolute; left:230px; top:270px; width:360px; height:44px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">context 在實作中途用完</div>
+  <div style="position:absolute; left:230px; top:338px; width:360px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#C8501F;">留下一個做一半的功能</div><div style="font-size:12.5px; color:#6B7380;">沒有留下紀錄</div></div></div>
+  <div style="position:absolute; left:230px; top:418px; width:360px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">下一個 session：先猜、先修</div>
+
+  <div style="position:absolute; left:1010px; top:196px; width:360px; height:48px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">Session：從清單挑一項功能</div>
+  <div style="position:absolute; left:1010px; top:270px; width:360px; height:44px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">只做這一項，做完、測過</div>
+  <div style="position:absolute; left:860px; top:338px; width:310px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">git commit</div><div style="font-size:12.5px; color:#6B7380;">訊息寫清楚做了什麼</div></div></div>
+  <div style="position:absolute; left:1210px; top:338px; width:310px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">進度摘要</div><div style="font-size:12.5px; color:#6B7380;">寫進進度檔</div></div></div>
+  <div style="position:absolute; left:1010px; top:418px; width:360px; height:46px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">下一個 session：讀紀錄就接上</div>
+
+  <div style="position:absolute; left:60px; top:478px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">有 compaction 也一樣：它交給下一個 agent 的指示，不一定完全清楚。</div>
+  <div style="position:absolute; left:840px; top:478px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">改壞了也退得回去：git 能退回改壞的程式，恢復到能動的版本。</div>
+
+  <div style="position:absolute; left:60px; top:512px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">乾淨的狀態</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">原文的定義：可以合併進 main branch 的程式碼，沒有大 bug、整齊、有文件；下一位開發者不必先收拾爛攤子，就能開始做新功能</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:596px; width:700px; height:176px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#C8501F;">時間花在猜與修</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">下一個 session 接到做一半、沒紀錄的功能，<br>只能先猜發生了什麼，再花時間讓 app 重新能跑。</div>
+    <div style="font-size:13px; color:#8A93A0;">失敗一的代價，落在下一個 session 身上。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:596px; width:700px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F;">每一步都退得回去</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">作者說最有效的是用描述清楚的訊息 commit、<br>把進度摘要寫進進度檔：壞了能退，下一輪也不必猜。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說，這也提高了效率。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左右兩條流程是整理者依原文的描述畫的；作者說一次只做一項是對付「做太多」的關鍵，commit 加進度摘要是他們找到最有效的收尾方式。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M410 244V268" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M410 314V336" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c05)"></path>
+    <path d="M410 394V416" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c05)"></path>
+    <path d="M1190 244V268" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M1150 314L1020 336" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+    <path d="M1230 314L1360 336" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+    <path d="M1020 394L1150 416" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+    <path d="M1360 394L1230 416" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>功能清單這套環境搭好之後，作者要下一輪的 coding agent 一次只做一個功能。作者說，這種漸進的做法，是解決 agent 傾向一次做太多的關鍵。</p>
+    <p>一次只做一個還不夠。作者說，每次改完程式，模型仍然必須把環境留在乾淨的狀態。他們在實驗裡找到最有效的做法，是要模型把進度 commit 到 git、寫上描述清楚的 commit 訊息，並把進度的摘要寫進一個進度檔。這樣模型就能用 git 退回改壞的程式，把程式碼庫恢復到能動的狀態。</p>
+    <p>這些做法也提高了效率。作者說，它們讓 agent 不必再猜上一個 session 發生了什麼，也不必花時間讓基本的 app 重新能跑，這正是第 1 章第一種失敗留下的兩筆代價。</p>
+    <div class="explain terra">
+      <span class="label">為什麼要這樣設計</span>
+      <h4>commit 與進度檔各管一半</h4>
+      <p>整理者的讀法：git 的歷史記下程式碼改了什麼，需要時退得回去；進度檔用文字記下 agent 做了什麼，下一個 session 讀了就接得上。只做一個功能，退回時丟掉的也只有這一個功能的改動。第 6 章每個 session 的開場，第一件正事就是讀這兩樣。</p>
+    </div>
+    <div class="thought">
+      <span class="label">整理者的思考題 · 01</span>
+      <h4>你交給 agent 的大任務，能拆成一項一項的功能嗎？</h4>
+      <p>挑一個你會交給 coding agent、一個 session 做不完的任務，把它拆成能單獨測試、單獨 commit 的功能。哪幾項其實分不開？</p>
+      <p class="hint">整理者的建議：拆到每一項都寫得出像第 3 章那樣的測試步驟；寫不出步驟的，通常還要再拆，或是描述還太模糊。</p>
+    </div>
+  </div>
+</section>
+
+<section id="testing" data-toc="端對端測試">
+  <div class="container head">
+    <p class="chapter">Chapter 05 · Environment management · Testing</p>
+    <h2><span class="seg">要像使用者一樣，</span><span class="seg">在瀏覽器裡測一遍</span></h2>
+    <p class="lede">最後一種失敗是沒測好就標完成：Claude 會跑單元測試、用 curl 打 dev server，卻看不出功能沒有端對端跑通。作者明說要用瀏覽器自動化工具、像使用者一樣測之後，Claude 大多能找出並修掉這類 bug。</p>
+    
+  </div>
+  <div class="cardband" id="card-06"><div class="cardlabel"><span class="n">圖卡 06 / 08</span><span class="t">像使用者一樣測過才算</span><button type="button" class="zoom" data-card="06">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">只跑單元測試不夠，要像使用者一樣點過一遍</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">最後一種失敗：沒測好就把功能標成完成。沒有明說時，Claude 會跑單元測試、用 curl 打 dev server，卻看不出功能沒有端對端跑通</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 只從程式這一側測</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 從瀏覽器，像使用者一樣測</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:380px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:230px; top:200px; width:360px; height:48px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">改完一個功能的程式</div>
+  <div style="position:absolute; left:100px; top:282px; width:280px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; color:#2B3340;">跑單元測試</div>
+  <div style="position:absolute; left:440px; top:282px; width:280px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; color:#2B3340;">用 curl 打 dev server</div>
+  <div style="position:absolute; left:230px; top:362px; width:360px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">把功能標成完成</div>
+  <div style="position:absolute; left:230px; top:436px; width:360px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">其實沒有端對端跑通</div>
+  <div style="position:absolute; left:60px; top:498px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">沒有明說時，Claude 也會測；只是看不出這個功能沒有端對端地運作。</div>
+
+  <div style="position:absolute; left:1010px; top:200px; width:360px; height:48px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">改完一個功能的程式</div>
+  <div style="position:absolute; left:1010px; top:282px; width:360px; height:46px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">明說：用瀏覽器自動化工具測</div>
+  <div style="position:absolute; left:900px; top:356px; width:580px; height:58px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">像真人使用者一樣走一遍</div><div style="font-size:12.5px; color:#6B7380;">例如開新對話、送出訊息、看到回應，邊測邊截圖</div></div></div>
+  <div style="position:absolute; left:1010px; top:436px; width:360px; height:46px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">找到只看程式看不出的 bug</div>
+  <div style="position:absolute; left:840px; top:498px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">原文附了 Claude 透過 Puppeteer MCP 測 claude.ai 複製品時拍下的截圖。</div>
+
+  <div style="position:absolute; left:60px; top:556px; width:470px; height:180px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">單元測試與 curl 不夠</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">Claude 會改程式、也會測，<br>卻看不出功能沒有端對端跑通，就標成完成。</div>
+    <div style="font-size:13px; color:#8A93A0;">這是作者看到的最後一種重大失敗。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:556px; width:470px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">表現大幅提升</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">明說要用瀏覽器自動化、像真人一樣測之後，<br>Claude 大多能找出並修掉只看程式看不出的 bug。</div>
+    <div style="font-size:13px; color:#8A93A0;">以 web app 來說，作者說大多做得好。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:556px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">看不到的，就測不到</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">Claude 的視覺與瀏覽器自動化都有極限；<br>透過 Puppeteer MCP 看不到瀏覽器原生的 alert。</div>
+    <div style="font-size:13px; color:#8A93A0;">依賴這種對話框的功能，bug 比較多。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左右兩條流程是整理者依原文的描述畫的；右邊的例子取自第 07 卡的基本測試，限制照原文的說法。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M370 248L250 280" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M450 248L570 280" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M240 328L370 360" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M580 328L450 360" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M410 408V434" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c06)"></path>
+    <path d="M1190 248V280" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1190 328V354" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c06)"></path>
+    <path d="M1190 414V434" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c06)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>作者觀察到的最後一種重大失敗，是 Claude 會在沒有好好測試的情況下，就把一個功能標成完成。沒有明確指示時，Claude 會改程式，甚至會測：跑單元測試，或用 <code>curl</code> 指令去打開發用的伺服器（dev server）；但它看不出這個功能其實沒有端對端地運作。</p>
+    <p>以 web app 來說，作者明確要 Claude 用瀏覽器自動化工具、像真人使用者一樣做所有測試之後，Claude 大多能把功能端對端驗證好。原文附了一段動畫，是 Claude 透過 Puppeteer MCP 伺服器測試 claude.ai 複製品時拍下的截圖。作者說，給 Claude 這類測試工具之後，表現大幅提升，因為它能找出並修掉只看程式碼看不出來的 bug。</p>
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>單元測試、curl、端對端測試差在哪</h4>
+      <p>單元測試檢查程式裡的一小段；<code>curl</code> 在命令列送一個請求給伺服器，看它回什麼；端對端測試則照使用者的路徑，從打開畫面、點按鈕，一路走到看見結果。前兩種通過，代表零件各自沒壞；功能能不能用，要最後一種才看得到。這段解釋是整理者寫的。</p>
+    </div>
+    <p>還有做不到的地方。作者說，Claude 的視覺與瀏覽器自動化工具都有極限，很難找出每一種 bug。例如透過 Puppeteer MCP，Claude 看不到瀏覽器原生的 alert 對話框；依賴這種對話框的功能，bug 就比較多。</p>
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>工具看不到的，agent 就測不到</h4>
+      <p>整理者的提醒：原文這個限制的意思是，測試工具看不到的畫面，agent 也無從驗證。你的產品若依賴瀏覽器原生的對話框，或其他截圖抓不到的行為，這些功能要另外安排檢查，不要只看 <code>passes</code>。</p>
+    </div>
+  </div>
+</section>
+
+<section id="getting-up-to-speed" data-toc="每個 session 的開場">
+  <div class="container head">
+    <p class="chapter">Chapter 06 · Getting up to speed</p>
+    <h2><span class="seg">每個 session 開工前，</span><span class="seg">先確認 app 還能動</span></h2>
+    <p class="lede">coding agent 開場先確認工作目錄、讀 git log 與進度檔、從功能清單挑下一項，再用 init.sh 啟動 dev server，跑一次基本的端對端測試。壞了先修，沒壞才做新功能。</p>
+    
+  </div>
+  <div class="cardband" id="card-07"><div class="cardlabel"><span class="n">圖卡 07 / 08</span><span class="t">開工前先確認 app 還能動</span><button type="button" class="zoom" data-card="07">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">開工前先確認 app 還能動，壞了先修</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">每個 coding agent 開場先跑一串步驟，有些很基本但仍然有用；claude.ai 複製品一律先啟動 dev server，開一段新對話、送訊息、等回應</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:110px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　pwd</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">確認工作目錄；<br>只能改這裡面的檔</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:110px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　git log 與進度檔</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">看最近的 commit 與進度，<br>知道最近在做什麼</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:110px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　讀功能清單</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">挑優先順序最高、<br>還沒完成的一項</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:110px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　init.sh</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">啟動 dev server，<br>不必再摸索怎麼跑</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:128px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">壞了就先修</div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:110px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 5　基本的端對端測試</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">開新對話、送訊息、<br>等到回應</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:306px; width:842px; height:76px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">前三步</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">回答三個問題：我在哪、最近做了什麼、這一輪做哪一項</div>
+  </div>
+  <div style="position:absolute; left:924px; top:306px; width:266px; height:76px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#C8501F;">壞了：先修既有的 bug</div><div style="font-size:12.5px; color:#6B7380;">直接做新功能，問題很可能更糟</div></div>
+  <div style="position:absolute; left:1212px; top:306px; width:266px; height:76px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#FFFFFF;">沒壞：開始做新功能</div><div style="font-size:12.5px; color:rgba(255,255,255,0.8);">一次只做一項（第 05 卡）</div></div>
+
+  <div style="position:absolute; left:60px; top:406px; width:1480px; height:56px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">典型的開場</div>
+    <div style="font-size:14.5px; color:#2B3340;">原文 log 的順序：先說要弄清楚專案狀態 &#8594; pwd &#8594; 讀進度檔 &#8594; 讀功能清單 &#8594; git log &#8594; 用 init.sh 重啟 server &#8594; 驗證基本功能 &#8594; 開始做新功能</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:490px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:506px; font-size:20px; font-weight:700; color:#1C2431;">三個理由</div>
+
+  <div style="position:absolute; left:60px; top:548px; width:470px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">前三步：在哪、做到哪、做哪項</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.65;">pwd 確認只能改哪個目錄；git log 與進度檔<br>交代最近的工作；功能清單決定這一輪做哪一項。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說有些步驟很基本，但仍然有用。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:548px; width:470px; height:186px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">init.sh 省下摸索的 token</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.65;">初始化 agent 先寫好啟動 dev server 的腳本，<br>每個 session 不必再想辦法弄清楚怎麼測。</div>
+    <div style="font-size:13px; color:#8A93A0;">表格的第四種失敗，就是花時間摸索怎麼跑 app。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:548px; width:470px; height:186px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">先測再做</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.65;">先開 server、開新對話、送訊息、等回應；<br>app 若被留在壞掉的狀態，馬上發現、先修。</div>
+    <div style="font-size:13px; color:#8A93A0;">直接做新功能，作者說問題很可能更糟。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：五格依原文的條列與 claude.ai 複製品的做法排；log 裡是先讀進度檔與功能清單、再看 git log，兩種順序原文都有。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ao-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M331 207L343 215L331 223Z" fill="#9AA3AE"></path>
+    <path d="M619 207L631 215L619 223Z" fill="#9AA3AE"></path>
+    <path d="M907 207L919 215L907 223Z" fill="#9AA3AE"></path>
+    <path d="M1195 207L1207 215L1195 223Z" fill="#9AA3AE"></path>
+    <path d="M1300 270V288H1057V304" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c07)"></path>
+    <path d="M1390 270V304" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c07)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>前面幾樣都就位之後，作者要每個 coding agent 先跑一串步驟，搞清楚狀況；有些步驟很基本，但仍然有用：</p>
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>確認在哪裡</strong>執行 <code>pwd</code>，看自己在哪個目錄工作；只有這個目錄裡的檔案可以改。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>看做到哪裡</strong>讀 git log 與進度檔，知道最近在做什麼。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>挑下一項</strong>讀功能清單，選優先順序最高、還沒完成的一項。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>先測再做</strong>用 <code>init.sh</code> 啟動 dev server，做一次基本的端對端測試，確認 app 沒有被留在壞掉的狀態。</div></div>
+    </div>
+    <p>作者說，這樣每個 session 都能替 Claude 省下一些 token，因為它不必再想辦法弄清楚怎麼測這份程式。另一個很有幫助的做法，是請初始化 agent 寫一個能啟動 dev server 的 <code>init.sh</code>，coding agent 在實作新功能之前，先跑一次基本的端對端測試。</p>
+    <p>claude.ai 複製品的做法是：agent 一律先啟動本機的 dev server，再用 Puppeteer MCP 開一段新對話、送出一則訊息、等到回應。這樣 Claude 能很快發現 app 是不是被留在壞掉的狀態，並馬上修掉既有的 bug。作者說，如果它不先測、直接開始做新功能，問題很可能會更糟。</p>
+    <p>原文也貼了一個典型 session 開頭的幾則訊息，下面是精簡改寫的版本：</p>
+    <div class="codeblock">
+      <span class="file">示意 · 一個 session 的開場（依原文的 log 精簡改寫，中文是整理者的）</span>
+<pre class="code"><span class="k">[assistant]</span> 先弄清楚專案現在的狀態。
+<span class="k">[tool]</span>      bash: <span class="s">pwd</span>
+<span class="k">[tool]</span>      read: <span class="s">claude-progress.txt</span>
+<span class="k">[tool]</span>      read: <span class="s">feature_list.json</span>
+<span class="k">[tool]</span>      bash: <span class="s">git log --oneline -20</span>
+<span class="k">[assistant]</span> 看看有沒有 init.sh 可以重啟 server。
+            <span class="c">（啟動 dev server）</span>
+<span class="k">[assistant]</span> 打開 app，確認幾個基本功能還正常。
+            <span class="c">（測試基本功能）</span>
+<span class="k">[assistant]</span> 基本功能都正常，再看清單決定下一項。
+            <span class="c">（開始做新功能）</span></pre>
+    </div>
+    <p>原文的 log 裡，agent 驗證完才回報聊天、切換主題、載入對話、錯誤處理都正常，接著去看清單決定下一項。這份清單在 log 前後有兩個檔名：先讀的是 <code>feature_list.json</code>，後面又說要細看 <code>tests.json</code>；本頁統一寫成功能清單。</p>
+    <div class="pullquote">
+      先確認 app 還能動，再做新的；在壞掉的狀態上加功能，只會更難收拾。
+      <cite>整理自原文 Getting up to speed</cite>
+    </div>
+  </div>
+</section>
+
+<section id="failure-modes" data-toc="四種失敗與分工">
+  <div class="container head">
+    <p class="chapter">Chapter 07 · Agent failure modes and solutions</p>
+    <h2><span class="seg">四種失敗，</span><span class="seg">由兩個 agent 分頭補上</span></h2>
+    <p class="lede">原文在未來方向之前放了一張表，把長時程 agent 常見的四種失敗，對上初始化 agent 與 coding agent 各自該做的事，等於全文的總整理。</p>
+    
+  </div>
+  <div class="cardband" id="card-08"><div class="cardlabel"><span class="n">圖卡 08 / 08</span><span class="t">四種失敗，兩個 agent 分工</span><button type="button" class="zoom" data-card="08">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">四種失敗，兩個 agent 分頭補上</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">原文的表格：每一列是一種失敗；初始化 agent 在第一個 session 先備好東西，coding agent 在每個 session 的頭尾照著用</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:340px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">失敗</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">初始化 agent &#183; 第一個 session</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">coding agent &#183; 每個 session</div>
+  </div>
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:340px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">太早宣布完成</div><div style="font-size:13px; color:#8A93A0;">後期的 agent 看到進度就收工</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>依輸入的規格建一份結構化的 JSON 功能清單，<br>每一項是一段端對端的功能描述</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>開場先讀功能清單，只挑一項來做</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:306px; width:1480px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:grid; grid-template-columns:340px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#2E7B4F;">留下 bug 或沒記錄的進度</div><div style="font-size:13px; color:#8A93A0;">原文說的關鍵：進度檔加 git</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>建好 git repo 與進度檔</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>開場讀進度檔與 git log、跑一次基本測試；<br>收尾寫 git commit、更新進度</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:402px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:340px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">太早標成完成</div><div style="font-size:13px; color:#8A93A0;">沒測好就標 passing</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>建好功能清單（和第一列是同一份）</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>每一項都自己驗證，仔細測過才標成 passing</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:498px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:340px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">摸索怎麼跑 app</div><div style="font-size:13px; color:#8A93A0;">表格把它獨立成一列</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>寫一個能啟動 dev server 的 init.sh</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>開場先讀 init.sh</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:630px; width:470px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">初始化 agent：做一次</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">功能清單、git repo 與進度檔、init.sh，<br>都在第一個 session 備好，之後只拿來用。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">四列裡，有兩列靠同一份功能清單。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:630px; width:470px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">coding agent：管好頭尾</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">開場讀清單、讀進度、讀 init.sh、跑基本測試；<br>中間只做一項、測過才標；收尾 commit 加進度。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">開場見第 07 卡，收尾見第 05 卡。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:630px; width:470px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">同一份清單，管兩種失敗</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">整個專案太早收工，和單一功能太早標完成，<br>初始化 agent 的解法都是那份功能清單。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">這是整理者的讀法。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：依原文的表格重排，措辭是整理者的；第二列的綠色強調與第三張卡的讀法，是整理者加的。</div>
+</div></div></div>
+  <div class="container prose">
+    <p>這張表把前面各章的做法收在一起。每一列是一種失敗，兩欄分別是初始化 agent 在第一個 session 做的準備，以及 coding agent 在每個 session 的做法。本頁重排措辭如下：</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>失敗</th><th><span style="text-transform:none">初始化 agent</span></th><th><span style="text-transform:none">coding agent</span></th></tr></thead>
+        <tbody>
+          <tr><td><span style="white-space:nowrap">太早宣布完成</span></td><td>依輸入的規格，建一份結構化的 JSON 功能清單，每一項是一段端對端的功能描述</td><td>開場先讀功能清單，只挑一項來做</td></tr>
+          <tr><td><span style="white-space:nowrap">留下 bug、</span><br><span style="white-space:nowrap">沒記錄的進度</span></td><td>建好 git repo 與進度檔</td><td>開場先讀進度檔與 git log，在 dev server 上跑一次基本測試，抓出沒記錄的 bug；收尾寫一個 git commit、更新進度</td></tr>
+          <tr><td><span style="white-space:nowrap">太早標成完成</span></td><td>建好功能清單</td><td>每一項都自己驗證，仔細測過才標成 passing</td></tr>
+          <tr><td><span style="white-space:nowrap">摸索怎麼跑 app</span></td><td>寫一個能啟動 dev server 的 <code>init.sh</code></td><td>開場先讀 <code>init.sh</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>整理者的讀法：第一列與第三列，初始化 agent 做的是同一件事。一份功能清單同時管住兩種失敗，一種是整個專案太早收工，一種是單一功能太早被標成完成。第二列則是第 2 章說的關鍵：進度檔加 git 歷史，讓每個 session 都從上一個留下的地方接著做。</p>
+    <p>和第 1 章比，這張表多了兩種失敗。「太早標成完成」是第 5 章測試那一節的主題；「要花時間摸索怎麼跑 app」在正文是第 6 章 <code>init.sh</code> 那一段的內容，表格把它獨立成一列。</p>
+    <div class="thought">
+      <span class="label">整理者的思考題 · 02</span>
+      <h4>你用 coding agent 時，最常碰到哪一列？</h4>
+      <p>agent 說做完了但其實沒有、改到一半的程式沒人收、測試形同虛設，還是每次都在摸索怎麼啟動專案？對照這張表，找出你最痛的那一列。</p>
+      <p class="hint">整理者的建議：先補那一列的兩格。四列不必一次到位；功能清單同時管兩列，通常最划算。</p>
+    </div>
+  </div>
+</section>
+
+<section id="future-work" data-toc="未來方向" class="nocard">
+  <div class="container">
+    <p class="chapter">Chapter 08 · Future work · Acknowledgements</p>
+    <h2><span class="seg">這只是一種解法，</span><span class="seg">還有兩題沒答案</span></h2>
+    <p class="lede">作者說這是讓模型跨很多個 context window 漸進推進的一組可能的解法。還沒答案的有兩題：一個通用的 coding agent 好，還是分工的多 agent 好；以及這些經驗能不能用到 web app 以外。</p>
+    <p>作者在結尾說，這份研究示範的是長時程 agent harness 裡的一組可能的解法，讓模型能在很多個 context window 之間漸進地推進；還有一些問題沒有答案。</p>
+    <p>最主要的一題，是單一、通用的 coding agent 是否在各種情境下都表現最好，還是多 agent 的架構能做得更好。作者認為，專門的 agent，例如負責測試、品質保證（QA）或清理程式碼的 agent，在軟體開發生命週期的各種子任務上，可能做得更好。這是作者的推測，原文沒有實驗結果。</p>
+    <p>第二題是範圍。這個 demo 是針對全端 web app 的開發調整的；作者說，未來的方向是把這些發現推廣到其他領域。他認為部分或全部的經驗，很可能適用於科學研究或財務建模這類需要長時間運作的 agent 任務。</p>
+    <p>文末的致謝寫明這篇由 Justin Young 執筆，並列出多位參與的同事；作者說這份成果來自 Anthropic 好幾個團隊的共同努力，特別是 code RL 與 Claude Code 團隊，讓 Claude 能安全地做長時程、自主的軟體工程。</p>
+    <dl class="faq">
+      <div><dt>初始化 agent 和 coding agent 是兩套不同的系統嗎？</dt><dd>不是。原文的註腳說，它們只差在一開始的 user prompt；system prompt、工具、整個 agent harness 都一樣（第 2 章）。</dd></div>
+      <div><dt>有 compaction 了，為什麼還要這些檔案？</dt><dd>作者說 compaction 不夠：它交給下一個 agent 的指示不一定完全清楚；只給一句高階 prompt 時，agent 還是會一次做太多，或太早宣布完成（第 1 章）。</dd></div>
+      <div><dt>功能清單為什麼用 JSON，不用 Markdown？</dt><dd>作者說試過之後選了 JSON，因為模型比較不會不當地改動或覆寫 JSON 檔；原文沒有進一步解釋（第 3 章）。</dd></div>
+      <div><dt>這套做法只適用於 web app 嗎？</dt><dd>原文的 demo 針對全端 web app。作者認為部分或全部的經驗可能適用於科學研究、財務建模這類長時間的任務，但這是未來的方向，還沒有驗證（本章）。</dd></div>
+    </dl>
+    <div class="thought">
+      <span class="label">整理者的思考題 · 03</span>
+      <h4>如果把開發流程交給一組專門的 agent，你會怎麼分工？</h4>
+      <p>原文提了測試、品質保證、清理程式碼三種專門的 agent。對照你團隊現在的分工，哪一種最值得先拆出去？它開場要讀什麼，收尾要留下什麼？</p>
+      <p class="hint">整理者的建議：沿用本頁的交接方式來想，每個專門的 agent 都讀寫同一份功能清單與進度檔，分工才接得起來。這是整理者的延伸，原文沒有談多 agent 之間怎麼交接。</p>
+    </div>
+  </div>
+</section>
+
+<section id="practice" data-toc="動手做" class="nocard">
+  <div class="container">
+    <p class="chapter">Workshop · Apply it yourself</p>
+    <h2><span class="seg">動手做：</span><span class="seg">替長任務搭一套交接</span></h2>
+    <p class="lede">這一章不在原文裡。它把前面的內容壓成一份可以馬上執行的清單，讓一個一次做不完的大任務，改成一個個 session 接力。</p>
+    <ol class="checklist">
+      <li><span class="box" aria-hidden="true"></span><div><strong>把一句話的需求，展開成 JSON 功能清單</strong><small>每一項寫描述與測試步驟，全部先標 <code>"passes": false</code>。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>第一個 session 用另一份提示，只搭環境</strong><small>寫 <code>init.sh</code>、開一個進度檔、做第一次 git commit，先不急著寫功能。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>在 coding agent 的提示裡寫死開場</strong><small><code>pwd</code>、讀進度檔與 git log、讀清單挑優先順序最高的一項。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>開工前先跑一次基本的端對端測試</strong><small>用 <code>init.sh</code> 啟動 dev server；壞了先修既有的 bug，再做新功能。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>一次只做一項</strong><small>這一項測過、存好，才碰下一項。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>像使用者一樣測過，才把 passes 改成 true</strong><small>給它瀏覽器自動化工具；提示裡寫明不准刪改測試。工具看不到的功能，另外安排人工檢查。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>收尾：寫清楚的 commit，加一段進度摘要</strong><small>commit 訊息說明做了什麼；進度檔記下這個 session 的結果，留給下一個 session 讀。</small></div></li>
+    </ol>
+  </div>
+</section>
+
+<section id="glossary" class="nocard glossary" data-toc="名詞速查">
+  <div class="wide">
+    <p class="eyebrow">Reference · 名詞速查</p>
+    <h2><span class="seg">二十個名詞，</span><span class="seg">看懂長任務的 harness</span></h2>
+    <p class="lede">依「問題、兩種 agent、環境裡的檔案、做法、未來」的順序排，解釋是整理者依原文的用法寫的。</p>
+    <dl class="glossary-grid">
+      <div class="term"><dt><span style="white-space:nowrap">Long-running</span> agent</dt><span class="zh-name">長時程 agent</span><dd>要花好幾個小時、甚至好幾天，跨很多個 context window 才做得完任務的 agent。</dd></div>
+      <div class="term"><dt>Context window</dt><span class="zh-name">脈絡視窗</span><dd>模型一次看得到的內容上限；原文說大部分複雜的專案，一個視窗做不完。</dd></div>
+      <div class="term"><dt>Session</dt><span class="zh-name">工作階段</span><dd>agent 的一段工作，從一個新的 context window 開始；新的 session 不記得前一個。</dd></div>
+      <div class="term"><dt>Compaction</dt><span class="zh-name">壓縮</span><dd>讓 agent 做一件事時不會用完 context window 的 context 管理能力；原文說它交給下一個 agent 的指示不一定完全清楚。</dd></div>
+      <div class="term"><dt>Agent harness</dt><span class="zh-name">agent 的外層系統</span><dd>包在模型外面、讓它能當 agent 運作的那一層；這篇的做法都加在這一層。</dd></div>
+      <div class="term"><dt>Claude Agent SDK</dt><span class="zh-name">Claude 的 agent 開發套件</span><dd>原文說它是通用的 agent harness，擅長寫程式，也能做其他用工具蒐集脈絡、規劃、執行的任務。</dd></div>
+      <div class="term"><dt>Initializer agent</dt><span class="zh-name">初始化 agent</span><dd>第一個 session 的 agent，用專門的提示搭好環境：<code>init.sh</code>、進度檔、第一次 commit、功能清單。</dd></div>
+      <div class="term"><dt>Coding agent</dt><span class="zh-name">寫程式的 agent</span><dd>之後每個 session 的 agent，一次推進一個功能，收尾留下 commit 與進度摘要；和初始化 agent 只差開場的 user prompt。</dd></div>
+      <div class="term"><dt>Feature list</dt><span class="zh-name">功能清單</span><dd>把使用者的 prompt 展開成的功能需求檔，用 JSON 寫；claude.ai 複製品有 200 多項，一開始都標 failing。</dd></div>
+      <div class="term"><dt>passes</dt><span class="zh-name">通過欄位</span><dd>功能清單每一項的狀態；coding agent 只准改它，仔細測過才改成 true。</dd></div>
+      <div class="term"><dt>claude-progress.txt</dt><span class="zh-name">進度檔</span><dd>記錄 agent 做過什麼的文字檔；和 git 歷史一起，讓新的 session 很快看懂狀況。</dd></div>
+      <div class="term"><dt>init.sh</dt><span class="zh-name">啟動腳本</span><dd>初始化 agent 寫的腳本，用來啟動 dev server；coding agent 開場先讀它、跑它。</dd></div>
+      <div class="term"><dt>Dev server</dt><span class="zh-name">開發用伺服器</span><dd>在本機跑 app 的伺服器；每個 session 的基本測試就在它上面跑。</dd></div>
+      <div class="term"><dt>Clean state</dt><span class="zh-name">乾淨的狀態</span><dd>可以合併進 main branch 的程式碼：沒有大 bug、整齊、有文件，下一位開發者不用先收拾別的爛攤子。</dd></div>
+      <div class="term"><dt><span style="white-space:nowrap">One-shot</span></dt><span class="zh-name">一次做完</span><dd>想在一個 session 裡把整個 app 做出來；原文說的第一種失敗。</dd></div>
+      <div class="term"><dt>Incremental progress</dt><span class="zh-name">漸進推進</span><dd>一次只做一個功能，每一步都用清楚的訊息 commit、寫進度摘要。</dd></div>
+      <div class="term"><dt><span style="white-space:nowrap">End-to-end</span> testing</dt><span class="zh-name">端對端測試</span><dd>照使用者的路徑把整個功能走一遍；原文要 agent 用瀏覽器自動化工具做。</dd></div>
+      <div class="term"><dt>Browser automation</dt><span class="zh-name">瀏覽器自動化</span><dd>讓程式操作瀏覽器、點按鈕、讀畫面；原文說給 Claude 這類工具，表現大幅提升。</dd></div>
+      <div class="term"><dt>Puppeteer MCP</dt><span class="zh-name">瀏覽器操作伺服器</span><dd>原文讓 Claude 操作瀏覽器、拍下截圖的 MCP 伺服器；透過它看不到瀏覽器原生的 alert 對話框。</dd></div>
+      <div class="term"><dt><span style="white-space:nowrap">Multi-agent</span> architecture</dt><span class="zh-name">多 agent 架構</span><dd>把工作分給幾個專門的 agent，例如測試、品質保證、清理程式碼；原文列為還沒有答案的問題。</dd></div>
+    </dl>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>資料來源：Anthropic Engineering，〈Effective harnesses for long-running agents〉，Justin Young，2025 年 11 月 26 日。<br><a href="https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents">www.anthropic.com/engineering/effective-harnesses-for-long-running-agents</a></p>
+    <p class="credit">整理於 2026-09-29</p>
+    <p class="disclaimer">本頁為學習用的重述與整理，不是原文逐句翻譯。觀點與著作權屬於原作者。程式片段為教學用精簡版，實際用法請以原文與官方文件為準。</p>
+  </div>
+</footer>
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="圖卡大圖"><button type="button" class="close">關閉（Esc）</button><div class="frame"></div></div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fitFrames() {
+    var frames = document.querySelectorAll('.cardband .frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  var KEY = 'rearranged-article-mode';
+  function setMode(m, save) {
+    document.body.classList.toggle('mode-cards', m === 'cards');
+    var btns = document.querySelectorAll('.modebar button[data-mode]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-mode') === m ? 'true' : 'false');
+    }
+    if (save) { try { localStorage.setItem(KEY, m); } catch (e) {} }
+    fitFrames();
+  }
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  setMode(saved === 'cards' ? 'cards' : 'full', false);
+
+  var box = document.getElementById('lightbox');
+  var boxFrame = box.querySelector('.frame');
+  function fitLightbox() {
+    if (!box.classList.contains('open')) return;
+    var root = boxFrame.firstElementChild;
+    if (!root) return;
+    var s = Math.min(1, (window.innerWidth - 48) / W, (window.innerHeight - 48) / H);
+    root.style.transform = 'scale(' + s + ')';
+    boxFrame.style.width = Math.round(W * s) + 'px';
+    boxFrame.style.height = Math.round(H * s) + 'px';
+  }
+  function openLightbox(num) {
+    var bandEl = document.getElementById('card-' + num);
+    if (!bandEl) return;
+    var root = bandEl.querySelector('.frame > div');
+    boxFrame.innerHTML = '';
+    var clone = root.cloneNode(true);
+    clone.style.transform = '';
+    boxFrame.appendChild(clone);
+    box.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    fitLightbox();
+  }
+  function closeLightbox() {
+    box.classList.remove('open');
+    boxFrame.innerHTML = '';
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var b = t.closest('.modebar button[data-mode]');
+    if (b) { setMode(b.getAttribute('data-mode'), true); return; }
+    var z = t.closest('.cardlabel .zoom');
+    if (z) { openLightbox(z.getAttribute('data-card')); return; }
+    if (t.closest('.lightbox') && !t.closest('.lightbox .frame')) { closeLightbox(); }
+  });
+  document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') closeLightbox(); });
+  window.addEventListener('resize', function () { fitFrames(); fitLightbox(); });
+  window.addEventListener('load', fitFrames);
+  fitFrames();
+})();
+</script>
+</body>
+</html>

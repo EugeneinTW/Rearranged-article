@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Effective Harnesses for Long-Running Agents · 圖解卡</title>
+<meta name="description" content="Anthropic 2025 年 11 月的工程文章：agent 要跨好幾個 context window 做完一個大專案，每個新 session 卻都不記得前一個做了什麼。作者用兩種 agent 解決：第一個 session 的初始化 agent 搭好功能清單、進度檔、init.sh 與 git，之後每個 session 的 coding agent 一次只做一個功能、像使用者一樣測過、收尾留下 commit 與進度。從兩種失敗、功能清單、端對端測試、每個 session 的開場，到四種失敗的分工表與未來方向，每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="coding-agents, agent-harness, long-running-agents, anthropic, cs329z">
+<meta name="source" content="https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents">
+<meta name="date" content="2026-09-29">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+:root { color-scheme: light; --bg: #F4F5F7; --line: #E5E9EE; --ink: #1C2431; --mute: #8A93A0; --orange: #C8501F; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: #C8501F; } a:hover { color: #9E3E16; }
+a:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.wrap { max-width: 1600px; margin: 0 auto; padding-block: 24px 48px; padding-inline: 16px; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; padding: 6px 4px 18px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; letter-spacing: 0.12em; color: var(--mute); }
+.head nav { display: flex; flex-wrap: wrap; gap: 6px 14px; letter-spacing: 0.04em; }
+.head nav a { color: var(--mute); text-decoration: none; font-weight: 600; }
+.head nav a:hover { color: var(--orange); }
+.page { margin-bottom: 36px; scroll-margin-top: 16px; }
+.label { display: flex; align-items: baseline; gap: 14px; padding: 0 4px 8px; font-size: 13px; color: var(--mute); }
+.label .n { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-weight: 600; font-size: 12px; letter-spacing: 0.1em; color: var(--orange); }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--line); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; }
+.foot { padding: 12px 4px 0; font-size: 12px; color: var(--mute); line-height: 1.7; }
+@media print {
+  @page { size: 1600px 900px; margin: 0; }
+  body { background: #FFFFFF; }
+  .wrap { max-width: none; padding: 0; }
+  .head, .label, .foot { display: none; }
+  .page { margin: 0; page-break-after: always; }
+  .frame { border: none; border-radius: 0; height: auto !important; }
+  .frame > div { transform: none !important; }
+}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><span>Effective Harnesses for Long-Running Agents · 圖解卡 · 8 張 · 連續閱讀版</span><nav class="site" aria-label="導覽"><a href="../../">首頁</a><a href="index.html">圖卡＋教材版</a></nav><nav aria-label="跳頁"><a href="#p01" title="封面">01</a><a href="#p02" title="兩種失敗：做太多、太早收工">02</a><a href="#p03" title="交接靠檔案與 git 歷史">03</a><a href="#p04" title="功能清單：只准改 passes">04</a><a href="#p05" title="一次一個功能，壞了就退回">05</a><a href="#p06" title="像使用者一樣測過才算">06</a><a href="#p07" title="開工前先確認 app 還能動">07</a><a href="#p08" title="四種失敗，兩個 agent 分工">08</a></nav></div>
+<section class="page" id="p01">
+  <div class="label"><span class="n">01 / 08</span><span>封面</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;"><span style="letter-spacing:0.14em">LONG-RUNNING AGENTS</span> &#183; 圖解卡 &#183; 16:9 &#183; 8 張</div>
+  <div style="position:absolute; left:60px; top:110px; width:820px; font-size:60px; font-weight:700; color:#1C2431; line-height:1.3; letter-spacing:0.01em;">長任務難在交接：<br>每個 session 都從零開始。</div>
+  <div style="position:absolute; left:60px; top:296px; width:820px; font-size:20px; color:#6B7380; line-height:1.7;">整理自〈Effective harnesses for <span style="white-space:nowrap">long-running</span> agents〉<br>Anthropic Engineering，<span style="white-space:nowrap">2025-11-26</span>，作者 Justin Young。<br>七張圖講一件事：交接不靠 agent 的記憶，靠它讀得到的檔案。</div>
+  <div style="position:absolute; left:60px; top:446px; display:flex; align-items:center; gap:36px;">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#C8501F;"></div>
+      <div style="font-size:15px; color:#2B3340;">失敗／代價</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#2E7B4F;"></div>
+      <div style="font-size:15px; color:#2B3340;">做法／檢查</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#1F2A3A;"></div>
+      <div style="font-size:15px; color:#2B3340;">主體（agent、session）</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div>
+      <div style="font-size:15px; color:#2B3340;">中性節點</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; top:496px; width:820px; font-size:13px; color:#8A93A0; line-height:1.6;">整組共用同一套語意色：橘是 agent 的失敗與它留下的代價，綠是 harness 的做法與檢查，深藍是 agent 與 session 本身。</div>
+  <div style="position:absolute; left:960px; top:110px; width:580px; box-sizing:border-box; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 34px; display:flex; flex-direction:column;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">本組 &#183; 8 頁</div>
+    <div style="margin-top:14px; display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">01</div><div style="font-size:17px; color:#1C2431;">封面</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">02</div><div style="font-size:17px; color:#1C2431;">兩種失敗：做太多、太早收工</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">03</div><div style="font-size:17px; color:#1C2431;">交接靠檔案與 git 歷史</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">04</div><div style="font-size:17px; color:#1C2431;">功能清單：只准改 passes</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">05</div><div style="font-size:17px; color:#1C2431;">一次一個功能，壞了就退回</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">06</div><div style="font-size:17px; color:#1C2431;">像使用者一樣測過才算</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">07</div><div style="font-size:17px; color:#1C2431;">開工前先確認 app 還能動</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#2E7B4F;">08</div><div style="font-size:17px; color:#1C2431;">四種失敗，兩個 agent 分工</div></div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">來源：anthropic.com/engineering/effective-harnesses-for-long-running-agents —— 本組為學習用重述，做法細節以原文與官方文件為準。</div>
+</div></div>
+</section>
+<section class="page" id="p02">
+  <div class="label"><span class="n">02 / 08</span><span>兩種失敗：做太多、太早收工</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">壓縮留不住工作狀態：一次做太多，或太早收工</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">Opus 4.5 在 Claude Agent SDK 上跨好幾個 context window 迴圈地跑，只拿到一句高階 prompt（做一個 claude.ai 的複製品），做不出上線品質的 web app；作者看到兩種失敗</div>
+
+  <div style="position:absolute; left:100px; top:170px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0; letter-spacing:0.1em;">CONTEXT WINDOWS &#183; SESSION 1 &#8594; N</div>
+  <div style="position:absolute; left:180px; top:240px; width:378px; height:60px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">Session 1</div>
+  <div style="position:absolute; left:562px; top:240px; width:374px; height:60px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">Session 2</div>
+  <div style="position:absolute; left:940px; top:240px; width:376px; height:60px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#4B5866;">Session 3 &#8230;</div>
+  <div style="position:absolute; left:1320px; top:240px; width:180px; height:60px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">Session N</div>
+
+  <div style="position:absolute; left:60px; top:342px; width:240px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">想一次做完整個 app</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center; line-height:1.5;">只拿到一句高階 prompt，<br>想一口氣把 app 做出來</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">常在實作中途用完 context</div>
+  </div>
+  <div style="position:absolute; left:442px; top:342px; width:240px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">接手做一半的功能</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center; line-height:1.5;">沒有紀錄，只能先猜<br>上一輪做了什麼</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">還要花時間讓 app 重新能跑</div>
+  </div>
+  <div style="position:absolute; left:820px; top:342px; width:240px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">功能陸續做出來</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center; line-height:1.5;">有些功能已經做好，<br>專案走到後期</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">中間的 session</div>
+  </div>
+  <div style="position:absolute; left:1200px; top:342px; width:240px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">看到進度，就宣布完成</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center; line-height:1.5;">後來的 agent 看了看，<br>發現已經有進度</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">就說整個工作做完了</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:470px; width:1480px; font-size:14px; color:#6B7380; line-height:1.6;">失敗一跨過兩個 session：context 用完的地方，就是下一個 session 接手的地方；compaction 交給下一個 agent 的指示，不一定完全清楚。</div>
+
+  <div style="position:absolute; left:60px; top:540px; width:470px; height:184px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#C8501F;">失敗一：一次做太多</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">想一口氣把 app 做完，context 常在實作中途用完；<br>下一個 session 接到做一半、沒紀錄的功能。</div>
+    <div style="font-size:13px; color:#8A93A0;">它得先猜發生了什麼，再花時間讓 app 重新能跑。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:540px; width:470px; height:184px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#C8501F;">失敗二：太早宣布完成</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">已經做好一些功能之後，後來的 agent<br>看了看四周、發現有進度，就宣布工作完成。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文說這種失敗常出現在專案後期。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:540px; width:470px; height:184px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">compaction 不夠</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">它讓 agent 做事時不會用完 context window，<br>但交給下一個 agent 的指示不一定完全清楚。</div>
+    <div style="font-size:13px; color:#8A93A0;">所以失敗一在有 compaction 時也會發生。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">共同前提：Opus 4.5 在 Claude Agent SDK 上迴圈執行，只給一句高階 prompt；把兩種失敗排在 session 的時間線上是整理者的畫法，事件都出自原文。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M100 320H1500" stroke="#D5DAE1" stroke-width="2"></path>
+    <circle cx="180" cy="320" r="9" fill="#C8501F" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="562" cy="320" r="9" fill="#C8501F" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="940" cy="320" r="9" fill="#9AA3AE" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="1320" cy="320" r="9" fill="#C8501F" stroke="#FFFFFF" stroke-width="3"></circle>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p03">
+  <div class="label"><span class="n">03 / 08</span><span>交接靠檔案與 git 歷史</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">交接不靠記憶，靠檔案與 git 歷史</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">作者把問題拆成兩半：先替所有功能打好地基，再要每個 agent 推進一點、收尾時留下乾淨的狀態；第一個 session 與之後的 session，各用一種 agent</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:330px; height:124px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Session 1　初始化 agent</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">用專門的提示搭好環境：<br>腳本、進度檔、清單與 git</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">只跑一次</div>
+  </div>
+  <div style="position:absolute; left:440px; top:160px; width:330px; height:124px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Session 2　coding agent</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">讀進度、只做一項功能，<br>收尾留下結構化的更新</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">每個 session</div>
+  </div>
+  <div style="position:absolute; left:820px; top:160px; width:330px; height:124px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Session 3　coding agent</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">新的 context window，<br>從檔案接手，不靠記憶</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">每個 session</div>
+  </div>
+  <div style="position:absolute; left:1200px; top:160px; width:330px; height:124px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Session N　coding agent</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">每個 session 都一樣：<br>先讀、再做、最後寫</div>
+  </div>
+
+  <div style="position:absolute; left:233px; top:302px; font-size:12px; font-weight:700; color:#6B7380;">寫</div>
+  <div style="position:absolute; left:568px; top:302px; font-size:12px; font-weight:700; color:#6B7380;">讀</div>
+  <div style="position:absolute; left:658px; top:302px; font-size:12px; font-weight:700; color:#6B7380;">寫</div>
+  <div style="position:absolute; left:948px; top:302px; font-size:12px; font-weight:700; color:#6B7380;">讀</div>
+  <div style="position:absolute; left:1038px; top:302px; font-size:12px; font-weight:700; color:#6B7380;">寫</div>
+  <div style="position:absolute; left:1328px; top:302px; font-size:12px; font-weight:700; color:#6B7380;">讀</div>
+  <div style="position:absolute; left:1418px; top:302px; font-size:12px; font-weight:700; color:#6B7380;">寫</div>
+
+  <div style="position:absolute; left:60px; top:340px; width:1470px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">專案環境</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">init.sh &#183; claude-progress.txt &#183; 功能清單（feature_list.json）&#183; git 歷史：存在檔案裡，不在 context 裡；上一個 session 寫，下一個 session 讀</div>
+  </div>
+  <div style="position:absolute; left:60px; top:418px; width:1470px; font-size:14px; color:#6B7380; line-height:1.6;">新的 session 不記得前一個做了什麼；做到哪、下一項做什麼，都從這幾個檔案讀回來。</div>
+
+  <div style="position:absolute; left:60px; top:462px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:478px; font-size:20px; font-weight:700; color:#1C2431;">兩種 agent，一套 harness</div>
+
+  <div style="position:absolute; left:60px; top:520px; width:470px; height:212px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">初始化 agent：只跑一次</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.65;">第一個 session 用專門的提示搭好環境：<br>init.sh、記錄進度的 claude-progress.txt、<br>第一次 git commit，還有一份功能清單。</div>
+    <div style="font-size:13px; color:#8A93A0;">功能清單的欄位見第 04 卡。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:520px; width:470px; height:212px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">coding agent：每次推進一點</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.65;">之後的每個 session 只推進一小步，<br>收尾時留下結構化的更新：<br>描述清楚的 commit，加上進度摘要。</div>
+    <div style="font-size:13px; color:#8A93A0;">收尾見第 05 卡，開場見第 07 卡。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:520px; width:470px; height:212px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">兩個 agent，只差第一則提示</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.65;">原文註腳：system prompt、工具、<br>整個 agent harness 都一樣，<br>只有一開始的 user prompt 不同。</div>
+    <div style="font-size:13px; color:#8A93A0;">兩個 agent 是兩種角色，不是兩套系統。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：原文說最重要的領悟，是讓新的 context window 很快看懂工作做到哪，靠的是 claude-progress.txt 加上 git 歷史；讀寫的虛線是整理者的畫法。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M409 214L421 222L409 230Z" fill="#9AA3AE"></path>
+    <path d="M789 214L801 222L789 230Z" fill="#9AA3AE"></path>
+    <path d="M1169 214L1181 222L1169 230Z" fill="#9AA3AE"></path>
+    <path d="M225 286V338" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c03)"></path>
+    <path d="M560 340V286" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c03)"></path>
+    <path d="M650 286V338" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c03)"></path>
+    <path d="M940 340V286" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c03)"></path>
+    <path d="M1030 286V338" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c03)"></path>
+    <path d="M1320 340V286" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c03)"></path>
+    <path d="M1410 286V338" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c03)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p04">
+  <div class="label"><span class="n">04 / 08</span><span>功能清單：只准改 passes</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">「做完了」由清單的 passes 說，不由 agent 說</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">初始化 agent 把使用者的一句 prompt 展開成完整的功能需求檔：claude.ai 複製品超過 200 項，每一項一開始都標成 failing</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:440px; height:350px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:10px;"></div>
+  <div style="position:absolute; left:80px; top:164px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0; letter-spacing:0.12em;">PROJECT DIRECTORY</div>
+  <div style="position:absolute; left:80px; top:192px; width:400px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; gap:12px;"><div style="font-size:14px; font-weight:700; color:#4B5866;">init.sh</div><div style="font-size:12.5px; color:#6B7380;">啟動 dev server 的腳本</div></div>
+  <div style="position:absolute; left:80px; top:244px; width:400px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; gap:12px;"><div style="font-size:14px; font-weight:700; color:#4B5866;">claude-progress.txt</div><div style="font-size:12.5px; color:#6B7380;">agent 做過什麼的紀錄</div></div>
+  <div style="position:absolute; left:80px; top:296px; width:400px; height:62px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; padding:0px 14px; display:flex; align-items:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">feature_list.json（功能清單）</div><div style="font-size:12.5px; color:#6B7380;">200 多項功能，passes 全部是 false</div></div></div>
+  <div style="position:absolute; left:80px; top:366px; width:400px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; gap:12px;"><div style="font-size:14px; font-weight:700; color:#4B5866;">git repo</div><div style="font-size:12.5px; color:#6B7380;">第一次 commit 列出新增的檔案</div></div>
+  <div style="position:absolute; left:80px; top:426px; width:400px; font-size:13px; color:#6B7380; line-height:1.55;">四樣都是初始化 agent 在第一個 session 建的；<br>之後每個 session 都從這裡接手。</div>
+
+  <div style="position:absolute; left:505px; top:304px; width:66px; text-align:center; font-size:12.5px; color:#8A93A0;">展開</div>
+
+  <div style="position:absolute; left:580px; top:150px; width:500px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:17px; font-weight:700; color:#FFFFFF;">展開一項功能：四個欄位</div>
+  <div style="position:absolute; left:580px; top:198px; width:500px; height:302px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:14px 22px; display:flex; flex-direction:column; justify-content:center; gap:14px;">
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">1</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">類別</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">CATEGORY</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">功能屬於哪一類，原文的例子是 functional</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">2</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">描述</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">DESCRIPTION</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">一句話講這個功能：按 New Chat 會開一段新對話</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">3</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">測試步驟</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">STEPS</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">照使用者的路徑一步步驗：打開主畫面、點按鈕、<br>確認新對話出現；原文的例子有五步</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">4</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#2E7B4F;">通過了沒</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">PASSES</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">一開始都是 false；coding agent 唯一能改的欄位</div></div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:1140px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0; letter-spacing:0.12em;">WRITERS</div>
+  <div style="position:absolute; left:1140px; top:178px; width:400px; height:76px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#FFFFFF;">初始化 agent</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">把使用者的 prompt 展開成整份清單，全標 failing</div></div>
+  <div style="position:absolute; left:1140px; top:280px; width:400px; height:76px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#2E7B4F;">coding agent</div><div style="font-size:12.5px; color:#6B7380;">仔細測過之後，只把 passes 改成 true</div></div>
+  <div style="position:absolute; left:1140px; top:382px; width:400px; height:76px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px dashed #E6B49A; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#C8501F;">✗ 刪掉或改寫測試</div><div style="font-size:12.5px; color:#6B7380;">提示裡寫明不可接受：會漏掉功能或留下 bug</div></div>
+  <div style="position:absolute; left:1140px; top:474px; width:400px; font-size:13px; color:#6B7380; line-height:1.55;">三條路裡，只有一條會改到 passes；<br>「做完了沒」看這個欄位，不看 agent 怎麼說。</div>
+
+  <div style="position:absolute; left:60px; top:560px; width:470px; height:182px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">200 多項，全部先標 failing</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">claude.ai 複製品的清單超過 200 項，一開始全是 failing；<br>後來的 agent 看得出完整的功能長什麼樣。</div>
+    <div style="font-size:13px; color:#8A93A0;">針對一口氣做完、太早收工兩種失敗。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:560px; width:470px; height:182px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">只准改 passes 一個欄位</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">提示寫得很強硬：刪掉或改寫測試不可接受，<br>因為這可能讓功能漏掉，或留下 bug。</div>
+    <div style="font-size:13px; color:#8A93A0;">coding agent 只能把 false 改成 true。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:560px; width:470px; height:182px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">用 JSON，不用 Markdown</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">作者試過之後選 JSON：和 Markdown 相比，<br>模型比較不會不當地改動或覆寫 JSON 檔。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文沒有再解釋原因。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左邊的目錄與右邊三種寫法是整理者的畫法；欄位依原文的 JSON 精簡改寫，檔名 feature_list.json 取自原文的 log。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+      <marker id="an-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+      <marker id="ao-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+    </defs>
+    <path d="M482 327H576" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1138 216H1084" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c04)"></path>
+    <path d="M1138 318H1084" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c04)"></path>
+    <path d="M1138 420H1084" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c04)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p05">
+  <div class="label"><span class="n">05 / 08</span><span>一次一個功能，壞了就退回</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">一次只做一個功能，壞了就用 git 退回</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">有了功能清單，coding agent 一次只做一項；作者說這是對付「一次做太多」的關鍵，commit 加進度摘要則讓下一個 session 不必再猜</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 一次做很多</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 一次一個功能</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:320px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:230px; top:196px; width:360px; height:48px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">Session：想一口氣做出整個 app</div>
+  <div style="position:absolute; left:230px; top:270px; width:360px; height:44px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">context 在實作中途用完</div>
+  <div style="position:absolute; left:230px; top:338px; width:360px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#C8501F;">留下一個做一半的功能</div><div style="font-size:12.5px; color:#6B7380;">沒有留下紀錄</div></div></div>
+  <div style="position:absolute; left:230px; top:418px; width:360px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">下一個 session：先猜、先修</div>
+
+  <div style="position:absolute; left:1010px; top:196px; width:360px; height:48px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">Session：從清單挑一項功能</div>
+  <div style="position:absolute; left:1010px; top:270px; width:360px; height:44px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">只做這一項，做完、測過</div>
+  <div style="position:absolute; left:860px; top:338px; width:310px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">git commit</div><div style="font-size:12.5px; color:#6B7380;">訊息寫清楚做了什麼</div></div></div>
+  <div style="position:absolute; left:1210px; top:338px; width:310px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">進度摘要</div><div style="font-size:12.5px; color:#6B7380;">寫進進度檔</div></div></div>
+  <div style="position:absolute; left:1010px; top:418px; width:360px; height:46px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">下一個 session：讀紀錄就接上</div>
+
+  <div style="position:absolute; left:60px; top:478px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">有 compaction 也一樣：它交給下一個 agent 的指示，不一定完全清楚。</div>
+  <div style="position:absolute; left:840px; top:478px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">改壞了也退得回去：git 能退回改壞的程式，恢復到能動的版本。</div>
+
+  <div style="position:absolute; left:60px; top:512px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">乾淨的狀態</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">原文的定義：可以合併進 main branch 的程式碼，沒有大 bug、整齊、有文件；下一位開發者不必先收拾爛攤子，就能開始做新功能</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:596px; width:700px; height:176px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#C8501F;">時間花在猜與修</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">下一個 session 接到做一半、沒紀錄的功能，<br>只能先猜發生了什麼，再花時間讓 app 重新能跑。</div>
+    <div style="font-size:13px; color:#8A93A0;">失敗一的代價，落在下一個 session 身上。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:596px; width:700px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F;">每一步都退得回去</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">作者說最有效的是用描述清楚的訊息 commit、<br>把進度摘要寫進進度檔：壞了能退，下一輪也不必猜。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說，這也提高了效率。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左右兩條流程是整理者依原文的描述畫的；作者說一次只做一項是對付「做太多」的關鍵，commit 加進度摘要是他們找到最有效的收尾方式。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M410 244V268" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M410 314V336" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c05)"></path>
+    <path d="M410 394V416" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c05)"></path>
+    <path d="M1190 244V268" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M1150 314L1020 336" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+    <path d="M1230 314L1360 336" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+    <path d="M1020 394L1150 416" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+    <path d="M1360 394L1230 416" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p06">
+  <div class="label"><span class="n">06 / 08</span><span>像使用者一樣測過才算</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">只跑單元測試不夠，要像使用者一樣點過一遍</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">最後一種失敗：沒測好就把功能標成完成。沒有明說時，Claude 會跑單元測試、用 curl 打 dev server，卻看不出功能沒有端對端跑通</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 只從程式這一側測</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 從瀏覽器，像使用者一樣測</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:380px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:230px; top:200px; width:360px; height:48px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">改完一個功能的程式</div>
+  <div style="position:absolute; left:100px; top:282px; width:280px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; color:#2B3340;">跑單元測試</div>
+  <div style="position:absolute; left:440px; top:282px; width:280px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; color:#2B3340;">用 curl 打 dev server</div>
+  <div style="position:absolute; left:230px; top:362px; width:360px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">把功能標成完成</div>
+  <div style="position:absolute; left:230px; top:436px; width:360px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#C8501F;">其實沒有端對端跑通</div>
+  <div style="position:absolute; left:60px; top:498px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">沒有明說時，Claude 也會測；只是看不出這個功能沒有端對端地運作。</div>
+
+  <div style="position:absolute; left:1010px; top:200px; width:360px; height:48px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">改完一個功能的程式</div>
+  <div style="position:absolute; left:1010px; top:282px; width:360px; height:46px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">明說：用瀏覽器自動化工具測</div>
+  <div style="position:absolute; left:900px; top:356px; width:580px; height:58px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">像真人使用者一樣走一遍</div><div style="font-size:12.5px; color:#6B7380;">例如開新對話、送出訊息、看到回應，邊測邊截圖</div></div></div>
+  <div style="position:absolute; left:1010px; top:436px; width:360px; height:46px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">找到只看程式看不出的 bug</div>
+  <div style="position:absolute; left:840px; top:498px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">原文附了 Claude 透過 Puppeteer MCP 測 claude.ai 複製品時拍下的截圖。</div>
+
+  <div style="position:absolute; left:60px; top:556px; width:470px; height:180px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">單元測試與 curl 不夠</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">Claude 會改程式、也會測，<br>卻看不出功能沒有端對端跑通，就標成完成。</div>
+    <div style="font-size:13px; color:#8A93A0;">這是作者看到的最後一種重大失敗。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:556px; width:470px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">表現大幅提升</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">明說要用瀏覽器自動化、像真人一樣測之後，<br>Claude 大多能找出並修掉只看程式看不出的 bug。</div>
+    <div style="font-size:13px; color:#8A93A0;">以 web app 來說，作者說大多做得好。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:556px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">看不到的，就測不到</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">Claude 的視覺與瀏覽器自動化都有極限；<br>透過 Puppeteer MCP 看不到瀏覽器原生的 alert。</div>
+    <div style="font-size:13px; color:#8A93A0;">依賴這種對話框的功能，bug 比較多。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左右兩條流程是整理者依原文的描述畫的；右邊的例子取自第 07 卡的基本測試，限制照原文的說法。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M370 248L250 280" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M450 248L570 280" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M240 328L370 360" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M580 328L450 360" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M410 408V434" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c06)"></path>
+    <path d="M1190 248V280" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1190 328V354" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c06)"></path>
+    <path d="M1190 414V434" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c06)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p07">
+  <div class="label"><span class="n">07 / 08</span><span>開工前先確認 app 還能動</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">開工前先確認 app 還能動，壞了先修</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">每個 coding agent 開場先跑一串步驟，有些很基本但仍然有用；claude.ai 複製品一律先啟動 dev server，開一段新對話、送訊息、等回應</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:110px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　pwd</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">確認工作目錄；<br>只能改這裡面的檔</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:110px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　git log 與進度檔</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">看最近的 commit 與進度，<br>知道最近在做什麼</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:110px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　讀功能清單</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">挑優先順序最高、<br>還沒完成的一項</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:110px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　init.sh</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">啟動 dev server，<br>不必再摸索怎麼跑</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:128px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">壞了就先修</div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:110px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 5　基本的端對端測試</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">開新對話、送訊息、<br>等到回應</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:306px; width:842px; height:76px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">前三步</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">回答三個問題：我在哪、最近做了什麼、這一輪做哪一項</div>
+  </div>
+  <div style="position:absolute; left:924px; top:306px; width:266px; height:76px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#C8501F;">壞了：先修既有的 bug</div><div style="font-size:12.5px; color:#6B7380;">直接做新功能，問題很可能更糟</div></div>
+  <div style="position:absolute; left:1212px; top:306px; width:266px; height:76px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#FFFFFF;">沒壞：開始做新功能</div><div style="font-size:12.5px; color:rgba(255,255,255,0.8);">一次只做一項（第 05 卡）</div></div>
+
+  <div style="position:absolute; left:60px; top:406px; width:1480px; height:56px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">典型的開場</div>
+    <div style="font-size:14.5px; color:#2B3340;">原文 log 的順序：先說要弄清楚專案狀態 &#8594; pwd &#8594; 讀進度檔 &#8594; 讀功能清單 &#8594; git log &#8594; 用 init.sh 重啟 server &#8594; 驗證基本功能 &#8594; 開始做新功能</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:490px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:506px; font-size:20px; font-weight:700; color:#1C2431;">三個理由</div>
+
+  <div style="position:absolute; left:60px; top:548px; width:470px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">前三步：在哪、做到哪、做哪項</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.65;">pwd 確認只能改哪個目錄；git log 與進度檔<br>交代最近的工作；功能清單決定這一輪做哪一項。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說有些步驟很基本，但仍然有用。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:548px; width:470px; height:186px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">init.sh 省下摸索的 token</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.65;">初始化 agent 先寫好啟動 dev server 的腳本，<br>每個 session 不必再想辦法弄清楚怎麼測。</div>
+    <div style="font-size:13px; color:#8A93A0;">表格的第四種失敗，就是花時間摸索怎麼跑 app。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:548px; width:470px; height:186px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">先測再做</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.65;">先開 server、開新對話、送訊息、等回應；<br>app 若被留在壞掉的狀態，馬上發現、先修。</div>
+    <div style="font-size:13px; color:#8A93A0;">直接做新功能，作者說問題很可能更糟。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：五格依原文的條列與 claude.ai 複製品的做法排；log 裡是先讀進度檔與功能清單、再看 git log，兩種順序原文都有。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ao-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M331 207L343 215L331 223Z" fill="#9AA3AE"></path>
+    <path d="M619 207L631 215L619 223Z" fill="#9AA3AE"></path>
+    <path d="M907 207L919 215L907 223Z" fill="#9AA3AE"></path>
+    <path d="M1195 207L1207 215L1195 223Z" fill="#9AA3AE"></path>
+    <path d="M1300 270V288H1057V304" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c07)"></path>
+    <path d="M1390 270V304" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c07)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p08">
+  <div class="label"><span class="n">08 / 08</span><span>四種失敗，兩個 agent 分工</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">四種失敗，兩個 agent 分頭補上</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">原文的表格：每一列是一種失敗；初始化 agent 在第一個 session 先備好東西，coding agent 在每個 session 的頭尾照著用</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:340px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">失敗</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">初始化 agent &#183; 第一個 session</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">coding agent &#183; 每個 session</div>
+  </div>
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:340px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">太早宣布完成</div><div style="font-size:13px; color:#8A93A0;">後期的 agent 看到進度就收工</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>依輸入的規格建一份結構化的 JSON 功能清單，<br>每一項是一段端對端的功能描述</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>開場先讀功能清單，只挑一項來做</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:306px; width:1480px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:grid; grid-template-columns:340px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#2E7B4F;">留下 bug 或沒記錄的進度</div><div style="font-size:13px; color:#8A93A0;">原文說的關鍵：進度檔加 git</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>建好 git repo 與進度檔</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>開場讀進度檔與 git log、跑一次基本測試；<br>收尾寫 git commit、更新進度</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:402px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:340px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">太早標成完成</div><div style="font-size:13px; color:#8A93A0;">沒測好就標 passing</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>建好功能清單（和第一列是同一份）</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>每一項都自己驗證，仔細測過才標成 passing</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:498px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:340px repeat(2, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">摸索怎麼跑 app</div><div style="font-size:13px; color:#8A93A0;">表格把它獨立成一列</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>寫一個能啟動 dev server 的 init.sh</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>開場先讀 init.sh</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:630px; width:470px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">初始化 agent：做一次</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">功能清單、git repo 與進度檔、init.sh，<br>都在第一個 session 備好，之後只拿來用。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">四列裡，有兩列靠同一份功能清單。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:630px; width:470px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">coding agent：管好頭尾</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">開場讀清單、讀進度、讀 init.sh、跑基本測試；<br>中間只做一項、測過才標；收尾 commit 加進度。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">開場見第 07 卡，收尾見第 05 卡。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:630px; width:470px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">同一份清單，管兩種失敗</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">整個專案太早收工，和單一功能太早標完成，<br>初始化 agent 的解法都是那份功能清單。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">這是整理者的讀法。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：依原文的表格重排，措辭是整理者的；第二列的綠色強調與第三張卡的讀法，是整理者加的。</div>
+</div></div>
+</section>
+  <div class="foot">整理自 Anthropic Engineering · Justin Young，2025-11-26：<a href="https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents">https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents</a>。這些圖卡是學習用的重新整理，不是原文的逐句翻譯；觀點與著作權屬於原作者。<a href="index.html">回到圖卡＋教材版</a> · <a href="../../">回首頁</a></div>
+</div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fit() {
+    var frames = document.querySelectorAll('.frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('load', fit);
+  fit();
+})();
+</script>
+</body>
+</html>

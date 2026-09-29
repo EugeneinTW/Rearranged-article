@@ -145,6 +145,42 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "long-running-harnesses",
+      "path": "articles/long-running-harnesses/index.html",
+      "title": "Effective Harnesses for Long-Running Agents：每個新 session 都從零開始，交接要寫在檔案裡",
+      "summary": "Anthropic 2025 年 11 月的工程文章：agent 要跨好幾個 context window 做完一個大專案，每個新 session 卻都不記得前一個做了什麼。作者用兩種 agent 解決：第一個 session 的初始化 agent 搭好功能清單、進度檔、init.sh 與 git，之後每個 session 的 coding agent 一次只做一個功能、像使用者一樣測過、收尾留下 commit 與進度。從兩種失敗、功能清單、端對端測試、每個 session 的開場，到四種失敗的分工表與未來方向，每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "Anthropic Engineering · Justin Young",
+        "url": "https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents",
+        "date": "2025-11-26"
+      },
+      "date": "2026-09-29",
+      "tags": [
+        "coding-agents",
+        "agent-harness",
+        "long-running-agents",
+        "anthropic",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 9,
+        "kind": "選讀",
+        "section": "Coding Agents & Proactive Agents",
+        "lecture": "Coding & Software Agents",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/long-running-harnesses/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "contextualized-privacy-defense",
       "path": "articles/contextualized-privacy-defense/index.html",
       "title": "情境化的隱私防禦：讓一個小模型在每一步提醒 LLM agent 什麼能分享，並從失敗裡訓練它",
