@@ -1,6 +1,42 @@
 window.ARTICLES = {
   "articles": [
     {
+      "slug": "responsible-scaling-policy",
+      "path": "articles/responsible-scaling-policy/index.html",
+      "title": "Anthropic 負責任擴展政策讀法：能力到哪一級，措施就得先到哪一級（1.0 版）",
+      "summary": "Anthropic 在 2023 年 9 月發布的負責任擴展政策（RSP）讀法頁，主體依發布文與 1.0 版全文：AI 安全等級（ASL）怎麼分、ASL-3 的門檻怎麼量、訓練前與部署前各要做到什麼、何時評估、警訊響了怎麼停、誰來查核。另有版本與分區一章：政策現行是 3.4 版，今天的承諾請看現行版；後續變動只整理 2.0 的官方更新說明。每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "Anthropic · News",
+        "url": "https://www.anthropic.com/news/anthropics-responsible-scaling-policy",
+        "date": "2023-09-19"
+      },
+      "date": "2026-09-29",
+      "tags": [
+        "responsible-scaling",
+        "ai-safety",
+        "ai-governance",
+        "anthropic",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 8,
+        "kind": "選讀",
+        "section": "Safety",
+        "lecture": "Agent Safety & Guardrails",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/responsible-scaling-policy/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "prompt-injection-security",
       "path": "articles/prompt-injection-security/index.html",
       "title": "Understanding Prompt Injections：第三方把指令藏進 AI 會讀的內容",
