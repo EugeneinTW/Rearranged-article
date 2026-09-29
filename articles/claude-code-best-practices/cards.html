@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Best Practices for Claude Code · 圖解卡</title>
+<meta name="description" content="Anthropic 的 Claude Code 官方文件：多數做法都建立在一個限制上，context window 很快就滿，滿了表現就變差。從給 Claude 能跑的檢查、先規劃再寫程式、CLAUDE.md 與權限，到管理 session、平行與 fan-out、獨立審查與五種常見失敗，每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="claude-code, coding-agents, context-window, anthropic, cs329z">
+<meta name="source" content="https://code.claude.com/docs/en/best-practices">
+<meta name="date" content="2026-09-29">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+:root { color-scheme: light; --bg: #F4F5F7; --line: #E5E9EE; --ink: #1C2431; --mute: #8A93A0; --orange: #C8501F; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: #C8501F; } a:hover { color: #9E3E16; }
+a:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.wrap { max-width: 1600px; margin: 0 auto; padding-block: 24px 48px; padding-inline: 16px; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; padding: 6px 4px 18px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; letter-spacing: 0.12em; color: var(--mute); }
+.head nav { display: flex; flex-wrap: wrap; gap: 6px 14px; letter-spacing: 0.04em; }
+.head nav a { color: var(--mute); text-decoration: none; font-weight: 600; }
+.head nav a:hover { color: var(--orange); }
+.page { margin-bottom: 36px; scroll-margin-top: 16px; }
+.label { display: flex; align-items: baseline; gap: 14px; padding: 0 4px 8px; font-size: 13px; color: var(--mute); }
+.label .n { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-weight: 600; font-size: 12px; letter-spacing: 0.1em; color: var(--orange); }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--line); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; }
+.foot { padding: 12px 4px 0; font-size: 12px; color: var(--mute); line-height: 1.7; }
+@media print {
+  @page { size: 1600px 900px; margin: 0; }
+  body { background: #FFFFFF; }
+  .wrap { max-width: none; padding: 0; }
+  .head, .label, .foot { display: none; }
+  .page { margin: 0; page-break-after: always; }
+  .frame { border: none; border-radius: 0; height: auto !important; }
+  .frame > div { transform: none !important; }
+}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><span>Best Practices for Claude Code · 圖解卡 · 10 張 · 連續閱讀版</span><nav class="site" aria-label="導覽"><a href="../../">首頁</a><a href="index.html">圖卡＋教材版</a></nav><nav aria-label="跳頁"><a href="#p01" title="封面">01</a><a href="#p02" title="一個限制：context 很快就滿">02</a><a href="#p03" title="給 Claude 能跑的檢查">03</a><a href="#p04" title="先探索、再規劃、再寫程式">04</a><a href="#p05" title="每條指示放在該生效的地方">05</a><a href="#p06" title="周邊四樣：CLI、MCP、subagent、權限">06</a><a href="#p07" title="清空、壓縮、摘要各動哪一段">07</a><a href="#p08" title="大型遷移拆給平行的 claude -p">08</a><a href="#p09" title="新的 subagent 只看 diff 來審">09</a><a href="#p10" title="五種常見失敗與修法">10</a></nav></div>
+<section class="page" id="p01">
+  <div class="label"><span class="n">01 / 10</span><span>封面</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;"><span style="letter-spacing:0.14em">CLAUDE CODE</span> &#183; 圖解卡 &#183; 16:9 &#183; 10 張</div>
+  <div style="position:absolute; left:60px; top:110px; width:820px; font-size:60px; font-weight:700; color:#1C2431; line-height:1.3; letter-spacing:0.01em;">context 很快就滿，<br>多數做法都在管它。</div>
+  <div style="position:absolute; left:60px; top:296px; width:820px; font-size:20px; color:#6B7380; line-height:1.7;">整理自 Anthropic 的 Claude Code 官方文件<br>〈Best practices for Claude Code〉，最後修改 <span style="white-space:nowrap">2026-09-26</span>。<br>九張圖講一件事：給它能跑的檢查、把規則放對地方，<br>積極清 context，再放手讓它平行、自動地做。</div>
+  <div style="position:absolute; left:60px; top:462px; display:flex; align-items:center; gap:36px;">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#C8501F;"></div>
+      <div style="font-size:15px; color:#2B3340;">問題／成本</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#2E7B4F;"></div>
+      <div style="font-size:15px; color:#2B3340;">解法／檢查</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#1F2A3A;"></div>
+      <div style="font-size:15px; color:#2B3340;">主體（你、Claude）</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div>
+      <div style="font-size:15px; color:#2B3340;">中性節點</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; top:512px; width:820px; font-size:13px; color:#8A93A0; line-height:1.6;">整組共用同一套語意色：橘是塞滿 context、讓 session 走偏的東西，<br>綠是讓它自己收斂的做法，深藍是你和 Claude。</div>
+  <div style="position:absolute; left:960px; top:110px; width:580px; box-sizing:border-box; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 34px; display:flex; flex-direction:column;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">本組 &#183; 10 頁</div>
+    <div style="margin-top:14px; display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">01</div><div style="font-size:17px; color:#1C2431;">封面</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">02</div><div style="font-size:17px; color:#1C2431;">一個限制：context 很快就滿</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">03</div><div style="font-size:17px; color:#1C2431;">給 Claude 能跑的檢查</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">04</div><div style="font-size:17px; color:#1C2431;">先探索、再規劃、再寫程式</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">05</div><div style="font-size:17px; color:#1C2431;">每條指示放在該生效的地方</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">06</div><div style="font-size:17px; color:#1C2431;">周邊四樣：CLI、MCP、subagent、權限</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">07</div><div style="font-size:17px; color:#1C2431;">清空、壓縮、摘要各動哪一段</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">08</div><div style="font-size:17px; color:#1C2431;">大型遷移拆給平行的 claude -p</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">09</div><div style="font-size:17px; color:#1C2431;">新的 subagent 只看 diff 來審</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:11px 0px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#2E7B4F;">10</div><div style="font-size:17px; color:#1C2431;">五種常見失敗與修法</div></div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">來源：code.claude.com/docs/en/best-practices —— 本組為學習用重述，指令與功能以官方文件為準。</div>
+</div></div>
+</section>
+<section class="page" id="p02">
+  <div class="label"><span class="n">02 / 10</span><span>一個限制：context 很快就滿</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">context window 滿得很快，滿了表現就變差</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">文件開頭說：Claude Code 會自己讀檔、跑指令、改程式；每一則訊息、讀過的每個檔、每次指令的輸出，都留在同一個 context window 裡</div>
+
+  <div style="position:absolute; left:60px; top:200px; width:220px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#1C2431;">你</div><div style="font-size:12px; color:#6B7380;">描述想要什麼，隨時可以打斷</div></div></div>
+  <div style="position:absolute; left:60px; top:320px; width:220px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#FFFFFF;">Claude Code</div><div style="font-size:12px; color:rgba(255,255,255,0.75);">探索、規劃、實作</div></div></div>
+  <div style="position:absolute; left:60px; top:440px; width:220px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#6B7380;">停下</div><div style="font-size:12px; color:#6B7380;">覺得做完了就停（第 03 卡）</div></div></div>
+  <div style="position:absolute; left:60px; top:512px; width:220px; font-size:13px; color:#8A93A0; line-height:1.55; text-align:center;">你可以在旁邊看、中途改方向，<br>或乾脆走開</div>
+
+  <div style="position:absolute; left:470px; top:196px; font-size:13px; font-weight:700; color:#2B3340;">行動：讀檔、跑指令、改程式</div>
+  <div style="position:absolute; left:470px; top:486px; font-size:13px; font-weight:700; color:#2B3340;">回饋：檔案內容、指令輸出、測試結果</div>
+
+  <div style="position:absolute; left:840px; top:150px; width:700px; height:400px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #D5DAE1; border-radius:14px;"></div>
+  <div style="position:absolute; left:870px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">你的專案與環境</div>
+  <div style="position:absolute; left:870px; top:214px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">FILES</div>
+  <div style="position:absolute; left:870px; top:236px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">原始碼</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">測試</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">設定檔</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">文件與 log</div>
+  </div>
+  <div style="position:absolute; left:870px; top:296px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">COMMANDS</div>
+  <div style="position:absolute; left:870px; top:318px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">測試套件</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">build</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">linter</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">git</div>
+  </div>
+  <div style="position:absolute; left:870px; top:378px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">SERVICES</div>
+  <div style="position:absolute; left:870px; top:400px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">CLI 工具</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">MCP servers</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">網頁與 API 文件</div>
+  </div>
+  <div style="position:absolute; left:870px; top:460px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">YOUR INPUT</div>
+  <div style="position:absolute; left:870px; top:482px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">每一則訊息</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">截圖</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">錯誤訊息</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">@ 引用的檔案</div>
+  </div>
+
+  <div style="position:absolute; left:300px; top:554px; font-size:12.5px; color:#8A93A0;">上面每一次來回，都留在下面這一條裡 ↓</div>
+  <div style="position:absolute; left:60px; top:580px; width:1480px; height:56px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #D5DAE1; border-radius:8px;"></div>
+  <div style="position:absolute; left:74px; top:594px; padding:5px 12px; border-radius:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; letter-spacing:0.08em; color:#FFFFFF; background-color:#1F2A3A;">CONTEXT WINDOW</div>
+  <div style="position:absolute; left:230px; top:588px; width:170px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">你的訊息</div>
+  <div style="position:absolute; left:400px; top:588px; width:360px; height:40px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">讀過的檔案</div>
+  <div style="position:absolute; left:760px; top:588px; width:320px; height:40px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">指令的輸出</div>
+  <div style="position:absolute; left:1080px; top:588px; width:250px; height:40px; box-sizing:border-box; background-color:#FDF7F3; border:1px dashed #E6B49A; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">還在累積…</div>
+  <div style="position:absolute; left:1330px; top:588px; width:118px; height:40px; box-sizing:border-box; display:flex; align-items:center; justify-content:center; font-size:12.5px; color:#8A93A0;">剩下的空間</div>
+  <div style="position:absolute; left:1452px; top:584px; width:3px; height:48px; background-color:#1F2A3A; border-radius:2px;"></div>
+  <div style="position:absolute; left:1466px; top:598px; font-size:13px; font-weight:700; color:#1F2A3A;">上限</div>
+
+  <div style="position:absolute; left:60px; top:660px; width:470px; height:150px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#C8501F;">一次除錯，就可能用掉數萬 token</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">文件說一次除錯或一次探索 codebase，<br>就可能產生並用掉數萬個 token。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">每則訊息、每個讀過的檔、每次輸出都算在裡面。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:660px; width:470px; height:150px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#C8501F;">快滿時，可能開始忘、開始錯</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">context 快滿的時候，Claude 可能「忘記」<br>前面的指示，或犯更多錯。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">文件說 LLM 的表現會隨 context 變滿而下降。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:660px; width:470px; height:150px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#2E7B4F;">所以它是最要管的資源</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">後面的做法多半在替它省空間：<br>清空與壓縮、subagent、短的 CLAUDE.md。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">文件建議用自訂的 status line 隨時看用量。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：迴圈與底下那條 context 的畫法是整理者的示意，分段長度不是實際數字；環境面板裡的例子取自文件各節。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ags-c02" markerWidth="10" markerHeight="10" refX="2" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M10 0L0 5L10 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+    </defs>
+    <path d="M170 258L170 316" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-start="url(#ags-c02)" marker-end="url(#ag-c02)"></path>
+    <path d="M170 378L170 436" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c02)"></path>
+    <path d="M280 334C520 334 620 226 836 226" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c02)"></path>
+    <path d="M838 470C620 470 520 366 284 366" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c02)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p03">
+  <div class="label"><span class="n">03 / 10</span><span>給 Claude 能跑的檢查</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">沒有能跑的檢查，你就是那個驗證迴圈</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">Claude 覺得做完了就停。給它一個會回報通過或失敗的檢查，它會自己跑、讀結果、改到通過；文件說這是「得盯著看」和「可以走開」的差別</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 只有「看起來完成」</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 給它一個 pass／fail</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:318px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:100px; top:196px; width:220px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#FFFFFF;">Claude 做事</div><div style="font-size:12px; color:rgba(255,255,255,0.75);">照你的交代改程式</div></div></div>
+  <div style="position:absolute; left:480px; top:196px; width:240px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#1C2431;">看起來完成</div><div style="font-size:12px; color:#6B7380;">就停下來</div></div></div>
+  <div style="position:absolute; left:480px; top:300px; width:240px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#C8501F;">你發現錯誤</div><div style="font-size:12px; color:#6B7380;">可能要過很久才發現</div></div></div>
+  <div style="position:absolute; left:100px; top:300px; width:220px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#C8501F;">你回頭交代</div><div style="font-size:12px; color:#6B7380;">再做一輪</div></div></div>
+  <div style="position:absolute; left:60px; top:388px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">每個錯都在等你發現；你不在，它就停在「看起來完成」。</div>
+
+  <div style="position:absolute; left:880px; top:196px; width:220px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#FFFFFF;">Claude 做事</div><div style="font-size:12px; color:rgba(255,255,255,0.75);">照你的交代改程式</div></div></div>
+  <div style="position:absolute; left:1260px; top:196px; width:260px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#2E7B4F;">跑檢查</div><div style="font-size:12px; color:#6B7380;">測試、build、linter、截圖比對</div></div></div>
+  <div style="position:absolute; left:1260px; top:300px; width:260px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#1C2431;">讀結果</div><div style="font-size:12px; color:#6B7380;">通過了嗎？</div></div></div>
+  <div style="position:absolute; left:1260px; top:404px; width:260px; height:56px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#FFFFFF;">通過才停</div><div style="font-size:12px; color:rgba(255,255,255,0.8);">附上證據給你看</div></div></div>
+  <div style="position:absolute; left:1110px; top:306px; font-size:13px; font-weight:700; color:#2E7B4F;">沒過：回頭再改</div>
+  <div style="position:absolute; left:1402px; top:368px; font-size:13px; font-weight:700; color:#2E7B4F;">通過</div>
+  <div style="position:absolute; left:840px; top:388px; width:380px; font-size:14px; color:#6B7380; line-height:1.6;">Claude 自己跑、自己讀結果，<br>改到通過才停；你回來看證據就好。</div>
+
+  <div style="position:absolute; left:60px; top:490px; font-size:17px; font-weight:700; color:#1C2431;">檢查要多硬地擋住「停下」：四種做法，越往右設定越多、越不用你盯</div>
+  <div style="position:absolute; left:60px; top:526px; width:350px; height:92px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-size:15.5px; font-weight:700; color:#1C2431;">① 同一個 prompt 裡</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">請它跑檢查、在同一則訊息裡<br>改到通過；任何任務都能用</div>
+  </div>
+  <div style="position:absolute; left:436px; top:526px; width:350px; height:92px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-size:15.5px; font-weight:700; color:#1C2431;">② /goal 條件</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">另一個評估者每一輪都重查，<br>目標達成才停</div>
+  </div>
+  <div style="position:absolute; left:812px; top:526px; width:350px; height:92px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-size:15.5px; font-weight:700; color:#1C2431;">③ Stop hook</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">把檢查寫成腳本，沒通過<br>就不讓這一輪結束</div>
+  </div>
+  <div style="position:absolute; left:1188px; top:526px; width:352px; height:92px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; gap:4px;">
+    <div style="font-size:15.5px; font-weight:700; color:#1C2431;">④ 第二意見</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">驗證用的 subagent：讓一個<br>新的模型試著推翻結果</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:644px; width:700px; height:166px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:20px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#C8501F;">「看起來完成」是唯一的訊號</div>
+    <div style="font-size:15.5px; color:#2B3340; line-height:1.6;">沒有它能跑的檢查，每個錯都要等你發現；<br>你不在，它就停在看起來完成的地方。</div>
+    <div style="font-size:13px; color:#8A93A0;">文件說 Claude 會在工作看起來完成時停下。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:644px; width:700px; height:166px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:20px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F;">要證據，不要只說做完了</div>
+    <div style="font-size:15.5px; color:#2B3340; line-height:1.6;">測試的輸出、跑過的指令與回傳、結果的截圖；<br>看證據比自己重跑快，沒盯著的 session 也適用。</div>
+    <div style="font-size:13px; color:#8A93A0;">檢查通過後，自己再用 /verify 對著執行中的 app 確認。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左右兩個迴圈是整理者依文件的描述畫的；四種做法照文件的順序排，「設定越多、越不用盯」是文件的說法。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M322 224H478" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M600 254V298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M478 328H322" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c03)"></path>
+    <path d="M210 298V254" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c03)"></path>
+    <path d="M1102 224H1258" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1390 254V298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1390 358V402" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c03)"></path>
+    <path d="M1258 328H990V254" stroke="#2E7B4F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#an-c03)"></path>
+    <path d="M417 564L429 572L417 580Z" fill="#9AA3AE"></path>
+    <path d="M793 564L805 572L793 580Z" fill="#9AA3AE"></path>
+    <path d="M1169 564L1181 572L1169 580Z" fill="#9AA3AE"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p04">
+  <div class="label"><span class="n">04 / 10</span><span>先探索、再規劃、再寫程式</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">先探索、再規劃，最後才動手寫</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">直接跳去寫，可能寫出解錯問題的程式。文件建議用 plan mode 把探索和執行分開；但一句話講得完的 diff，就跳過規劃直接做</div>
+
+  <div style="position:absolute; left:330px; top:134px; width:610px; height:28px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:500; color:#2E7B4F;">plan mode：按 Shift+Tab 切換；Claude 只讀檔、回答，不改任何東西</div>
+
+  <div style="position:absolute; left:60px; top:172px; width:240px; height:124px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px 12px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">先問一句</div>
+    <div style="margin-top:6px; font-size:13px; color:#6B7380; line-height:1.55;">這次的 diff，能用<br>一句話講完嗎？</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">講得完就跳過規劃</div>
+  </div>
+  <div style="position:absolute; left:330px; top:172px; width:290px; height:124px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px 12px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　探索</div>
+    <div style="margin-top:6px; font-size:13px; color:#6B7380; line-height:1.55;">Claude 讀相關的程式、<br>回答你的問題，不做修改</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">plan mode</div>
+  </div>
+  <div style="position:absolute; left:650px; top:172px; width:290px; height:124px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px 12px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　規劃</div>
+    <div style="margin-top:6px; font-size:13px; color:#6B7380; line-height:1.55;">寫出詳細的實作計畫；<br>Ctrl+G 在編輯器裡直接改</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">plan mode</div>
+  </div>
+  <div style="position:absolute; left:970px; top:172px; width:290px; height:124px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px 12px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　實作</div>
+    <div style="margin-top:6px; font-size:13px; color:#6B7380; line-height:1.55;">離開 plan mode 寫程式，<br>對照計畫驗證</div>
+  </div>
+  <div style="position:absolute; left:1290px; top:172px; width:250px; height:124px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px 12px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 4　提交</div>
+    <div style="margin-top:6px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">用描述清楚的訊息<br>commit，開一個 PR</div>
+  </div>
+
+  <div style="position:absolute; left:330px; top:332px; font-size:13px; color:#6B7380;">一句話講得完（改錯字、加一行 log、改變數名）：跳過探索與規劃，直接請 Claude 做</div>
+
+  <div style="position:absolute; left:60px; top:380px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">值得規劃時</div>
+    <div style="font-size:15px; color:#2B3340;">不確定該怎麼做、改動會跨好幾個檔案、或你不熟要改的那段程式。文件說 plan mode 有用，但也多一道工。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:476px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:494px; font-size:20px; font-weight:700; color:#1C2431;">四個階段怎麼走：文件的例子是加上 Google OAuth</div>
+
+  <div style="position:absolute; left:60px; top:548px; width:470px; height:236px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">探索與規劃，都在 plan mode</div>
+    <div style="font-size:15.5px; color:#2B3340; line-height:1.7;">探索：讀 src/auth，弄懂 session 與登入、<br>密鑰放在哪些環境變數。<br>規劃：列出要改的檔案與 session 流程，寫成計畫。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">Ctrl+G 打開計畫直接改，<br>改完再讓 Claude 往下做。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:548px; width:470px; height:236px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">實作時，對照計畫驗證</div>
+    <div style="font-size:15.5px; color:#2B3340; line-height:1.7;">核准計畫或按 Shift+Tab 離開 plan mode；<br>實作 OAuth，替 callback handler 寫測試，<br>跑整套測試並修掉失敗。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">驗證接回第 03 卡：給它能跑的檢查。<br>最後用清楚的訊息 commit、開 PR。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:548px; width:470px; height:236px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">規劃也有成本</div>
+    <div style="font-size:15.5px; color:#2B3340; line-height:1.7;">plan mode 有用，但也多一道工。範圍清楚、<br>改動很小的，例如改錯字、加一行 log、<br>改變數名，直接請 Claude 做。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">文件的判準：能用一句話描述這次的 diff，<br>就跳過計畫。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：「先問一句」那一格是整理者把文件的判準畫成起點；四個階段與例子照文件，提示的措辭是整理者改寫的。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M309 226L321 234L309 242Z" fill="#9AA3AE"></path>
+    <path d="M629 226L641 234L629 242Z" fill="#9AA3AE"></path>
+    <path d="M949 226L961 234L949 242Z" fill="#9AA3AE"></path>
+    <path d="M1269 226L1281 234L1269 242Z" fill="#9AA3AE"></path>
+    <path d="M180 298V320H1115V298" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c04)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p05">
+  <div class="label"><span class="n">05 / 10</span><span>每條指示放在該生效的地方</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">每條指示，放在它該生效的地方</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">CLAUDE.md 每個 session 開頭都讀進 context，塞太多規則就被淹沒。文件的分法：每次都要的放 CLAUDE.md，有時才用的做成 skill，一定要發生的交給 hook</div>
+
+  <div style="position:absolute; left:60px; top:285px; width:230px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div style="font-size:16px; font-weight:700; color:#FFFFFF; line-height:1.35;">一條想讓 Claude<br>知道的事</div></div>
+  <div style="position:absolute; left:360px; top:275px; width:280px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div style="font-size:17px; font-weight:700; color:#1C2431; line-height:1.35;">它什麼時候<br>要生效？</div></div>
+
+  <div style="position:absolute; left:806px; top:166px; font-size:13px; font-weight:700; color:#2E7B4F;">每個 session 都要</div>
+  <div style="position:absolute; left:806px; top:252px; font-size:13px; font-weight:700; color:#2E7B4F;">只有某些任務用得到</div>
+  <div style="position:absolute; left:806px; top:338px; font-size:13px; font-weight:700; color:#2E7B4F;">每次都得發生</div>
+  <div style="position:absolute; left:806px; top:406px; font-size:12.5px; font-weight:700; color:#C8501F; line-height:1.3;">推得出來，<br>或沒它也做對</div>
+
+  <div style="position:absolute; left:940px; top:150px; width:600px; height:76px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:12px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-size:16px; font-weight:700; color:#2E7B4F;">CLAUDE.md：每個 session 開頭就讀</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">Claude 猜不到的指令、和預設不同的風格、測試方式、repo 的規矩</div>
+  </div>
+  <div style="position:absolute; left:940px; top:236px; width:600px; height:76px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:12px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-size:16px; font-weight:700; color:#2E7B4F;">skill：相關時才載入，或用 /skill-name 叫</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">有時才用得到的領域知識與流程；不會撐大每一段對話</div>
+  </div>
+  <div style="position:absolute; left:940px; top:322px; width:600px; height:76px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:12px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-size:16px; font-weight:700; color:#2E7B4F;">hook：在固定的時間點自動跑腳本</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">確定性、保證發生；寫在 CLAUDE.md 的指示只是建議</div>
+  </div>
+  <div style="position:absolute; left:940px; top:408px; width:600px; height:76px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:10px; padding:12px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-size:16px; font-weight:700; color:#C8501F;">刪掉</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">Claude 讀程式碼就推得出來，或沒有這一條也已經做對</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:506px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">每一行都問</div>
+    <div style="font-size:15px; color:#2B3340;">刪掉它，Claude 會犯錯嗎？不會，就刪。文件說太臃腫的 CLAUDE.md，會讓 Claude 忽略你真正的指示。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:586px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:602px; font-size:20px; font-weight:700; color:#1C2431;">像程式碼一樣維護 CLAUDE.md</div>
+  <div style="position:absolute; left:60px; top:644px; width:470px; height:166px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#C8501F;">規則被跳過：多半是檔案太長</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">明明有規則，Claude 還是照做不誤；<br>它問的事寫在檔案裡，可能是措辭模糊。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">出問題時，回頭讀一次 CLAUDE.md。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:644px; width:470px; height:166px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#2E7B4F;">修剪、測試，放進 git</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">定期刪減，改了就看 Claude 的行為有沒有變；<br>放進 git 讓團隊一起改，價值越積越多。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">放進 repo 的檔案可以跑 /doctor，讓 Claude 提議刪哪些。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:644px; width:470px; height:166px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">強調只給一行</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">老是被跳過的那一條，才加上 IMPORTANT；<br>強調的行一多，哪一行都不突出。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">用 @path 可以匯入其他檔案。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：把四種去處排成一個問題是整理者的畫法；每個條件都出自文件的 CLAUDE.md、hooks、skills 三節與「常見失敗」。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+      <marker id="ao-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+    </defs>
+    <path d="M290 317L358 317" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M640 317H790" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M760 317V188H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+    <path d="M760 317V274H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+    <path d="M760 317V360H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+    <path d="M790 317V446H938" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c05)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p06">
+  <div class="label"><span class="n">06 / 10</span><span>周邊四樣：CLI、MCP、subagent、權限</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">周邊四樣設定一次，之後每個 session 都受益</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">中間是你的 session：CLI 與 MCP 接外部服務，subagent 接手要讀很多檔的調查，每個動作都先過權限這一關。文件說這幾步設好，所有 session 都明顯更有效</div>
+
+  <div style="position:absolute; left:160px; top:150px; width:440px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">CLI 工具</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">gh、aws、gcloud、<span style="white-space:nowrap">sentry-cli</span>。文件說這是<br>接外部服務最省 context 的方式</div></div>
+  <div style="position:absolute; left:1000px; top:150px; width:440px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">MCP servers</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">claude mcp add 接上 Notion、Figma、資料庫；<br>從 issue 做功能、查監控資料</div></div>
+
+  <div style="position:absolute; left:456px; top:262px; width:100px; text-align:right; font-size:12.5px; color:#8A93A0;">指令</div>
+  <div style="position:absolute; left:604px; top:262px; font-size:12.5px; color:#8A93A0;">輸出</div>
+  <div style="position:absolute; left:896px; top:262px; width:100px; text-align:right; font-size:12.5px; color:#8A93A0;">呼叫</div>
+  <div style="position:absolute; left:1044px; top:262px; font-size:12.5px; color:#8A93A0;">結果</div>
+
+  <div style="position:absolute; left:560px; top:300px; width:480px; height:90px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:19px; font-weight:700; color:#FFFFFF;">你的 Claude Code session</div><div style="margin-top:4px; font-size:12.5px; color:rgba(255,255,255,0.75);">主對話：context 留給正在做的事</div></div></div>
+
+  <div style="position:absolute; left:456px; top:406px; width:100px; text-align:right; font-size:12.5px; color:#8A93A0;">委派</div>
+  <div style="position:absolute; left:604px; top:406px; font-size:12.5px; color:#8A93A0;">摘要</div>
+  <div style="position:absolute; left:896px; top:406px; width:100px; text-align:right; font-size:12.5px; color:#8A93A0;">每個動作</div>
+  <div style="position:absolute; left:1044px; top:406px; font-size:12.5px; color:#8A93A0;">允許或擋下</div>
+
+  <div style="position:absolute; left:160px; top:444px; width:440px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">自訂 subagent</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">在 .claude/agents/ 定義；在自己的 context 裡、<br>用自己被允許的工具做事，只交回摘要</div></div>
+  <div style="position:absolute; left:1000px; top:444px; width:440px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">權限</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">auto mode 由分類器先看；Manual 由你批准；<br>允許清單與沙箱，減少打擾</div></div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:166px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#1C2431;">auto mode 是預設</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">文件說 <span style="white-space:nowrap">v2.1.283</span> 起，互動式 session 預設用它：<br>分類器代替你審查，只擋看起來有風險的。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">例如擴大範圍、陌生的基礎設施、有敵意的內容驅動的動作。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:166px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#C8501F;">Manual：第十次就只是在點</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">寫檔、跑 Bash、用 MCP 工具前都先問你；<br>安全但煩，批准到第十次就不是在審了。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">允許清單與沙箱，兩種模式都適用。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:166px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#2E7B4F;">plugin 一次裝一整套</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">把 skills、hooks、subagents、MCP servers<br>打包成一個可以安裝的單位；用 /plugin 找。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">寫有型別的語言，就裝 code intelligence plugin。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：把四樣畫在同一個 session 周圍是整理者的畫法；skills、subagents、hooks、MCP 之間怎麼挑，文件指向另一頁〈Extend Claude Code〉，本組沒有展開。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M566 298L566 248" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M594 248L594 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1006 298L1006 248" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1034 248L1034 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M566 392L566 442" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M594 442L594 392" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1006 392L1006 442" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1034 442L1034 392" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p07">
+  <div class="label"><span class="n">07 / 10</span><span>清空、壓縮、摘要各動哪一段</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">清空、壓縮、摘要，各動 context 的哪一段</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">同一段長 session，用不同的指令處理之後 context 還剩什麼。/clear 整個重來；/compact 整段摘要；在 rewind 選一則訊息，可以只摘要它之後或之前的部分</div>
+
+  <div style="position:absolute; left:60px; top:136px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1;"></div>照原樣留著</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FCF1EA; border:1px solid #E6B49A;"></div>和眼前無關的舊內容</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF6F0; border:1px solid #B4D5C0;"></div>摘要</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FFFFFF; border:1px dashed #9AA3AE;"></div>空出來的空間</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="font-size:14px; color:#1F2A3A;">▼</div>在 rewind 選的那則訊息</div>
+  </div>
+
+  <div style="position:absolute; left:972px; top:168px; font-size:16px; color:#1F2A3A;">▼</div>
+
+  <div style="position:absolute; left:60px; top:190px; width:110px; height:44px; display:flex; align-items:center; font-size:16px; font-weight:700; color:#1C2431;">長 session</div>
+  <div style="position:absolute; left:180px; top:190px; width:340px; height:44px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">舊任務的對話</div>
+  <div style="position:absolute; left:520px; top:190px; width:460px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">這個任務：前面的訊息</div>
+  <div style="position:absolute; left:980px; top:190px; width:460px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">這個任務：最近的訊息</div>
+  <div style="position:absolute; left:1440px; top:190px; width:60px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1px dashed #9AA3AE; border-radius:0px 6px 6px 0px;"></div>
+
+  <div style="position:absolute; left:60px; top:256px; width:110px; height:44px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">/clear</div>
+  <div style="position:absolute; left:180px; top:256px; width:1320px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1px dashed #9AA3AE; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#6B7380;">整段清空：換到不相關的任務時用</div>
+
+  <div style="position:absolute; left:60px; top:322px; width:110px; height:44px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:16px; font-weight:600; color:#1C2431;">/compact</div>
+  <div style="position:absolute; left:180px; top:322px; width:240px; height:44px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">摘要：照你的指示留</div>
+  <div style="position:absolute; left:420px; top:322px; width:1080px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1px dashed #9AA3AE; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#6B7380;">空出來；自動壓縮也類似，留下程式模式、檔案狀態與關鍵決定</div>
+
+  <div style="position:absolute; left:60px; top:388px; width:110px; height:44px; display:flex; flex-direction:column; justify-content:center;"><div style="font-size:16px; font-weight:700; color:#1C2431; line-height:1.25;">從這裡摘要</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0; line-height:1.3;">from here</div></div>
+  <div style="position:absolute; left:180px; top:388px; width:340px; height:44px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">舊任務的對話</div>
+  <div style="position:absolute; left:520px; top:388px; width:460px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">前面照原樣留著</div>
+  <div style="position:absolute; left:980px; top:388px; width:160px; height:44px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">之後的：摘要</div>
+  <div style="position:absolute; left:1140px; top:388px; width:360px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1px dashed #9AA3AE; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#6B7380;">空出來</div>
+
+  <div style="position:absolute; left:60px; top:454px; width:110px; height:44px; display:flex; flex-direction:column; justify-content:center;"><div style="font-size:16px; font-weight:700; color:#1C2431; line-height:1.25;">摘要到這裡</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0; line-height:1.3;">up to here</div></div>
+  <div style="position:absolute; left:180px; top:454px; width:240px; height:44px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">之前的：摘要</div>
+  <div style="position:absolute; left:420px; top:454px; width:460px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">最近的訊息完整保留</div>
+  <div style="position:absolute; left:880px; top:454px; width:620px; height:44px; box-sizing:border-box; background-color:#FFFFFF; border:1px dashed #9AA3AE; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#6B7380;">空出來</div>
+
+  <div style="position:absolute; left:60px; top:526px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF; background-color:#1F2A3A;">/btw</div>
+    <div style="font-size:15px; color:#2B3340;">只是順口問一句：答案不進對話歷史，這一條 context 完全不變。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:604px; width:470px; height:166px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#C8501F;">修正兩次還不對，就 /clear</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">context 已經塞滿失敗的嘗試。帶著學到的，<br>寫一個更具體的 prompt 重新開始。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">文件說：乾淨重來，幾乎總是勝過一路修正。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:604px; width:470px; height:166px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#2E7B4F;">壓縮前，先說要留什麼</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">/compact 後面接指示；也可以在 CLAUDE.md<br>寫明壓縮時保留改過的檔案與測試指令。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">快到上限時，Claude Code 也會自動壓縮。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:604px; width:470px; height:166px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#1C2431;">checkpoint 能倒回，但不是 git</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">每個開始一輪的 prompt 都是還原點：<br>可以還原對話、程式碼，或兩者。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">只追蹤 Claude 檔案編輯工具的改動，Bash 的不算。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：分段的長度與位置是整理者的示意，不是實際的 token 數；每個指令留下什麼，依文件的描述。</div>
+</div></div>
+</section>
+<section class="page" id="p08">
+  <div class="label"><span class="n">08 / 10</span><span>大型遷移拆給平行的 claude -p</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">大型遷移，拆給很多個平行的 <span style="white-space:nowrap">claude -p</span></div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">文件的例子是 <span style="white-space:nowrap">2,000 個</span>要從 Python 2 遷到 3 的檔案：先請 Claude 把清單寫進檔案，再用迴圈替每個檔呼叫一次 <span style="white-space:nowrap">claude -p</span>；也可以用 /batch 讓 Claude 自己拆</div>
+
+  <div style="position:absolute; left:560px; top:150px; width:480px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">Step 1　files.txt：要遷移的 <span style="white-space:nowrap">2,000 個</span>檔</div><div style="margin-top:3px; font-size:12.5px; color:rgba(255,255,255,0.75);">先請 Claude 列出清單、存成檔案，下一步的迴圈才讀得到</div></div></div>
+
+  <div style="position:absolute; left:60px; top:246px; font-size:14px; font-weight:700; color:#4B5866;">Step 2　迴圈：每個檔呼叫一次</div>
+
+  <div style="position:absolute; left:80px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;"><span style="white-space:nowrap">claude -p</span> · 檔案 1</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">只處理這一個檔，回傳 OK 或 FAIL</div></div>
+  <div style="position:absolute; left:460px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;"><span style="white-space:nowrap">claude -p</span> · 檔案 2</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">每次呼叫都是各自獨立的一次執行</div></div>
+  <div style="position:absolute; left:840px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;"><span style="white-space:nowrap">claude -p</span> · 檔案 3</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;"><span style="white-space:nowrap; font-family:IBM Plex Mono, ui-monospace, monospace; font-size:0.92em">--allowedTools</span> 限定它能做的事</div></div>
+  <div style="position:absolute; left:1220px; top:300px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 16px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:15px; font-weight:700; color:#1C2431;"><span style="white-space:nowrap">claude -p</span> · 檔案 n</div><div style="font-size:12.5px; color:#6B7380; line-height:1.4;">迴圈跑完清單上的每一個檔</div></div>
+
+  <div style="position:absolute; left:560px; top:440px; width:480px; height:64px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">每個檔各回 OK 或 FAIL</div><div style="margin-top:3px; font-size:12.5px; color:#6B7380;">也可以用 <span style="white-space:nowrap; font-family:IBM Plex Mono, ui-monospace, monospace; font-size:0.92em">--output-format json</span> 接進你自己的流程</div></div></div>
+
+  <div style="position:absolute; left:60px; top:530px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">Step 3　先試再跑</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">先拿 <span style="white-space:nowrap">2 到 3 個檔</span>試，依出錯的地方修 prompt，再跑全部。沒人看著跑的時候，用 <span style="white-space:nowrap; font-family:IBM Plex Mono, ui-monospace, monospace; font-size:0.92em">--allowedTools</span> 限制它能做的事，文件說這一點很重要。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:620px; width:470px; height:166px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#2E7B4F;">/batch：讓 Claude 自己拆</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">/batch 加上指示，Claude 把改動拆給<br><span style="white-space:nowrap">5 到 30 個</span> subagent，各自在一個 worktree 裡做。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">想用自己的腳本控制 <span style="white-space:nowrap">fan-out</span>，才寫迴圈。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:620px; width:470px; height:166px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#1C2431;"><span style="white-space:nowrap">claude -p</span>：不開互動介面</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">適合 CI、<span style="white-space:nowrap">pre-commit</span> hook 與腳本；輸出<br>可以是純文字、JSON，或串流 JSON。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">除非加 <span style="white-space:nowrap; font-family:IBM Plex Mono, ui-monospace, monospace; font-size:0.92em">--no-session-persistence</span>，仍會留下可接續的 session。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:620px; width:470px; height:166px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#C8501F;">沒人看著時，限制它能做什麼</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;"><span style="white-space:nowrap; font-family:IBM Plex Mono, ui-monospace, monospace; font-size:0.92em">--allowedTools</span> 限定每次呼叫能用的工具；<br>auto mode 讓分類器在指令執行前把關。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">分類器擋擴大範圍、陌生的基礎設施、有敵意的內容驅動的動作。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：工作者只畫四個是示意，實際上清單裡每個檔各一次呼叫；框畫成實線，表示要處理哪些檔在跑之前就定好了，這是整理者的畫法。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c08" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M680 216L230 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M760 216L610 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M840 216L990 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M920 216L1370 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M230 386L680 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M610 386L760 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M990 386L840 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M1370 386L920 438" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p09">
+  <div class="label"><span class="n">09 / 10</span><span>新的 subagent 只看 diff 來審</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">新的 subagent 只看 diff 與標準來審</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">Claude 自己跑得越久，算完成之前越需要獨立的檢查。在新的 subagent context 裡，審查者看得到 diff 與你給的標準，看不到產生改動的推理</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:410px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:18px; font-weight:700; color:#FFFFFF;">審查者拿到的東西</div>
+  <div style="position:absolute; left:60px; top:198px; width:410px; height:252px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:20px 24px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:17px; font-weight:700; color:#1C2431;">一個新的 subagent</div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2E7B4F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:16px; color:#2B3340;">rate limiter 的 diff</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2E7B4F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:16px; color:#2B3340;">PLAN.md：要對照的計畫</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2E7B4F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:16px; color:#2B3340;">什麼算缺口（寫在你的 prompt 裡）</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C8501F" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg><div style="font-size:16px; color:#C8501F;">實作時的推理：看不到</div></div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">fresh subagent context</div>
+    <div style="font-size:13px; color:#8A93A0;">↑ 它只能照 diff 和標準判斷</div>
+  </div>
+
+  <div style="position:absolute; left:580px; top:120px; font-size:20px; font-weight:700; color:#1C2431;">三個要回答的問題（文件的審查 prompt）</div>
+  <div style="position:absolute; left:580px; top:158px; width:960px; height:98px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:18px 24px; display:flex; align-items:flex-start; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">1</div>
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:20px; font-weight:700; color:#1C2431;">每個需求都實作了嗎？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">PLAN</div></div>
+      <div style="font-size:14px; color:#6B7380;">對照計畫逐條看；計畫裡寫了、diff 裡沒有的，就是一個缺口</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:270px; width:960px; height:98px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:18px 24px; display:flex; align-items:flex-start; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">2</div>
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:20px; font-weight:700; color:#1C2431;">列出的邊界情況，都有測試嗎？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">TESTS</div></div>
+      <div style="font-size:14px; color:#6B7380;">計畫列出的每一個邊界情況，diff 裡都要有對應的測試</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:382px; width:960px; height:98px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:18px 24px; display:flex; align-items:flex-start; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">3</div>
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:20px; font-weight:700; color:#1C2431;">任務範圍外，有沒有東西被改動？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">SCOPE</div></div>
+      <div style="font-size:14px; color:#6B7380;">改到不該改的地方，也要回報；風格上的偏好不算缺口</div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:530px; width:480px; height:140px; box-sizing:border-box; background-color:#1F2A3A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:20px; font-weight:700; color:#FFFFFF;">判定：回報缺口，不回報風格偏好</div>
+    <div style="font-size:14px; color:rgba(255,255,255,0.78); line-height:1.65;">缺口直接回到實作的 session：它修好、<br>再審一次，不用你在視窗之間複製結果。</div>
+  </div>
+  <div style="position:absolute; left:580px; top:530px; width:960px; height:140px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">為什麼要換一個新的 context</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">做事的 agent 不該替自己打分。新的審查者沒看過實作時的推理，只能照 diff 和你給的標準判斷；<br>第 03 卡的「第二意見」是同一個想法。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:690px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:706px; font-size:20px; font-weight:700; color:#1C2431;">直接可以拿去用的三條</div>
+  <div style="position:absolute; left:60px; top:742px; font-size:16px; color:#2B3340;">① 只查正確性：跑內建的 /code-review skill，它在新的 subagent 裡審目前的 diff 有沒有 bug。</div>
+  <div style="position:absolute; left:60px; top:772px; font-size:16px; color:#2B3340;">② 要對照計畫：自己寫審查 prompt，講清楚審哪份工作、對照哪份計畫、什麼算一個發現。</div>
+  <div style="position:absolute; left:60px; top:802px; font-size:16px; color:#2B3340;">③ 被要求找缺口的審查者，就算工作沒問題也常回報一些；只修影響正確性與需求的，其餘當選項。</div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：每一條發現都追著修，會把程式做過頭：多餘的抽象層、防禦性程式、替不可能發生的情況寫測試。三個問題照文件的審查 prompt 範例。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c09" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M482 300L558 300" stroke="#9AA3AE" stroke-width="2" marker-end="url(#ag-c09)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p10">
+  <div class="label"><span class="n">10 / 10</span><span>五種常見失敗與修法</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">五種常見的失敗，三種是 context 被塞滿</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">文件說這些是常見的錯，早點認出來能省時間，每一種都附了修法。下表照文件的五種模式排；「結果」欄橘字的三列，文件的描述直接寫到 context</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:1480px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:280px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">失敗模式</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">怎麼開始的</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">結果</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">文件給的修法</div>
+  </div>
+  <div style="position:absolute; left:60px; top:196px; width:1480px; height:80px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:280px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">什麼都丟的 session</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">Kitchen sink</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.5;"><div>一個任務做到一半，問了不相關的事，<br>又回到原本的任務</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; font-weight:700; color:#C8501F; line-height:1.5;"><div>context 塞滿無關的資訊</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2E7B4F; line-height:1.5;"><div>不相關的任務之間 /clear</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:276px; width:1480px; height:80px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:280px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">一改再改</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">Correcting over and over</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.5;"><div>做錯、糾正、還是錯、再糾正</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; font-weight:700; color:#C8501F; line-height:1.5;"><div>context 被失敗的做法污染</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2E7B4F; line-height:1.5;"><div>糾正兩次還不行，就 /clear，<br>帶著學到的寫更好的起始 prompt</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:356px; width:1480px; height:80px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:280px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">規定過多的 CLAUDE.md</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;"><span style="white-space:nowrap">Over-specified</span></div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.5;"><div>CLAUDE.md 寫得太長</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.5;"><div>重要的規則淹沒在雜訊裡，<br>Claude 忽略了一半</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2E7B4F; line-height:1.5;"><div>大刀闊斧地刪；沒它也做對的，<br>刪掉或改成 hook</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:436px; width:1480px; height:80px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:280px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">先信了才驗</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;"><span style="white-space:nowrap">Trust-then-verify</span> gap</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.5;"><div>Claude 交出看起來合理的實作</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.5;"><div>邊界情況沒有處理</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2E7B4F; line-height:1.5;"><div>一定要給驗證：測試、腳本、截圖；<br>驗不了，就別上線</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:516px; width:1480px; height:80px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:280px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">沒有邊界的探索</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">Infinite exploration</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2B3340; line-height:1.5;"><div>請它「調查」，卻沒限定範圍</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; font-weight:700; color:#C8501F; line-height:1.5;"><div>讀了幾百個檔，context 被塞滿</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14.5px; color:#2E7B4F; line-height:1.5;"><div>把調查範圍收窄，或交給 subagent</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:626px; width:470px; height:166px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#C8501F;">三種：context 被塞滿</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">不相關的資訊、失敗的嘗試、讀進來的<br>幾百個檔；修法都是讓主對話變乾淨。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">第 07 卡：清空、壓縮、摘要各動哪一段。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:626px; width:470px; height:166px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#1C2431;">一種：規則被淹沒</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">CLAUDE.md 太長，重要的規則被雜訊蓋過；<br>刪掉沒它也做對的，必做的改成 hook。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">第 05 卡：每條指示放在該生效的地方。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:626px; width:470px; height:166px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#2E7B4F;">一種：少了驗證</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">看起來合理，邊界情況卻沒處理；<br>給測試、腳本或截圖，驗不了就別上線。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">第 03 卡：給 Claude 能跑的檢查。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：五種模式、結果與修法出自文件；分成三組、對到其他卡，是整理者的讀法。</div>
+</div></div>
+</section>
+  <div class="foot">整理自 code.claude.com · Claude Code Docs，2026-09-26：<a href="https://code.claude.com/docs/en/best-practices">https://code.claude.com/docs/en/best-practices</a>。這些圖卡是學習用的重新整理，不是原文的逐句翻譯；觀點與著作權屬於原作者。<a href="index.html">回到圖卡＋教材版</a> · <a href="../../">回首頁</a></div>
+</div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fit() {
+    var frames = document.querySelectorAll('.frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('load', fit);
+  fit();
+})();
+</script>
+</body>
+</html>
