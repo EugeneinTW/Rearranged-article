@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenHands（Wang et al. 2024） · 圖解卡</title>
+<meta name="description" content="OpenHands（早期叫 OpenDevin）是學界與業界一起做的開源 agent 平台：agent 只讀一條事件流、送出動作，動作在 Docker 沙箱裡的 bash、IPython 與瀏覽器執行，結果寫回成觀察；工具寫成 Python 函式讓每個 agent 共用，agent 之間可以委派，再用 15 個基準與整合測試量它。這份整理逐一交代事件流、runtime、任意 image、AgentSkills、AgentHub 怎麼運作，以及軟體、網頁、輔助三類結果的數字怎麼讀，每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="openhands, coding-agents, agent-frameworks, swe-bench, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2407.16741">
+<meta name="date" content="2026-09-29">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+:root { color-scheme: light; --bg: #F4F5F7; --line: #E5E9EE; --ink: #1C2431; --mute: #8A93A0; --orange: #C8501F; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: #C8501F; } a:hover { color: #9E3E16; }
+a:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.wrap { max-width: 1600px; margin: 0 auto; padding-block: 24px 48px; padding-inline: 16px; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; padding: 6px 4px 18px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; letter-spacing: 0.12em; color: var(--mute); }
+.head nav { display: flex; flex-wrap: wrap; gap: 6px 14px; letter-spacing: 0.04em; }
+.head nav a { color: var(--mute); text-decoration: none; font-weight: 600; }
+.head nav a:hover { color: var(--orange); }
+.page { margin-bottom: 36px; scroll-margin-top: 16px; }
+.label { display: flex; align-items: baseline; gap: 14px; padding: 0 4px 8px; font-size: 13px; color: var(--mute); }
+.label .n { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-weight: 600; font-size: 12px; letter-spacing: 0.1em; color: var(--orange); }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--line); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; }
+.foot { padding: 12px 4px 0; font-size: 12px; color: var(--mute); line-height: 1.7; }
+@media print {
+  @page { size: 1600px 900px; margin: 0; }
+  body { background: #FFFFFF; }
+  .wrap { max-width: none; padding: 0; }
+  .head, .label, .foot { display: none; }
+  .page { margin: 0; page-break-after: always; }
+  .frame { border: none; border-radius: 0; height: auto !important; }
+  .frame > div { transform: none !important; }
+}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><span>OpenHands（Wang et al. 2024） · 圖解卡 · 12 張 · 連續閱讀版</span><nav class="site" aria-label="導覽"><a href="../../">首頁</a><a href="index.html">圖卡＋教材版</a></nav><nav aria-label="跳頁"><a href="#p01" title="封面">01</a><a href="#p02" title="三個元件，一條事件流">02</a><a href="#p03" title="一個任務的九個事件">03</a><a href="#p04" title="一個容器、三個執行器">04</a><a href="#p05" title="runtime image 怎麼重用">05</a><a href="#p06" title="AgentSkills：工具是 Python 函式">06</a><a href="#p07" title="專門 agent 各守一欄">07</a><a href="#p08" title="七個軟體基準">08</a><a href="#p09" title="瀏覽：直接跑與委派">09</a><a href="#p10" title="七組輔助任務">10</a><a href="#p11" title="錄好 LLM 回應的整合測試">11</a><a href="#p12" title="平台之後的五個方向">12</a></nav></div>
+<section class="page" id="p01">
+  <div class="label"><span class="n">01 / 12</span><span>封面</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;"><span style="letter-spacing:0.14em">OPENHANDS</span> &#183; 圖解卡 &#183; 16:9 &#183; 12 張</div>
+  <div style="position:absolute; left:60px; top:110px; width:820px; font-size:60px; font-weight:700; color:#1C2431; line-height:1.3; letter-spacing:0.01em;">讓 agent 像開發者：<br>寫程式、下指令、上網。</div>
+  <div style="position:absolute; left:60px; top:296px; width:820px; font-size:20px; color:#6B7380; line-height:1.7;">整理自 arXiv 論文〈OpenHands: An Open Platform for AI Software Developers as Generalist Agents〉（Wang 等 24 位作者，ICLR 2025）。<br>十一張圖講一件事：一條事件流串起 agent、沙箱與使用者，再用基準與測試量它。</div>
+  <div style="position:absolute; left:60px; top:432px; display:flex; align-items:center; gap:36px;">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#C8501F;"></div>
+      <div style="font-size:15px; color:#2B3340;">代價／比對手低</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#2E7B4F;"></div>
+      <div style="font-size:15px; color:#2B3340;">平台的做法／比對手高</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#1F2A3A;"></div>
+      <div style="font-size:15px; color:#2B3340;">主體／終點</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div>
+      <div style="font-size:15px; color:#2B3340;">中性節點</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; top:482px; width:820px; font-size:13px; color:#8A93A0; line-height:1.6;">整組共用同一套語意色：橘是成本、風險與比對手低的分數，<br>綠是 OpenHands 的做法與比對手高的分數，深藍是 agent、事件流與流程的終點。</div>
+  <div style="position:absolute; left:960px; top:110px; width:580px; box-sizing:border-box; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 34px; display:flex; flex-direction:column;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">本組 &#183; 12 頁</div>
+    <div style="margin-top:12px; display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">01</div><div style="font-size:17px; color:#1C2431;">封面</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">02</div><div style="font-size:17px; color:#1C2431;">三個元件，一條事件流</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">03</div><div style="font-size:17px; color:#1C2431;">一個任務的九個事件</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">04</div><div style="font-size:17px; color:#1C2431;">一個容器、三個執行器</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">05</div><div style="font-size:17px; color:#1C2431;">runtime image 怎麼重用</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">06</div><div style="font-size:17px; color:#1C2431;">AgentSkills：工具是 Python 函式</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">07</div><div style="font-size:17px; color:#1C2431;">專門 agent 各守一欄</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">08</div><div style="font-size:17px; color:#1C2431;">七個軟體基準</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">09</div><div style="font-size:17px; color:#1C2431;">瀏覽：直接跑與委派</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">10</div><div style="font-size:17px; color:#1C2431;">七組輔助任務</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">11</div><div style="font-size:17px; color:#1C2431;">錄好 LLM 回應的整合測試</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:10px 0px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#2E7B4F;">12</div><div style="font-size:17px; color:#1C2431;">平台之後的五個方向</div></div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">來源：arxiv.org/abs/2407.16741 —— 本組為學習用重述，數字依 arXiv v3；類別名與函式名以原文與官方文件為準。</div>
+</div></div>
+</section>
+<section class="page" id="p02">
+  <div class="label"><span class="n">02 / 12</span><span>三個元件，一條事件流</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">三個元件，靠一條事件流串起來</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 2：agent 讀事件歷史、產生動作；runtime 在 Docker 沙箱裡把動作執行成觀察；使用者介面也接在同一條事件流上，隨時可以插話</div>
+
+  <div style="position:absolute; left:60px; top:200px; width:220px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#1C2431;">使用者介面</div><div style="font-size:12px; color:#6B7380;">命令列、Web UI、IDE 外掛</div></div></div>
+  <div style="position:absolute; left:60px; top:320px; width:220px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#FFFFFF;">Agent</div><div style="font-size:12px; color:rgba(255,255,255,0.75);">step()：事件歷史 → 動作</div></div></div>
+  <div style="position:absolute; left:60px; top:440px; width:220px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#1C2431;">AgentHub</div><div style="font-size:12px; color:#6B7380;">社群貢獻、可替換的實作</div></div></div>
+  <div style="position:absolute; left:60px; top:512px; width:220px; font-size:13px; color:#8A93A0; line-height:1.55; text-align:center;">使用者隨時插話；<br>agent 換哪一個實作都行</div>
+
+  <div style="position:absolute; left:450px; top:196px; font-size:13px; font-weight:700; color:#2B3340;">動作：寫進事件流，交給 runtime 執行</div>
+  <div style="position:absolute; left:450px; top:486px; font-size:13px; font-weight:700; color:#2B3340;">觀察：執行結果寫回事件流</div>
+
+  <div style="position:absolute; left:840px; top:150px; width:700px; height:400px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #D5DAE1; border-radius:14px;"></div>
+  <div style="position:absolute; left:870px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">Agent Runtime：每個 session 一個 Docker 沙箱</div>
+  <div style="position:absolute; left:870px; top:214px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">EXECUTION API</div>
+  <div style="position:absolute; left:870px; top:236px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">bash shell</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">Jupyter IPython 伺服器</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">Chromium 瀏覽器</div>
+  </div>
+  <div style="position:absolute; left:870px; top:296px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">AGENTSKILLS</div>
+  <div style="position:absolute; left:870px; top:318px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1.5px solid #B4D5C0; border-radius:999px; font-size:15px; color:#2E7B4F; background-color:#EEF6F0;">edit_file</div>
+    <div style="padding:9px 16px; border:1.5px solid #B4D5C0; border-radius:999px; font-size:15px; color:#2E7B4F; background-color:#EEF6F0;">search_dir</div>
+    <div style="padding:9px 16px; border:1.5px solid #B4D5C0; border-radius:999px; font-size:15px; color:#2E7B4F; background-color:#EEF6F0;">parse_pdf</div>
+    <div style="padding:9px 16px; border:1.5px solid #B4D5C0; border-radius:999px; font-size:15px; color:#2E7B4F; background-color:#EEF6F0;">自動匯入 IPython</div>
+  </div>
+  <div style="position:absolute; left:870px; top:378px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">IMAGE</div>
+  <div style="position:absolute; left:870px; top:400px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">使用者給的任意 base image</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">自動裝上執行 API</div>
+  </div>
+  <div style="position:absolute; left:870px; top:460px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">WORKSPACE</div>
+  <div style="position:absolute; left:870px; top:482px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">使用者的工作目錄，掛載進沙箱</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; width:1480px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">事件流：依時間記下每個動作與觀察，也記使用者的指示與回饋 —— UI、agent、runtime 都只和它打交道</div>
+
+  <div style="position:absolute; left:60px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:18px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">Agent：事件歷史 → 動作</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">agent 只寫 step()：讀 state 裡的事件歷史，<br>回傳一個動作；動作怎麼執行它不用管。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">state 另外記 LLM 累積成本與委派的資訊。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:18px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#2E7B4F;">Runtime：動作 → 觀察</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">每個動作都在隔離的 Docker 容器裡執行，<br>結果寫回事件流，成為下一個觀察。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">動作受 CodeAct 啟發，全部用程式表達。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:18px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">介面：直接接在事件流上</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">UI 連著事件流控制、顯示 agent 與 runtime，<br>所以不綁定特定的 agent 或 runtime。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">使用者可以隨時打斷、補上回饋（附錄 D）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左欄三格、右側四組 pill 與底層橫條是整理者依圖 2 與第 2.1 到 2.3 節畫的；圖 2 裡動作先寫進事件流再交給 runtime，AgentSkills 那一列是第 2.3 節的內容。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ags-c02" markerWidth="10" markerHeight="10" refX="2" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M10 0L0 5L10 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+    </defs>
+    <path d="M170 258L170 316" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-start="url(#ags-c02)" marker-end="url(#ag-c02)"></path>
+    <path d="M170 438L170 380" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c02)"></path>
+    <path d="M280 334C520 334 620 226 836 226" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c02)"></path>
+    <path d="M838 470C620 470 520 366 284 366" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c02)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p03">
+  <div class="label"><span class="n">03 / 12</span><span>一個任務的九個事件</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">一個任務的九個事件：動作、觀察交替</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 2 中間的例子：使用者要一個顯示 1 到 10 的網頁（port 5000）。agent 用 Python 建檔、改檔，用 bash 啟動伺服器，再用瀏覽器確認結果</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">EVENTS 1–5</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">先把程式寫出來：兩個 IPython 動作</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">EVENTS 6–9</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">跑起來再看一眼：bash 與瀏覽器</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:218px; width:700px; height:38px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#4B5866;">1 · MSG</div><div style="font-size:14px; font-weight:700; color:#1C2431;">使用者：列出 1 到 10 的數字，做一個網頁在 port 5000 顯示</div></div>
+  <div style="position:absolute; left:60px; top:266px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">2 · ACT</div><div style="font-size:14px; color:#1C2431;">IPythonRunCellAction：「先建一個檔案」create_file('app.py')</div></div>
+  <div style="position:absolute; left:60px; top:304px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">3 · OBS</div><div style="font-size:14px; color:#2B3340;">IPythonRunCellObservation：/workspace/app.py 建好了（1 行）</div></div>
+  <div style="position:absolute; left:60px; top:342px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">4 · ACT</div><div style="font-size:14px; color:#1C2431;">IPythonRunCellAction：「寫伺服器程式」edit_file(start=1, end=1, …)</div></div>
+  <div style="position:absolute; left:60px; top:380px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">5 · OBS</div><div style="font-size:14px; color:#2B3340;">檔案更新：@app.route('/') 回傳 list(range(1, 11))</div></div>
+  <div style="position:absolute; left:60px; top:440px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">淡綠是 agent 送出的動作（source=agent），淺灰是回來的觀察；<br>使用者的訊息也是事件流裡的一個事件，排在同一條線上。</div>
+
+  <div style="position:absolute; left:840px; top:218px; width:700px; height:38px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; padding:0px 16px; font-size:14px; font-weight:700; color:#1C2431;">同一條事件流接著往下：換成 bash 與瀏覽器</div>
+  <div style="position:absolute; left:840px; top:266px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">6 · ACT</div><div style="font-size:14px; color:#1C2431;">CmdRunAction：「幫你啟動伺服器」python3 app.py &gt; server.log 2&gt;&amp;1 &amp;</div></div>
+  <div style="position:absolute; left:840px; top:304px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">7 · OBS</div><div style="font-size:14px; color:#2B3340;">CmdRunObservation：Flask 跑在 http://127.0.0.1:5000，PID 124</div></div>
+  <div style="position:absolute; left:840px; top:342px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">8 · ACT</div><div style="font-size:14px; color:#1C2431;">BrowseInteractiveAction：goto("http://127.0.0.1:5000")</div></div>
+  <div style="position:absolute; left:840px; top:380px; width:700px; height:32px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:rgba(255,255,255,0.6);">9 · OBS</div><div style="font-size:14px; color:#FFFFFF;">BrowserOutputObservation：[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]　✓</div></div>
+  <div style="position:absolute; left:840px; top:440px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">三種執行器輪流上場：IPython 寫檔、bash 跑伺服器、瀏覽器驗證；<br>每個觀察都原樣寫回事件流，agent 下一步看的就是這一整串。</div>
+
+  <div style="position:absolute; left:60px; top:572px; width:700px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">事件流＝動作與觀察的清單</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">圖 2 左下的抽象：事件流是 [動作 1, 觀察 1, 動作 2, …]；<br>agent 把事件歷史變成動作，runtime 把動作變成觀察。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">一個動作對到一個觀察，整條依時間排好。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:572px; width:700px; height:186px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">每一步都是一段程式</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">建檔、改檔是一段 Python（呼叫 AgentSkills 的函式），<br>啟動伺服器是一行 bash，看網頁是一行瀏覽器指令。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">每個動作都附一句寫給使用者看的說明。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：九個事件依圖 2 精簡改寫，程式內容有刪減；圖 2、圖 3 的瀏覽器動作寫 BrowseInteractiveAction，第 2.1 節正文寫 BrowserInteractiveAction。</div>
+</div></div>
+</section>
+<section class="page" id="p04">
+  <div class="label"><span class="n">04 / 12</span><span>一個容器、三個執行器</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">一個容器、三個執行器：動作進去，觀察出來</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2.2 節、附錄 F.1：每個 session 開一個隔離的 Docker 容器，裡面跑 OpenHands 維護的執行 API（runtime client）；後端用 REST API 送動作、收觀察</div>
+
+  <div style="position:absolute; left:380px; top:150px; width:380px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">bash shell</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">接上 image 指定的作業系統環境，<br>執行指令與命令列工具</div></div>
+  <div style="position:absolute; left:840px; top:150px; width:380px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">Jupyter IPython 伺服器</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">互動式執行 Python；<br>AgentSkills 的工具也在這裡</div></div>
+
+  <div style="position:absolute; left:566px; top:262px; width:110px; text-align:right; font-size:12.5px; color:#8A93A0;">指令</div>
+  <div style="position:absolute; left:724px; top:262px; font-size:12.5px; color:#8A93A0;">輸出</div>
+  <div style="position:absolute; left:766px; top:262px; width:110px; text-align:right; font-size:12.5px; color:#8A93A0;">程式</div>
+  <div style="position:absolute; left:924px; top:262px; font-size:12.5px; color:#8A93A0;">結果</div>
+
+  <div style="position:absolute; left:60px; top:316px; width:200px; height:58px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">動作</div><div style="font-size:12px; color:#6B7380;">來自事件流，經 REST API 送進來</div></div></div>
+  <div style="position:absolute; left:640px; top:300px; width:320px; height:90px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:19px; font-weight:700; color:#FFFFFF;">執行 API（runtime client）</div><div style="margin-top:4px; font-size:12.5px; color:rgba(255,255,255,0.75);">容器裡的 REST 伺服器：<br>接收動作、回傳觀察</div></div></div>
+  <div style="position:absolute; left:1340px; top:316px; width:200px; height:58px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">觀察</div><div style="font-size:12px; color:#6B7380;">寫回事件流，agent 下一步看得到</div></div></div>
+
+  <div style="position:absolute; left:666px; top:406px; width:110px; text-align:right; font-size:12.5px; color:#8A93A0;">動作</div>
+  <div style="position:absolute; left:824px; top:406px; font-size:12.5px; color:#8A93A0;">網頁狀態</div>
+
+  <div style="position:absolute; left:610px; top:444px; width:380px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">Chromium 瀏覽器（Playwright）</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">BrowserGym 的動作：導覽、點擊、輸入、捲動；<br>回報 HTML、DOM、無障礙樹、截圖</div></div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">一個任務 session，一個容器</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">所有動作都在這個安全隔離的容器裡執行；<br>使用者要 agent 處理的工作目錄，<br>掛載進沙箱。</div>
+    <div style="font-size:13px; color:#8A93A0;">回答第 1 節的第三個難題：不傷使用者的系統。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">runtime client 的四個角色</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">當後端與沙箱之間的中介、安全地執行動作、<br>管理沙箱的狀態（工作目錄、外掛），<br>把結果整理成格式一致的觀察。</div>
+    <div style="font-size:13px; color:#8A93A0;">附錄 F.1 列的四點。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">瀏覽器回報的觀察最豐富</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">動作用 BrowserGym 定義的原語；<br>執行後回報 HTML、DOM、無障礙樹、<br>截圖與開著的分頁。</div>
+    <div style="font-size:13px; color:#8A93A0;">完整的動作清單在附錄 J。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三對箭頭與標籤是整理者依第 2.2 節與圖 4 畫的；圖 4 裡 runtime client 初始化瀏覽器、bash 與外掛，Jupyter 伺服器由外掛初始化。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M262 345L638 345" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M962 345L1338 345" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c04)"></path>
+    <path d="M686 298L686 248" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M714 248L714 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M886 298L886 248" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M914 248L914 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M786 392L786 442" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M814 442L814 392" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p05">
+  <div class="label"><span class="n">05 / 12</span><span>runtime image 怎麼重用</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">先找同雜湊的 image，找不到才重建</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">附錄 F.2、圖 5：使用者給任何 base image（例如 ubuntu:22.04），OpenHands 都要做出一個裝好執行 API 的 OH runtime image；兩種標籤決定這次怎麼建</div>
+
+  <div style="position:absolute; left:60px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#FFFFFF;">使用者的 base image</div><div style="margin-top:2px; font-size:12.5px; color:rgba(255,255,255,0.75);">例如 ubuntu:22.04</div></div></div>
+  <div style="position:absolute; left:360px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#1C2431;">換名字、算雜湊</div><div style="margin-top:2px; font-size:12.5px; color:#6B7380;">build context 的 MD5</div></div></div>
+  <div style="position:absolute; left:660px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#1C2431; line-height:1.3;"><div>有同雜湊的<br>image 嗎？</div></div>
+  <div style="position:absolute; left:960px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#1C2431; line-height:1.3;"><div>有同版本的<br>通用標籤 image 嗎？</div></div>
+  <div style="position:absolute; left:1260px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#C8501F;">從頭建</div><div style="margin-top:2px; font-size:12.5px; color:#6B7380;">從原本的 base image 建起</div></div></div>
+
+  <div style="position:absolute; left:910px; top:196px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#6B7380;">否</div>
+  <div style="position:absolute; left:1210px; top:196px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#C8501F;">否</div>
+  <div style="position:absolute; left:786px; top:280px; font-size:13px; font-weight:700; color:#2E7B4F;">是</div>
+  <div style="position:absolute; left:1086px; top:280px; font-size:13px; font-weight:700; color:#2E7B4F;">是</div>
+
+  <div style="position:absolute; left:660px; top:330px; width:230px; height:100px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:6px;">
+    <div style="font-size:15px; font-weight:700; color:#2E7B4F;">直接重用</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">雜湊相同＝內容相同，<br>原封不動拿來用</div>
+  </div>
+  <div style="position:absolute; left:960px; top:330px; width:230px; height:100px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:6px;">
+    <div style="font-size:15px; font-weight:700; color:#2E7B4F;">拿它當底重建</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">沿用已經裝好的相依套件，<br>省下安裝的時間</div>
+  </div>
+  <div style="position:absolute; left:1260px; top:330px; width:230px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:6px;">
+    <div style="font-size:15px; font-weight:700; color:#FFFFFF;">貼上兩種標籤</div>
+    <div style="font-size:13px; color:rgba(255,255,255,0.75); line-height:1.5;">重建或從頭建的新 image，<br>雜湊與通用標籤都貼上</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:480px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:506px; font-size:20px; font-weight:700; color:#1C2431;">兩種標籤各管一件事</div>
+  <div style="position:absolute; left:60px; top:550px; width:470px; height:206px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">雜湊標籤：保證能重現</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">例如 <span style="white-space:nowrap">runtime:abc123def456</span>。雜湊取自<br>build 資料夾（runtime client 原始碼、<br>相依套件、Dockerfile）的 MD5。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">雜湊相同，image 的內容就一模一樣。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:550px; width:470px; height:206px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">通用標籤：指向最新的建置</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">例如 <span style="white-space:nowrap">runtime:oh_v0.9.3_ubuntu_tag_22.04</span>，<br>記的是 OpenHands 版本加 base image；<br>同一組合每建一次就更新。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">原始碼改了，它也照樣換成新的建置。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:550px; width:470px; height:206px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">兩種都找不到，才從頭建</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">從原本的 base image 建起，最花時間；<br>建好之後貼上雜湊與通用兩種標籤，<br>下次同一個設定就找得到。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者把這套邏輯叫作快取與效率。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：判斷順序照圖 5 與附錄 F.2.2，標籤的例子照原文；綠＝省時間的重用、橘＝最花時間的完整建置，這個分色是整理者的。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+      <marker id="ad-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+    </defs>
+    <path d="M290 222L358 222" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M590 222L658 222" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M890 222L958 222" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M1190 222L1258 222" stroke="#C8501F" stroke-width="1.5" marker-end="url(#ao-c05)"></path>
+    <path d="M775 254L775 328" stroke="#2E7B4F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#an-c05)"></path>
+    <path d="M1075 254L1075 328" stroke="#2E7B4F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#an-c05)"></path>
+    <path d="M1375 254L1375 328" stroke="#1F2A3A" stroke-width="1.5" marker-end="url(#ad-c05)"></path>
+    <path d="M1190 380L1258 380" stroke="#1F2A3A" stroke-width="1.5" marker-end="url(#ad-c05)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p06">
+  <div class="label"><span class="n">06 / 12</span><span>AgentSkills：工具是 Python 函式</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">工具是 Python 函式，匯入 IPython 就能叫</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2.3 節：SWE-Agent 說明了為 agent 設計的工具（ACI）很重要，但要給很多 agent 共用就難維護；AgentSkills 做成 Python 套件，自動匯入 Jupyter IPython</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:440px; height:370px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:10px;"></div>
+  <div style="position:absolute; left:80px; top:164px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">DOCKER SANDBOX</div>
+  <div style="position:absolute; left:80px; top:192px; width:400px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">Jupyter IPython 伺服器</div>
+  <div style="position:absolute; left:80px; top:242px; width:400px; height:58px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; padding:0px 14px; display:flex; align-items:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">AgentSkills</div><div style="font-size:12.5px; color:#6B7380;">自動匯入 IPython 的工具函式</div></div></div>
+  <div style="position:absolute; left:80px; top:310px; width:400px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">bash shell</div>
+  <div style="position:absolute; left:80px; top:360px; width:400px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">Chromium 瀏覽器</div>
+  <div style="position:absolute; left:80px; top:410px; width:400px; height:58px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; border-radius:6px; padding:0px 14px; display:flex; align-items:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">掛載的工作目錄</div><div style="font-size:12.5px; color:#6B7380;">使用者要 agent 處理的檔案</div></div></div>
+  <div style="position:absolute; left:80px; top:476px; width:400px; font-size:13px; color:#6B7380; line-height:1.5;">agent 送一個 IPythonRunCellAction，<br>就能呼叫裡面的任何函式</div>
+
+  <div style="position:absolute; left:505px; top:248px; width:66px; text-align:center; font-size:12.5px; color:#8A93A0;">展開</div>
+
+  <div style="position:absolute; left:580px; top:150px; width:500px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:17px; font-weight:700; color:#FFFFFF;">AgentSkills：四類函式（v0.6）</div>
+  <div style="position:absolute; left:580px; top:198px; width:500px; height:322px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:14px 22px; display:flex; flex-direction:column; justify-content:center; gap:14px;">
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">1</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">看檔案</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">OPEN · SCROLL</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">open_file、goto_line、scroll_up、scroll_down</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">2</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">建檔與編輯</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">EDIT</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">create_file、edit_file：把第 start 到 end 行<br>換成新的內容</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">3</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">搜尋</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">SEARCH</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">search_dir、search_file、find_file</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">4</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">讀文件與多媒體</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">PARSE</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">parse_pdf、parse_docx、parse_latex、parse_pptx、<br>parse_image、parse_video、parse_audio</div></div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:1140px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">WHO</div>
+  <div style="position:absolute; left:1140px; top:178px; width:400px; height:76px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#FFFFFF;">社群貢獻者（寫）</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">寫一個 Python 函式，就是一個新工具</div></div>
+  <div style="position:absolute; left:1140px; top:280px; width:400px; height:76px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">任何 agent 實作（用）</div><div style="font-size:12.5px; color:#6B7380;">用 IPythonRunCellAction 呼叫，不必各自重做</div></div>
+  <div style="position:absolute; left:1140px; top:382px; width:400px; height:76px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">外部模型（被呼叫）</div><div style="font-size:12.5px; color:#6B7380;">parse_image 用視覺語言模型；parse_audio 預設 whisper-1</div></div>
+  <div style="position:absolute; left:1140px; top:474px; width:400px; font-size:13px; color:#6B7380; line-height:1.5;">寫的人只寫函式，用的人只送一段 Python；<br>要叫外部模型的工具，也包在函式裡</div>
+
+  <div style="position:absolute; left:60px; top:570px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">收錄條件一：LLM 不易直接寫</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">例如編輯程式碼、取代檔案裡特定的幾行：<br>LLM 直接寫程式不容易做到，<br>就包成工具讓 agent 呼叫。</div>
+    <div style="font-size:13px; color:#8A93A0;">編輯工具改編自 SWE-Agent 與 Aider。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:570px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">收錄條件二：要呼叫外部模型</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">例如語音轉文字、看圖、<br>專門編輯程式的模型；<br>兩條符合一條就收，原文寫 and/or。</div>
+    <div style="font-size:13px; color:#8A93A0;">parse_image、parse_pdf 是正文舉的例子。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:570px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">LLM 已經會的，就不重教</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">LLM 本來就會用 pandas 讀 CSV，<br>不另做一個讀 CSV 的工具；也不打算<br>把每個 Python 套件都包一層。</div>
+    <div style="font-size:13px; color:#8A93A0;">定義一個函式就是一個工具，降低貢獻門檻。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左側容器與四類分組是整理者依第 2.2、2.3 節與附錄 I 畫的；函式清單照附錄 I（OpenHands v0.6），最新的清單以原始碼為準。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+    </defs>
+    <path d="M482 271H576" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1138 216H1084" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c06)"></path>
+    <path d="M1082 318H1136" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1082 420H1136" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c06)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p07">
+  <div class="label"><span class="n">07 / 12</span><span>專門 agent 各守一欄</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">專門 agent 各守一欄，CodeActAgent 跨三欄</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 3（成功率 %）：專門的 agent 只報自己那一類；OpenHands 的 CodeActAgent 不改 system prompt，軟體、網頁、GPQA 三欄都有分數，GAIA 由 GPTSwarm 上場</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:320px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">組別（表 3 的列）</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">SWE-Bench Lite · 軟體</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">WebArena · 網頁</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">GPQA · 輔助</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">GAIA · 輔助</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:206px; width:1480px; height:72px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:320px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">軟體工程 agent</div><div style="font-size:12.5px; color:#8A93A0;">SWE-Agent、Aider、Agentless 等 5 個</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; font-weight:600; color:#1C2431;">18.0<span style="font-family:'Noto Sans TC', sans-serif; font-size:15px; font-weight:500;"> 到 </span>27.3</div><div style="font-size:12px; color:#8A93A0;">最高是 Agentless</div></div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:20px; color:#C5CCD5;">—</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:20px; color:#C5CCD5;">—</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:20px; color:#C5CCD5;">—</div>
+  </div>
+  <div style="position:absolute; left:60px; top:278px; width:1480px; height:72px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:320px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">網頁 agent</div><div style="font-size:12.5px; color:#8A93A0;">Lemur、AutoWebGLM 等 5 個</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:20px; color:#C5CCD5;">—</div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; font-weight:600; color:#1C2431;">5.3<span style="font-family:'Noto Sans TC', sans-serif; font-size:15px; font-weight:500;"> 到 </span>20.2</div><div style="font-size:12px; color:#8A93A0;">最高是 Auto Eval &amp; Refine</div></div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:20px; color:#C5CCD5;">—</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:20px; color:#C5CCD5;">—</div>
+  </div>
+  <div style="position:absolute; left:60px; top:350px; width:1480px; height:72px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:320px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">輔助 agent 與 prompting</div><div style="font-size:12.5px; color:#8A93A0;">AutoGPT；few-shot CoT 三個模型</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:20px; color:#C5CCD5;">—</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:20px; color:#C5CCD5;">—</div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; font-weight:600; color:#1C2431;">28.1<span style="font-family:'Noto Sans TC', sans-serif; font-size:15px; font-weight:500;"> 到 </span>38.8</div><div style="font-size:12px; color:#8A93A0;">few-shot CoT</div></div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; font-weight:600; color:#1C2431;">13.2</div><div style="font-size:12px; color:#8A93A0;">AutoGPT</div></div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:422px; width:1480px; height:72px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:grid; grid-template-columns:320px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#2E7B4F;">OH CodeActAgent v1.8</div><div style="font-size:12.5px; color:#8A93A0;">三個模型，不改 system prompt</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; font-weight:600; color:#2E7B4F;">6.3<span style="font-family:'Noto Sans TC', sans-serif; font-size:15px; font-weight:500;"> 到 </span>26.0</div><div style="font-size:12px; color:#8A93A0;">最高是 claude-3.5-sonnet</div></div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; font-weight:600; color:#2E7B4F;">8.3<span style="font-family:'Noto Sans TC', sans-serif; font-size:15px; font-weight:500;"> 到 </span>15.3</div><div style="font-size:12px; color:#8A93A0;">委派給 BrowsingAgent</div></div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; font-weight:600; color:#2E7B4F;">52.0 · 53.1＊</div><div style="font-size:12px; color:#8A93A0;">＊ 是 v1.5 的數字</div></div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:20px; color:#C5CCD5;">—</div>
+  </div>
+  <div style="position:absolute; left:60px; top:494px; width:1480px; height:72px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:320px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:17px; font-weight:700; color:#1C2431;">OH GPTSwarm v1.0</div><div style="font-size:12.5px; color:#8A93A0;">gpt-4o</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:20px; color:#C5CCD5;">—</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:20px; color:#C5CCD5;">—</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:20px; color:#C5CCD5;">—</div>
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:20px; font-weight:600; color:#1C2431;">32.1</div><div style="font-size:12px; color:#8A93A0;">這一欄最高</div></div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:576px; width:1480px; font-size:13px; color:#6B7380; line-height:1.6;">讀法：一組只在自己那一欄有數字，就是只為那一類設計的 agent；綠色那一列在三欄都有分數，不一定每欄最高，但作者說都有競爭力。</div>
+
+  <div style="position:absolute; left:60px; top:614px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">WebArena 那格是委派的結果</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">8.3、14.5、15.3 對到表 5，是 CodeActAgent<br>委派給 BrowsingAgent 跑出來的；<br>直接跑 BrowsingAgent 是 8.5、14.8、15.5。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">表 3 沒寫明這一點，要對照表 5 才看得出來。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:614px; width:470px; height:196px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">同一格，兩張表不一樣</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;"><span style="white-space:nowrap">gpt-4o-mini</span> 的 SWE-Bench Lite，表 3 寫 6.3、<br>表 4 寫 7.0，兩張表都標 v1.8；<br>論文沒有說明差異，兩個都照錄。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">GPQA 的 53.1 標了星號，是 v1.5 的數字。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:614px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">作者說：通用又有競爭力</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">比較對象限定為開源、可重現、<br>沒有依基準內容手工調 prompt 的做法；<br>專門 agent 通常只為一類設計與最佳化。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者也說 OpenHands 不一定每一類都拿第一。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：區間是整理者把同一組各列的最低與最高分寫在一起，各列的模型不同；「—」代表表 3 沒有那一格。完整的數字見第 08 到 10 卡。</div>
+</div></div>
+</section>
+<section class="page" id="p08">
+  <div class="label"><span class="n">08 / 12</span><span>七個軟體基準</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">通用 agent 對上專門做法，互有高下</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 4（成功率 %）：七個軟體基準各一列。綠點是 OpenHands 在該基準最好的一次，灰點是只靠 prompting 的對照，空心點是 agent 或專門訓練的做法</div>
+
+  <div style="position:absolute; left:60px; top:140px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>OpenHands 最好的一次</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>只靠 prompting 的對照</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>agent 或專門訓練的做法</div>
+    <div style="color:#8A93A0;">點旁是表 4 的數字</div>
+  </div>
+
+  <div style="position:absolute; left:180px; top:206px; width:900px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:250px; width:900px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:294px; width:900px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:338px; width:900px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:382px; width:900px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:426px; width:900px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:470px; width:900px; height:0px; border-top:1px solid #E5E9EE;"></div>
+
+  <div style="position:absolute; left:60px; top:196px; font-size:14px; font-weight:700; color:#1C2431; white-space:nowrap;">SWE-bench Lite</div>
+  <div style="position:absolute; left:60px; top:240px; font-size:14px; font-weight:700; color:#1C2431; white-space:nowrap;">HumanEvalFix</div>
+  <div style="position:absolute; left:60px; top:284px; font-size:14px; font-weight:700; color:#1C2431; white-space:nowrap;">BIRD</div>
+  <div style="position:absolute; left:60px; top:328px; font-size:14px; font-weight:700; color:#1C2431; white-space:nowrap;">ML-Bench</div>
+  <div style="position:absolute; left:60px; top:372px; font-size:14px; font-weight:700; color:#1C2431; white-space:nowrap;">BioCoder</div>
+  <div style="position:absolute; left:60px; top:416px; font-size:14px; font-weight:700; color:#1C2431; white-space:nowrap;">Gorilla</div>
+  <div style="position:absolute; left:60px; top:460px; font-size:14px; font-weight:700; color:#1C2431; white-space:nowrap;">ToolQA</div>
+
+  <div style="position:absolute; left:335px; top:199px; width:14px; height:14px; box-sizing:border-box; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A;"></div>
+  <div style="position:absolute; left:211px; top:197px; width:120px; text-align:right; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340; background-color:#FFFFFF;">SWE-Agent 18.0</div>
+  <div style="position:absolute; left:410px; top:190px; width:14px; height:14px; box-sizing:border-box; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A;"></div>
+  <div style="position:absolute; left:430px; top:187px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340; background-color:#FFFFFF;">Aider 26.3</div>
+  <div style="position:absolute; left:407px; top:208px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:427px; top:206px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#2E7B4F; background-color:#FFFFFF;">26.0</div>
+
+  <div style="position:absolute; left:610px; top:243px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:476px; top:241px; width:130px; text-align:right; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340; background-color:#FFFFFF;">StarCoder2 48.6</div>
+  <div style="position:absolute; left:887px; top:243px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:906px; top:241px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#2E7B4F; background-color:#FFFFFF;">79.3</div>
+  <div style="position:absolute; left:962px; top:243px; width:14px; height:14px; box-sizing:border-box; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A;"></div>
+  <div style="position:absolute; left:981px; top:241px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340; background-color:#FFFFFF;">1-shot 87.7</div>
+
+  <div style="position:absolute; left:455px; top:287px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:331px; top:285px; width:120px; text-align:right; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340; background-color:#FFFFFF;">CodeQwen 31.3</div>
+  <div style="position:absolute; left:599px; top:287px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:618px; top:285px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#2E7B4F; background-color:#FFFFFF;">47.3</div>
+
+  <div style="position:absolute; left:409px; top:331px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:315px; top:329px; width:90px; text-align:right; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340; background-color:#FFFFFF;">BM25 26.2</div>
+  <div style="position:absolute; left:556px; top:331px; width:14px; height:14px; box-sizing:border-box; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A;"></div>
+  <div style="position:absolute; left:575px; top:329px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340; background-color:#FFFFFF;">SWE-Agent 42.6</div>
+  <div style="position:absolute; left:753px; top:331px; width:14px; height:14px; box-sizing:border-box; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A;"></div>
+  <div style="position:absolute; left:772px; top:329px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340; background-color:#FFFFFF;">Aider 64.4</div>
+  <div style="position:absolute; left:861px; top:331px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:880px; top:329px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#2E7B4F; background-color:#FFFFFF;">76.5</div>
+
+  <div style="position:absolute; left:287px; top:375px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:306px; top:373px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340; background-color:#FFFFFF;">12.7</div>
+  <div style="position:absolute; left:420px; top:375px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:439px; top:373px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#2E7B4F; background-color:#FFFFFF;">27.5</div>
+
+  <div style="position:absolute; left:440px; top:419px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:396px; top:417px; width:40px; text-align:right; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340; background-color:#FFFFFF;">29.7</div>
+  <div style="position:absolute; left:500px; top:419px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:519px; top:417px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#2E7B4F; background-color:#FFFFFF;">36.4</div>
+  <div style="position:absolute; left:848px; top:419px; width:14px; height:14px; box-sizing:border-box; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A;"></div>
+  <div style="position:absolute; left:867px; top:416px; white-space:nowrap; font-size:12.5px; color:#2B3340; background-color:#FFFFFF;">微調的 Gorilla <span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">75.0</span></div>
+
+  <div style="position:absolute; left:268px; top:463px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:287px; top:461px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340; background-color:#FFFFFF;">10.6</div>
+  <div style="position:absolute; left:561px; top:463px; width:14px; height:14px; box-sizing:border-box; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A;"></div>
+  <div style="position:absolute; left:467px; top:461px; width:90px; text-align:right; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#2B3340; background-color:#FFFFFF;">ReAct 43.1</div>
+  <div style="position:absolute; left:598px; top:463px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:617px; top:461px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#2E7B4F; background-color:#FFFFFF;">47.2</div>
+
+  <div style="position:absolute; left:180px; top:500px; width:900px; height:30px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:506px; width:14px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0</div>
+  <div style="position:absolute; left:350px; top:506px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">20</div>
+  <div style="position:absolute; left:530px; top:506px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">40</div>
+  <div style="position:absolute; left:710px; top:506px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">60</div>
+  <div style="position:absolute; left:890px; top:506px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">80</div>
+  <div style="position:absolute; left:1042px; top:506px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">100</div>
+  <div style="position:absolute; left:980px; top:536px; width:100px; text-align:right; font-size:12px; color:#8A93A0;">成功率 %</div>
+  <div style="position:absolute; left:60px; top:548px; width:900px; font-size:13px; color:#8A93A0; line-height:1.6;">每列只畫表 4 的一部分；SWE-bench Lite 用 CodeActAgent v1.8，其餘用 v1.5，各點的模型不同。</div>
+
+  <div style="position:absolute; left:1120px; top:170px; width:420px; height:330px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 24px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:17px; font-weight:700; color:#1C2431;">怎麼讀這張圖</div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">01</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">有 prompting 對照的六列，<br>綠點都在灰點右邊。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#C8501F; margin-top:2px;">02</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">空心點在綠點右邊的三列：<br>SWE-bench Lite 的 Aider、<br>HumanEvalFix、Gorilla。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#4B5866; margin-top:2px;">03</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">綠點用 gpt-4o 或 claude-3.5-sonnet；<br>換成 gpt-3.5，ToolQA 只剩 2.3。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#1F2A3A; margin-top:2px;">04</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">題數不同：SWE-bench Lite 300 題，<br>Gorilla 1,775 題。</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:596px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">HumanEvalFix 修好 79.3%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">作者說明顯勝過所有非 agent 的做法，<br>幾乎是 StarCoder2-15B 的兩倍；<br>表 4 上是 79.3 對 48.6。</div>
+    <div style="font-size:13px; color:#8A93A0;">約 1.6 倍，整理者算的。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:596px; width:470px; height:200px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">輸給有示範或微調過的做法</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">HumanEvalFix：SWE-agent 給了 <span style="white-space:nowrap">1-shot</span> 示範，87.7；<br>Gorilla：為 API 呼叫微調過的模型，75.0；<br>OpenHands 兩邊都是 <span style="white-space:nowrap">0-shot</span>。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說之後要在 HumanEvalFix 做到 100%。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:596px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">SWE-bench Lite 解出 26.0%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">claude-3.5-sonnet，每題 1.10 美元；300 題、<br>不用 hint text。作者說和其他開源的<br>SWE 專門 agent 相比有競爭力。</div>
+    <div style="font-size:13px; color:#8A93A0;">完整的 2,294 題估計要 6.9k 美元（註腳 2）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：每類對照只取表 4 裡最高的一兩個；「只靠 prompting」與「agent 或專門做法」的分組是整理者的，點的位置照表 4 的數字。</div>
+</div></div>
+</section>
+<section class="page" id="p09">
+  <div class="label"><span class="n">09 / 12</span><span>瀏覽：直接跑與委派</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">直接跑或透過委派，瀏覽分數幾乎一樣</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 5（成功率 %）：同一個 BrowsingAgent v1.0，直接跑，或讓 CodeActAgent v1.8 用 AgentDelegateAction 把瀏覽的子任務交給它</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">DIRECT</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">直接跑 BrowsingAgent v1.0</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">DELEGATION</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">CodeActAgent v1.8 委派給 BrowsingAgent</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:326px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:218px; width:700px; height:38px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:10px; padding:0px 14px;"><div style="flex-shrink:0; width:220px; font-size:14px; color:#1C2431; white-space:nowrap;">WebArena · gpt-4o-mini</div><div style="flex-shrink:0; width:280px; height:14px;"><div style="width:48px; height:14px; border-radius:3px; background-color:#9AA3AE;"></div></div><div style="flex-shrink:0; width:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#1C2431;">8.5</div><div style="font-size:12px; color:#8A93A0; white-space:nowrap;">每題 0.01 美元</div></div>
+  <div style="position:absolute; left:60px; top:262px; width:700px; height:38px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:10px; padding:0px 14px;"><div style="flex-shrink:0; width:220px; font-size:14px; color:#1C2431; white-space:nowrap;">WebArena · gpt-4o</div><div style="flex-shrink:0; width:280px; height:14px;"><div style="width:83px; height:14px; border-radius:3px; background-color:#9AA3AE;"></div></div><div style="flex-shrink:0; width:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#1C2431;">14.8</div><div style="font-size:12px; color:#8A93A0; white-space:nowrap;">每題 0.15 美元</div></div>
+  <div style="position:absolute; left:60px; top:306px; width:700px; height:38px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:10px; padding:0px 14px;"><div style="flex-shrink:0; width:220px; font-size:14px; color:#1C2431; white-space:nowrap;">WebArena · claude-3.5-sonnet</div><div style="flex-shrink:0; width:280px; height:14px;"><div style="width:87px; height:14px; border-radius:3px; background-color:#9AA3AE;"></div></div><div style="flex-shrink:0; width:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#1C2431;">15.5</div><div style="font-size:12px; color:#8A93A0; white-space:nowrap;">每題 0.10 美元</div></div>
+  <div style="position:absolute; left:60px; top:350px; width:700px; height:38px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:10px; padding:0px 14px;"><div style="flex-shrink:0; width:220px; font-size:14px; color:#1C2431; white-space:nowrap;">MiniWoB++ · gpt-3.5-turbo</div><div style="flex-shrink:0; width:280px; height:14px;"><div style="width:152px; height:14px; border-radius:3px; background-color:#9AA3AE;"></div></div><div style="flex-shrink:0; width:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#1C2431;">27.2</div><div style="font-size:12px; color:#8A93A0; white-space:nowrap;">每題 0.01 美元</div></div>
+  <div style="position:absolute; left:60px; top:394px; width:700px; height:38px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:10px; padding:0px 14px;"><div style="flex-shrink:0; width:220px; font-size:14px; color:#1C2431; white-space:nowrap;">MiniWoB++ · gpt-4o</div><div style="flex-shrink:0; width:280px; height:14px;"><div style="width:228px; height:14px; border-radius:3px; background-color:#9AA3AE;"></div></div><div style="flex-shrink:0; width:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#1C2431;">40.8</div><div style="font-size:12px; color:#8A93A0; white-space:nowrap;">每題 0.05 美元</div></div>
+  <div style="position:absolute; left:60px; top:442px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">BrowsingAgent 的 prompt 放目前頁面的無障礙樹、先前的動作與 16 種動作（附錄 K）</div>
+
+  <div style="position:absolute; left:840px; top:218px; width:700px; height:38px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:10px; padding:0px 14px;"><div style="flex-shrink:0; width:220px; font-size:14px; color:#1C2431; white-space:nowrap;">WebArena · gpt-4o-mini</div><div style="flex-shrink:0; width:280px; height:14px;"><div style="width:46px; height:14px; border-radius:3px; background-color:#9AA3AE;"></div></div><div style="flex-shrink:0; width:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#1C2431;">8.3</div><div style="font-size:12px; color:#8A93A0; white-space:nowrap;">成本沒有列</div></div>
+  <div style="position:absolute; left:840px; top:262px; width:700px; height:38px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:10px; padding:0px 14px;"><div style="flex-shrink:0; width:220px; font-size:14px; color:#1C2431; white-space:nowrap;">WebArena · gpt-4o</div><div style="flex-shrink:0; width:280px; height:14px;"><div style="width:81px; height:14px; border-radius:3px; background-color:#9AA3AE;"></div></div><div style="flex-shrink:0; width:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#1C2431;">14.5</div><div style="font-size:12px; color:#8A93A0; white-space:nowrap;">成本沒有列</div></div>
+  <div style="position:absolute; left:840px; top:306px; width:700px; height:38px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:10px; padding:0px 14px;"><div style="flex-shrink:0; width:220px; font-size:14px; color:#1C2431; white-space:nowrap;">WebArena · claude-3.5-sonnet</div><div style="flex-shrink:0; width:280px; height:14px;"><div style="width:86px; height:14px; border-radius:3px; background-color:#9AA3AE;"></div></div><div style="flex-shrink:0; width:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#1C2431;">15.3</div><div style="font-size:12px; color:#8A93A0; white-space:nowrap;">成本沒有列</div></div>
+  <div style="position:absolute; left:840px; top:350px; width:700px; height:38px; box-sizing:border-box; background-color:#FFFFFF; border:1px dashed #D5DAE1; border-radius:6px; display:flex; align-items:center; gap:10px; padding:0px 14px;"><div style="flex-shrink:0; width:220px; font-size:14px; color:#8A93A0; white-space:nowrap;">MiniWoB++ · gpt-3.5-turbo</div><div style="font-size:13px; color:#8A93A0;">表 5 沒有這一組</div></div>
+  <div style="position:absolute; left:840px; top:394px; width:700px; height:38px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:10px; padding:0px 14px;"><div style="flex-shrink:0; width:220px; font-size:14px; color:#1C2431; white-space:nowrap;">MiniWoB++ · gpt-4o</div><div style="flex-shrink:0; width:280px; height:14px;"><div style="width:223px; height:14px; border-radius:3px; background-color:#9AA3AE;"></div></div><div style="flex-shrink:0; width:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:15px; font-weight:600; color:#1C2431;">39.8</div><div style="font-size:12px; color:#8A93A0; white-space:nowrap;">成本沒有列</div></div>
+  <div style="position:absolute; left:840px; top:442px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">CodeActAgent 的網頁能力有限，遇到瀏覽任務就交給 BrowsingAgent（第 2.4 節）</div>
+
+  <div style="position:absolute; left:60px; top:494px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">讀法</div>
+    <div style="font-size:15px; color:#2B3340;">同一個模型下，委派比直接跑低 0.2 到 1.0 個百分點（整理者算的）；原文沒有比較這兩組，也沒有列委派的成本。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:586px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">WebArena：812 題</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">BrowsingAgent 只用 <span style="white-space:nowrap">zero-shot</span> prompting；<br>作者說在通用 prompting 的 agent 裡<br>有競爭力，WebArena Agent 是 14.4。</div>
+    <div style="font-size:13px; color:#8A93A0;">訓練過的 7B 模型 18.2；加獎勵模型重試的 20.2。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:586px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">MiniWoB++：125 個環境</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">合成的簡單網頁、步數少，有些環境要看圖；<br>作者報全部的環境，<br>也只列同樣跑全部環境的對照。</div>
+    <div style="font-size:13px; color:#8A93A0;">專門訓練的 CC-NET 91.1、WGE 34.6。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:586px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">一輪可以送好幾個動作</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">附錄 K：同一頁不需要回饋的連續操作，<br>例如填帳號、密碼再送出，<br>可以一輪做完，省下回合。</div>
+    <div style="font-size:13px; color:#8A93A0;">WebArena 另加一段只回簡短答案的示範。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左右兩欄是表 5 的兩組列，原文沒有評價哪一種比較好；長條只是把分數畫成長度（0 到 50%），差距是整理者算的。</div>
+</div></div>
+</section>
+<section class="page" id="p10">
+  <div class="label"><span class="n">10 / 12</span><span>七組輔助任務</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">七組輔助任務：四組高過對手，三組較低</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 6（成功率 %）：每組兩條，上條是 OpenHands 最好的一次，下條是表中最好的非人類對手；雙方的模型不同，標在條尾</div>
+
+  <div style="position:absolute; left:60px; top:136px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#2E7B4F;"></div>OpenHands 比對手高</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#C8501F;"></div>OpenHands 比對手低</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#C5CCD5;"></div>表中最好的非人類對手</div>
+    <div style="color:#8A93A0;">EDA＝Entity Deduction Arena</div>
+  </div>
+
+  <div style="position:absolute; left:300px; top:172px; width:1px; height:388px; background-color:#E5E9EE;"></div>
+  <div style="position:absolute; left:508px; top:172px; width:1px; height:388px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:716px; top:172px; width:1px; height:388px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:924px; top:172px; width:1px; height:388px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:1132px; top:172px; width:1px; height:388px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:1340px; top:172px; width:1px; height:388px; background-color:#EEF1F5;"></div>
+
+  <div style="position:absolute; left:60px; top:178px; font-size:16px; font-weight:700; color:#1C2431;">GAIA</div>
+  <div style="position:absolute; left:60px; top:200px; font-size:12px; color:#8A93A0;">第一級驗證集 53 題</div>
+  <div style="position:absolute; left:300px; top:180px; width:334px; height:20px; border-radius:0px 4px 4px 0px; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:642px; top:181px; white-space:nowrap; font-size:12.5px; color:#2E7B4F; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">32.1</span> · GPTSwarm（gpt-4o）</div>
+  <div style="position:absolute; left:300px; top:204px; width:137px; height:14px; border-radius:0px 4px 4px 0px; background-color:#C5CCD5;"></div>
+  <div style="position:absolute; left:445px; top:202px; white-space:nowrap; font-size:12px; color:#6B7380; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">13.2</span> · AutoGPT（gpt-4-turbo）</div>
+
+  <div style="position:absolute; left:60px; top:234px; font-size:16px; font-weight:700; color:#1C2431;">GPQA</div>
+  <div style="position:absolute; left:60px; top:256px; font-size:12px; color:#8A93A0;">diamond 集 198 題</div>
+  <div style="position:absolute; left:1145px; top:230px; width:2px; height:46px; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1154px; top:231px; white-space:nowrap; font-size:12px; color:#1F2A3A; background-color:#FFFFFF;">專家人類 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">81.3</span></div>
+  <div style="position:absolute; left:300px; top:236px; width:541px; height:20px; border-radius:0px 4px 4px 0px; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:849px; top:237px; white-space:nowrap; font-size:12.5px; color:#2E7B4F; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">52.0</span> · claude-3.5-sonnet</div>
+  <div style="position:absolute; left:300px; top:260px; width:404px; height:14px; border-radius:0px 4px 4px 0px; background-color:#C5CCD5;"></div>
+  <div style="position:absolute; left:712px; top:258px; white-space:nowrap; font-size:12px; color:#6B7380; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">38.8</span> · few-shot CoT（gpt-4）</div>
+
+  <div style="position:absolute; left:60px; top:290px; font-size:16px; font-weight:700; color:#1C2431;">AgentBench</div>
+  <div style="position:absolute; left:60px; top:312px; font-size:12px; color:#8A93A0;">用 bash 多輪互動 144 題</div>
+  <div style="position:absolute; left:300px; top:292px; width:599px; height:20px; border-radius:0px 4px 4px 0px; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:907px; top:293px; white-space:nowrap; font-size:12.5px; color:#2E7B4F; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">57.6</span> · gpt-4o</div>
+  <div style="position:absolute; left:300px; top:316px; width:441px; height:14px; border-radius:0px 4px 4px 0px; background-color:#C5CCD5;"></div>
+  <div style="position:absolute; left:749px; top:314px; white-space:nowrap; font-size:12px; color:#6B7380; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">42.4</span> · 基線 agent（gpt-4）</div>
+
+  <div style="position:absolute; left:60px; top:346px; font-size:16px; font-weight:700; color:#1C2431;">MINT 數學</div>
+  <div style="position:absolute; left:60px; top:368px; font-size:12px; color:#8A93A0;">最多五輪互動 225 題</div>
+  <div style="position:absolute; left:300px; top:348px; width:804px; height:20px; border-radius:0px 4px 4px 0px; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1112px; top:349px; white-space:nowrap; font-size:12.5px; color:#2E7B4F; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">77.3</span> · gpt-4o</div>
+  <div style="position:absolute; left:300px; top:372px; width:684px; height:14px; border-radius:0px 4px 4px 0px; background-color:#C5CCD5;"></div>
+  <div style="position:absolute; left:992px; top:370px; white-space:nowrap; font-size:12px; color:#6B7380; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">65.8</span> · 基線 agent（gpt-4）</div>
+
+  <div style="position:absolute; left:60px; top:402px; font-size:16px; font-weight:700; color:#1C2431;">MINT 程式</div>
+  <div style="position:absolute; left:60px; top:424px; font-size:12px; color:#8A93A0;">最多五輪互動 136 題</div>
+  <div style="position:absolute; left:300px; top:404px; width:520px; height:20px; border-radius:0px 4px 4px 0px; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:828px; top:405px; white-space:nowrap; font-size:12.5px; color:#C8501F; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">50.0</span> · gpt-4o</div>
+  <div style="position:absolute; left:300px; top:428px; width:620px; height:14px; border-radius:0px 4px 4px 0px; background-color:#C5CCD5;"></div>
+  <div style="position:absolute; left:928px; top:426px; white-space:nowrap; font-size:12px; color:#6B7380; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">59.6</span> · 基線 agent（gpt-4）</div>
+
+  <div style="position:absolute; left:60px; top:458px; font-size:16px; font-weight:700; color:#1C2431;">ProofWriter</div>
+  <div style="position:absolute; left:60px; top:480px; font-size:12px; color:#8A93A0;">5 步推理 600 題</div>
+  <div style="position:absolute; left:300px; top:460px; width:820px; height:20px; border-radius:0px 4px 4px 0px; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:1128px; top:461px; white-space:nowrap; font-size:12.5px; color:#C8501F; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">78.8</span> · gpt-4o</div>
+  <div style="position:absolute; left:300px; top:484px; width:828px; height:14px; border-radius:0px 4px 4px 0px; background-color:#C5CCD5;"></div>
+  <div style="position:absolute; left:1136px; top:482px; white-space:nowrap; font-size:12px; color:#6B7380; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">79.6</span> · Logic-LM（加符號求解器）</div>
+
+  <div style="position:absolute; left:60px; top:514px; font-size:16px; font-weight:700; color:#1C2431;">EDA</div>
+  <div style="position:absolute; left:60px; top:536px; font-size:12px; color:#8A93A0;">提問猜出實體 200 題</div>
+  <div style="position:absolute; left:300px; top:516px; width:395px; height:20px; border-radius:0px 4px 4px 0px; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:703px; top:517px; white-space:nowrap; font-size:12.5px; color:#C8501F; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">38.0</span> · gpt-4o</div>
+  <div style="position:absolute; left:300px; top:540px; width:416px; height:14px; border-radius:0px 4px 4px 0px; background-color:#C5CCD5;"></div>
+  <div style="position:absolute; left:724px; top:538px; white-space:nowrap; font-size:12px; color:#6B7380; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">40.0</span> · zero-shot（gpt-4）</div>
+
+  <div style="position:absolute; left:294px; top:564px; width:14px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">0</div>
+  <div style="position:absolute; left:498px; top:564px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">20</div>
+  <div style="position:absolute; left:706px; top:564px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">40</div>
+  <div style="position:absolute; left:914px; top:564px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">60</div>
+  <div style="position:absolute; left:1122px; top:564px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">80</div>
+  <div style="position:absolute; left:1324px; top:564px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">100</div>
+  <div style="position:absolute; left:1380px; top:564px; font-size:12px; color:#8A93A0;">成功率 %</div>
+
+  <div style="position:absolute; left:60px; top:604px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">GPQA：52.0 對 38.8</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">研究所程度、搜不到答案的題目；<br>作者說 Python 與網路搜尋能補上<br>LLM 算不準、不知道的部分。</div>
+    <div style="font-size:13px; color:#8A93A0;">專家人類 81.3（表 7 寫 81.2），非專家人類 21.9。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:604px; width:470px; height:196px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">三組比對手低</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">MINT 程式 50.0 對 59.6、<br>ProofWriter 78.8 對 79.6、EDA 38.0 對 40.0；<br>論文對這三組沒有另外討論。</div>
+    <div style="font-size:13px; color:#8A93A0;">Logic-LM 在 gpt4 之外，另外接了符號求解器。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:604px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">GAIA 由 GPTSwarm 上場</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">466 題分三級，這裡用第一級的驗證集；<br>作者說 runtime 與工具讓原本難接的<br>GAIA 整合起來簡單很多。</div>
+    <div style="font-size:13px; color:#8A93A0;">gpt-4o 每題 0.05 美元；換成 gpt-4-0125 是 30.2。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：「最好的對手」只取表 6 的非人類列，雙方的模型與版本不同；高低與配色是整理者對照表 6 標的。</div>
+</div></div>
+</section>
+<section class="page" id="p11">
+  <div class="label"><span class="n">11 / 12</span><span>錄好 LLM 回應的整合測試</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">LLM 換成錄好的回應，測試就能常常跑</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">附錄 E：完整跑一次基準太慢太貴（SWE-Bench Lite 用 gpt-4o 約 600 美元），所以每次改程式跑的是端到端的整合測試，LLM 呼叫全部被攔下來</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　定義任務</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">例如修正 bad.txt 的錯字；<br>事先備好一份 gold file</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　攔下 LLM 呼叫</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">測試時每一次 LLM 呼叫，<br>都不送給真的模型</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　比對 prompt</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">完全相符，就回傳存好的回應</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">結果變成確定的</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　比對 gold file</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">執行完的輸出要和它一樣</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">驗證輸出</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　每次改動都跑</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">每個 PR 與 main 的 commit；<br>Linux、Mac 與三種沙箱</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:300px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">留下來的</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">成對存下的 prompt 與回應：它就是 prompt 的回歸測試，每次改動都對得出差在哪裡，新加入的成員也能從它看懂 LLM 實際上怎麼互動。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:440px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:462px; font-size:20px; font-weight:700; color:#1C2431;">三件要知道的事</div>
+
+  <div style="position:absolute; left:60px; top:506px; width:470px; height:226px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">確定又便宜</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">同樣的 prompt 永遠拿到同樣的回應，<br>測試結果一致；少打真的 LLM，<br>也省下成本。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者點名的兩個問題：不確定性與高成本。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:506px; width:470px; height:226px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">prompt 大改，就要重錄</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">一般的測試會稍微調整 prompt 沿用舊回應；<br>影響任務處理的大改動，<br>要用真的 LLM 重新產生、存下。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">由一支腳本負責產生與儲存。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:506px; width:470px; height:226px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">抓得到三種錯</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">prompt 生成、訊息傳遞、沙箱執行裡的錯，<br>每次開 PR 就會被抓出來；<br>作者說維持了高的測試覆蓋率。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">表 1 的 Agent QC 欄指的就是它。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：五步是整理者依附錄 E 的四段說明排的；錄下的回應測的是程式，模型本身有沒有退步仍要靠完整的評估，附錄 E 也這樣說。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M769 262L769 296" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p12">
+  <div class="label"><span class="n">12 / 12</span><span>平台之後的五個方向</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">平台把骨架搭好，agent 本身還得更強</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 5 節、附錄 A、B：作者把 OpenHands 的貢獻收成五樣，也點名目前 agent 的弱點；上面三條原則是整理者歸納的，下面五格照附錄 A</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:370px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-size:13px; color:#8A93A0;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">01</span>　給 agent 開發者的介面</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">程式、終端機、瀏覽器，<br>就是 agent 的動作空間</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">三種核心動作都用程式表達，<br>工具寫成 Python 函式就能共用；<br>瀏覽可以交給專門的 agent，<br>用的都是開發者熟悉的工具。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">第 1 節：軟體是 agent 最好的介面，<br>這是作者的主張。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:370px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-size:13px; color:#8A93A0;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">02</span>　動作與執行分開</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">agent 只寫 step()，<br>執行交給沙箱</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">事件流是共同的介面：agent 讀歷史、<br>送動作，runtime 在 Docker 裡執行，<br>使用者隨時可以插話；<br>任何 base image 都能當執行環境。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">換 agent、換 image、換介面，<br>其他兩塊不必跟著改。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:370px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-size:13px; color:#8A93A0;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">03</span>　量進步，也擋退步</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">15 個基準量能力，<br>整合測試擋回歸</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">完整跑基準很貴，每次改動就用<br>錄好 LLM 回應的整合測試守住程式；<br>倫理聲明也把系統性評估，<br>列為降低風險的第一步。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">表 1 的評估框架與 Agent QC 兩欄。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:574px; font-size:20px; font-weight:700; color:#1C2431;">作者點名的五個方向（附錄 A，不排順序）</div>
+  <div style="position:absolute; left:60px; top:614px; width:280px; height:76px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-size:12px; color:#8A93A0;">多模態</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">用瀏覽器看圖、看影片</div>
+  </div>
+  <div style="position:absolute; left:360px; top:614px; width:280px; height:76px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-size:12px; color:#8A93A0;">更強的 agent</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">訓練與推論時的技術</div>
+  </div>
+  <div style="position:absolute; left:660px; top:614px; width:280px; height:76px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-size:12px; color:#8A93A0;">編輯</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">改善長檔案的編輯</div>
+  </div>
+  <div style="position:absolute; left:960px; top:614px; width:280px; height:76px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-size:12px; color:#8A93A0;">瀏覽</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">接上重試與獎勵模型</div>
+  </div>
+  <div style="position:absolute; left:1260px; top:614px; width:280px; height:76px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-size:12px; color:#8A93A0;">工作流程</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">用圖自動產生工作流程</div>
+  </div>
+  <div style="position:absolute; left:60px; top:710px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">五個方向也是作者自己點名的弱點：目前的 agent 做複雜任務還很吃力、編輯長檔案很吃力，工作流程仍要大量手工。<br>倫理聲明另外列了三件事：系統性評估、促成人與 agent 互動而不是無人監督、讓研究者做前沿的安全研究。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三條原則是整理者歸納的；五個方向照附錄 A 的順序排列，原文沒有排優先。</div>
+</div></div>
+</section>
+  <div class="foot">整理自 arXiv · Xingyao Wang、Boxuan Li、Yufan Song、Frank F. Xu、Xiangru Tang、Mingchen Zhuge、Jiayi Pan、Yueqi Song、Bowen Li、Jaskirat Singh、Hoang H. Tran、Fuqiang Li、Ren Ma、Mingzhang Zheng、Bill Qian、Yanjun Shao、Niklas Muennighoff、Yizhe Zhang、Binyuan Hui、Junyang Lin、Robert Brennan、Hao Peng、Heng Ji、Graham Neubig（UIUC、CMU、Yale、UC Berkeley、Contextual AI、KAUST、ANU、HCMUT、Alibaba、All Hands AI），2024-07-23：<a href="https://arxiv.org/abs/2407.16741">https://arxiv.org/abs/2407.16741</a>。這些圖卡是學習用的重新整理，不是原文的逐句翻譯；觀點與著作權屬於原作者。<a href="index.html">回到圖卡＋教材版</a> · <a href="../../">回首頁</a></div>
+</div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fit() {
+    var frames = document.querySelectorAll('.frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('load', fit);
+  fit();
+})();
+</script>
+</body>
+</html>
