@@ -1,0 +1,1257 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Understanding Prompt Injections</title>
+<meta name="description" content="OpenAI 2025 年 11 月的資安說明文章：AI 會上網、讀你的信、替你動手之後，第三方可以把指令藏在網頁、文件或郵件裡，騙它做你沒要求的事。從攻擊長什麼樣子、表格裡的兩個情境，到 OpenAI 說的七層防禦與使用者能做的四件事，每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="prompt-injection, ai-security, agent-safety, openai, cs329z">
+<meta name="source" content="https://openai.com/index/prompt-injections/">
+<meta name="date" content="2026-09-29">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Theme: tech-modern 變體「測試報告語意色」
+   藍 = 主色 / 綠 = pass / 琥珀 = 注意 / 紅 = fail
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --paper: #ffffff;
+  --paper-soft: #f3f5f8;
+  --paper-shadow: #dde2e8;
+  --ink: #121821;
+  --ink-soft: #3b4450;
+  --ink-mute: #6b7481;
+  --primary: #1e56a8;
+  --primary-deep: #143a72;
+  --primary-bg: #e6eef9;
+  --accent: #157a52;
+  --accent-deep: #0d5236;
+  --accent-bg: #e1f3e9;
+  --warm: #b8620e;
+  --warm-deep: #7d4108;
+  --warm-bg: #fbeddc;
+  --danger: #b83228;
+  --danger-bg: #f9e3e0;
+  --stone: #5a6370;
+  --stone-bg: #eceff3;
+  --code-bg: #0f1720;
+  --code-ink: #e6edf3;
+  --code-mute: #8b98a8;
+  --code-blue: #7cc4ff;
+  --code-green: #7ee2b8;
+  --code-amber: #ffc46b;
+
+  --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-cjk: 'Noto Sans TC', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --content-width: 780px;
+  --wide-width: 1100px;
+  --gutter: 24px;
+}
+
+/* ---------- reset & 排版 ---------- */
+* { box-sizing: border-box; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+body {
+  margin: 0; padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-cjk);
+  font-size: 18px;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: var(--content-width); margin: 0 auto; padding: 0 var(--gutter); }
+.wide { max-width: var(--wide-width); margin: 0 auto; padding: 0 var(--gutter); }
+section { padding-block: 64px; }
+section + section { border-top: 1px solid var(--paper-shadow); }
+
+h1, h2, h3, h4 { font-family: var(--font-cjk); font-weight: 700; text-wrap: balance; }
+h1 { font-size: 56px; line-height: 1.14; margin: 0 0 24px; font-weight: 800; }
+h2 { font-size: 36px; line-height: 1.25; margin: 0 0 18px; letter-spacing: -0.01em; }
+h2 .seg { display: inline-block; }
+h3 { font-size: 25px; line-height: 1.35; margin: 44px 0 14px; }
+h4 { font-size: 20px; line-height: 1.4; margin: 26px 0 10px; }
+p { margin: 0 0 18px; }
+ul, ol { padding-left: 26px; margin: 0 0 18px; }
+li { margin-bottom: 8px; }
+em { font-style: normal; color: var(--primary-deep); font-weight: 600; }
+strong { font-weight: 700; }
+a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+code {
+  font-family: var(--font-mono); font-size: 0.86em;
+  background: var(--stone-bg); color: var(--primary-deep);
+  padding: 2px 6px; border-radius: 4px;
+}
+.mono { font-family: var(--font-mono); }
+
+/* ---------- Hero ---------- */
+.hero {
+  padding-block: 84px 60px;
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-soft) 100%);
+  border-bottom: 2px solid var(--primary-deep);
+  position: relative;
+}
+.hero::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: linear-gradient(90deg,
+    var(--primary) 0%, var(--primary) 25%,
+    var(--accent) 25%, var(--accent) 50%,
+    var(--warm) 50%, var(--warm) 75%,
+    var(--danger) 75%, var(--danger) 100%);
+}
+.hero-meta {
+  display: flex; flex-wrap: wrap; gap: 10px 22px;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  margin-bottom: 32px;
+}
+.hero-meta span::before { content: "—"; margin-right: 10px; color: var(--paper-shadow); }
+.hero-meta span:first-child::before { content: ""; margin: 0; }
+.hero h1 { font-size: 60px; font-weight: 800; word-break: keep-all; }
+.hero h1 .accent {
+  display: block; margin-top: 12px;
+  font-size: 0.55em; font-weight: 600; line-height: 1.3;
+  color: var(--primary-deep);
+}
+.hero .lede { font-size: 22px; max-width: 720px; }
+.hero-keystat {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 28px; margin: 44px 0 0; padding-top: 34px;
+  border-top: 1px dashed var(--paper-shadow);
+}
+.hero-keystat dt {
+  font-family: var(--font-sans);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--ink-mute); margin-bottom: 6px;
+}
+.hero-keystat dd {
+  margin: 0; font-family: var(--font-mono);
+  font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1;
+}
+.hero-keystat dd small { font-family: var(--font-cjk); font-size: 14px; color: var(--ink-mute); font-weight: 400; margin-left: 6px; }
+
+/* ---------- Chapter / lede / eyebrow ---------- */
+.chapter {
+  font-family: var(--font-mono);
+  font-size: 12.5px; color: var(--primary);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 0 0 10px;
+}
+.chapter::before { content: "§ "; color: var(--paper-shadow); margin-right: 4px; }
+.lede {
+  font-size: 22px; line-height: 1.6; color: var(--ink-soft);
+  margin: 0 0 28px; font-weight: 400;
+}
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--primary); margin: 0 0 14px;
+}
+
+/* ---------- Pull quote ---------- */
+.pullquote {
+  margin: 48px -16px; padding: 32px 40px;
+  font-family: var(--font-cjk);
+  font-size: 27px; line-height: 1.5; font-weight: 600;
+  color: var(--primary-deep);
+  border-left: 5px solid var(--primary);
+  background: linear-gradient(90deg, var(--primary-bg) 0%, transparent 100%);
+}
+.pullquote.bronze {
+  color: var(--accent-deep); border-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-bg) 0%, transparent 100%);
+}
+.pullquote.terra {
+  color: var(--warm-deep); border-color: var(--warm);
+  background: linear-gradient(90deg, var(--warm-bg) 0%, transparent 100%);
+}
+.pullquote cite {
+  display: block; margin-top: 16px; font-style: normal; font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  letter-spacing: 0.06em;
+}
+.pullquote cite::before { content: "— "; }
+
+/* ---------- English quote ---------- */
+.quote-en {
+  margin: 28px 0;
+  font-family: var(--font-sans); font-style: italic;
+  font-size: 21px; line-height: 1.5; color: var(--ink);
+  padding-left: 20px; border-left: 3px solid var(--accent);
+}
+.quote-en .zh {
+  display: block; margin-top: 10px;
+  font-family: var(--font-cjk); font-style: normal;
+  font-size: 15px; color: var(--ink-soft); line-height: 1.6;
+}
+
+/* ---------- Story ---------- */
+.story {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 14px;
+  padding: 38px 44px; margin: 48px 0;
+  position: relative;
+}
+.story::before {
+  content: "❝"; position: absolute; top: -6px; left: 24px;
+  font-size: 72px; color: var(--warm); line-height: 1;
+  font-family: var(--font-sans);
+}
+.story .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.18em;
+  color: var(--warm); margin-bottom: 10px; padding-left: 42px;
+}
+.story h4 { margin: 0 0 16px; font-size: 22px; color: var(--warm-deep); }
+.story p { margin-bottom: 14px; font-size: 17px; line-height: 1.7; }
+.story p:last-child { margin-bottom: 0; }
+
+/* ---------- Explain ---------- */
+.explain {
+  background: var(--primary-bg);
+  border-left: 4px solid var(--primary);
+  border-radius: 4px;
+  padding: 26px 30px; margin: 36px 0;
+  font-family: var(--font-cjk); position: relative;
+}
+.explain.bronze { background: var(--accent-bg); border-color: var(--accent); }
+.explain.terra { background: var(--warm-bg); border-color: var(--warm); }
+.explain.stone { background: var(--stone-bg); border-color: var(--stone); }
+.explain .label {
+  position: absolute; top: -12px; left: 16px;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.15em; padding: 4px 12px;
+  border-radius: 3px; text-transform: uppercase;
+}
+.explain.bronze .label { background: var(--accent); }
+.explain.terra .label { background: var(--warm); }
+.explain.stone .label { background: var(--stone); }
+.explain h4 { margin: 4px 0 12px; font-size: 19px; color: var(--primary-deep); }
+.explain.bronze h4 { color: var(--accent-deep); }
+.explain.terra h4 { color: var(--warm-deep); }
+.explain.stone h4 { color: var(--ink); }
+.explain p { font-size: 16.5px; }
+.explain p:last-child { margin-bottom: 0; }
+.explain ul, .explain ol { margin: 8px 0 0; padding-left: 22px; }
+.explain li { margin-bottom: 6px; font-size: 16px; }
+.explain code { background: rgba(255,255,255,0.75); }
+
+/* ---------- Stat grid ---------- */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.stat-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 28px 24px; text-align: center;
+  border-top: 4px solid var(--primary);
+}
+.stat-card.bronze { border-color: var(--accent); }
+.stat-card.terra { border-color: var(--warm); }
+.stat-card.danger { border-color: var(--danger); }
+.stat-card .big {
+  font-family: var(--font-mono);
+  font-size: 46px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1; margin-bottom: 10px;
+}
+.stat-card.bronze .big { color: var(--accent-deep); }
+.stat-card.terra .big { color: var(--warm-deep); }
+.stat-card.danger .big { color: var(--danger); }
+.stat-card .big small { font-family: var(--font-cjk); font-size: 16px; opacity: 0.75; margin-left: 4px; font-weight: 500; }
+.stat-card .label {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.stat-card .note { margin-top: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.55; }
+
+/* ---------- Compare table ---------- */
+.table-scroll { overflow-x: auto; margin: 36px 0; }
+.compare {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-cjk); font-size: 15.5px;
+  background: var(--paper-soft);
+  border-radius: 10px; overflow: hidden;
+  min-width: 560px;
+}
+.compare th, .compare td {
+  padding: 15px 18px; text-align: left;
+  border-bottom: 1px solid var(--paper-shadow);
+  vertical-align: top; line-height: 1.6;
+}
+.compare th {
+  background: var(--primary-deep); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+}
+.compare tr:last-child td { border-bottom: none; }
+.compare td:first-child { font-weight: 700; color: var(--primary-deep); width: 24%; }
+.compare .id { font-family: var(--font-mono); font-size: 13px; display: block; color: var(--ink-mute); font-weight: 500; margin-bottom: 2px; }
+.compare .yes { color: var(--accent-deep); font-weight: 700; }
+.compare .no { color: var(--danger); font-weight: 700; }
+
+/* ---------- Value cards ---------- */
+.values {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.value-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 26px 24px;
+  border-top: 5px solid var(--primary);
+}
+.value-card:nth-child(2) { border-top-color: var(--accent); }
+.value-card:nth-child(3) { border-top-color: var(--warm); }
+.value-card:nth-child(4) { border-top-color: var(--primary-deep); }
+.value-card:nth-child(5) { border-top-color: var(--stone); }
+.value-card .num {
+  font-family: var(--font-mono);
+  font-size: 38px; font-weight: 700;
+  color: var(--primary); line-height: 1; margin-bottom: 12px;
+}
+.value-card:nth-child(2) .num { color: var(--accent); }
+.value-card:nth-child(3) .num { color: var(--warm); }
+.value-card:nth-child(4) .num { color: var(--primary-deep); }
+.value-card:nth-child(5) .num { color: var(--stone); }
+.value-card .tag {
+  display: inline-block; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--primary); margin-bottom: 10px;
+}
+.value-card:nth-child(2) .tag { color: var(--accent); }
+.value-card:nth-child(3) .tag { color: var(--warm); }
+.value-card:nth-child(4) .tag { color: var(--primary-deep); }
+.value-card h4 { margin: 0 0 10px; font-size: 19px; line-height: 1.4; }
+.value-card p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin: 0; }
+
+/* ---------- 擴充檢查卡（附成本標籤） ---------- */
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px; margin: 40px 0;
+}
+.card {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 12px;
+  padding: 24px 24px 22px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.card .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card h4 { margin: 0; font-size: 18.5px; line-height: 1.4; }
+.card p { margin: 0; font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); }
+.card .signal { font-family: var(--font-mono); font-size: 12.5px; color: var(--primary-deep); background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 6px; padding: 6px 10px; margin-top: 4px; overflow-x: auto; white-space: nowrap; }
+.pill {
+  flex: none; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px;
+}
+.pill.fast { background: var(--accent-bg); color: var(--accent-deep); }
+.pill.mid { background: var(--warm-bg); color: var(--warm-deep); }
+.pill.slow { background: var(--danger-bg); color: var(--danger); }
+
+/* ---------- Thought ---------- */
+.thought {
+  background: var(--accent-bg);
+  border-left: 4px solid var(--accent);
+  padding: 26px 30px; margin: 40px 0;
+  border-radius: 4px; position: relative;
+}
+.thought .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--accent-deep); margin-bottom: 10px;
+}
+.thought h4 { font-size: 19px; margin: 0 0 14px; color: var(--accent-deep); line-height: 1.45; }
+.thought p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin-bottom: 8px; }
+.thought .hint {
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px dashed rgba(13, 82, 54, 0.3);
+  font-size: 14px; color: var(--accent-deep);
+}
+.thought .hint::before { content: "建議方向："; font-weight: 700; }
+
+/* ---------- Code block ---------- */
+.codeblock { margin: 30px 0; }
+.codeblock .file {
+  display: inline-block; font-family: var(--font-mono);
+  font-size: 12px; color: var(--ink-mute);
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow); border-bottom: none;
+  border-radius: 8px 8px 0 0; padding: 7px 14px;
+}
+pre.code {
+  margin: 0; background: var(--code-bg); color: var(--code-ink);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65;
+  padding: 22px 24px; border-radius: 0 10px 10px 10px;
+  overflow-x: auto; tab-size: 2; white-space: pre;
+}
+pre.code.solo { border-radius: 10px; }
+pre.code .c { color: var(--code-mute); }
+pre.code .k { color: var(--code-blue); }
+pre.code .s { color: var(--code-green); }
+pre.code .a { color: var(--code-amber); font-weight: 700; }
+
+/* ---------- Flow（eval 迴圈圖） ---------- */
+.flow { display: flex; align-items: stretch; margin: 40px 0; }
+.flow-step {
+  flex: 1 1 0; min-width: 0;
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow);
+  border-radius: 10px; padding: 18px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.flow-step .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--primary); letter-spacing: 0.1em; }
+.flow-step strong { font-size: 17px; line-height: 1.3; }
+.flow-step span.d { font-size: 14px; line-height: 1.55; color: var(--ink-soft); }
+.flow-step.score { border-color: var(--accent); background: var(--accent-bg); }
+.flow-step.score .k { color: var(--accent-deep); }
+.flow-arrow { flex: none; width: 30px; position: relative; }
+.flow-arrow::before {
+  content: ""; position: absolute; top: 50%; left: 2px; right: 2px; height: 2px;
+  background: var(--primary); transform: translateY(-50%);
+}
+.flow-arrow::after {
+  content: ""; position: absolute; top: 50%; right: 4px; width: 9px; height: 9px;
+  border-top: 2px solid var(--primary); border-right: 2px solid var(--primary);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+/* ---------- Cascade（編號步驟） ---------- */
+.cascade { display: flex; flex-direction: column; gap: 14px; margin: 32px 0; }
+.cascade-step {
+  display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px;
+}
+.cascade-step .n {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-mono); font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.cascade-step .t { font-size: 16.5px; line-height: 1.65; }
+.cascade-step .t strong { display: block; margin-bottom: 2px; }
+
+/* ---------- Checklist ---------- */
+.checklist { list-style: none; padding: 0; margin: 32px 0; display: flex; flex-direction: column; gap: 12px; }
+.checklist li {
+  display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px; margin: 0;
+  font-size: 16.5px; line-height: 1.65;
+}
+.checklist .box {
+  width: 24px; height: 24px; margin-top: 3px;
+  border: 2px solid var(--accent); border-radius: 6px; background: var(--paper);
+}
+.checklist strong { display: block; }
+.checklist small { display: block; color: var(--ink-soft); font-size: 15px; }
+
+/* ---------- Glossary ---------- */
+.glossary { background: var(--primary-deep); color: var(--paper); padding-block: 64px; }
+.glossary h2 { color: var(--paper); margin-top: 0; }
+.glossary .eyebrow { color: var(--accent-bg); }
+.glossary .lede { color: var(--paper); opacity: 0.8; }
+.glossary-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 26px; margin: 42px 0 0;
+}
+.term { border-top: 2px solid var(--accent); padding-top: 16px; }
+.term:nth-child(3n+2) { border-color: var(--warm); }
+.term:nth-child(3n+3) { border-color: var(--paper); }
+.term dt {
+  font-family: var(--font-mono);
+  font-size: 14px; font-weight: 700;
+  color: var(--accent-bg); letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+.term .zh-name { font-family: var(--font-cjk); font-size: 16px; font-weight: 600; color: var(--paper); margin-bottom: 8px; display: block; }
+.term dd { margin: 0; font-family: var(--font-cjk); font-size: 14.5px; line-height: 1.65; color: rgba(255, 255, 255, 0.8); }
+
+/* ---------- TOC ---------- */
+.toc {
+  position: fixed; right: 24px; top: 50%; transform: translateY(-50%); z-index: 10;
+  font-family: var(--font-sans); font-size: 12px;
+  background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 10px;
+  padding: 18px 20px; max-width: 236px;
+  box-shadow: 0 4px 18px rgba(18, 24, 33, 0.08);
+}
+.toc h5 { margin: 0 0 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-mute); }
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc -1; }
+.toc li { margin-bottom: 6px; counter-increment: toc; font-size: 12px; line-height: 1.45; display: flex; gap: 8px; }
+.toc li::before { content: counter(toc, decimal-leading-zero); font-family: var(--font-mono); color: var(--ink-mute); font-size: 10.5px; padding-top: 2px; }
+.toc a { color: var(--ink-soft); text-decoration: none; }
+.toc a:hover { color: var(--primary); }
+@media (max-width: 1340px) { .toc { display: none; } }
+
+/* ---------- Footer ---------- */
+footer {
+  padding-block: 48px 64px;
+  background: var(--paper-soft);
+  text-align: center;
+  font-family: var(--font-cjk);
+  font-size: 13.5px; color: var(--ink-mute);
+}
+footer p { margin: 0 0 8px; }
+footer .credit { font-family: var(--font-sans); }
+footer .disclaimer { margin-top: 14px; font-size: 12px; opacity: 0.75; max-width: 640px; margin-inline: auto; }
+
+/* ---------- 響應式 ---------- */
+@media (max-width: 768px) {
+  body { font-size: 17px; }
+  .hero { padding-block: 56px 42px; }
+  .hero h1 { font-size: 36px; }
+  .hero .lede { font-size: 18px; }
+  h2 { font-size: 27px; }
+  h3 { font-size: 22px; }
+  section { padding-block: 46px; }
+  .lede { font-size: 19px; }
+  .pullquote { font-size: 21px; margin: 34px 0; padding: 24px; }
+  .story { padding: 30px 24px; }
+  .stat-card .big { font-size: 36px; }
+  .flow { flex-direction: column; }
+  .flow-arrow { width: auto; height: 30px; }
+  .flow-arrow::before { top: 2px; bottom: 2px; left: 50%; right: auto; width: 2px; height: auto; transform: translateX(-50%); }
+  .flow-arrow::after { top: auto; bottom: 4px; left: 50%; right: auto; transform: translateX(-50%) rotate(135deg); }
+  .compare td:first-child { width: auto; }
+}
+
+/* ---------- 列印 ---------- */
+@media print {
+  .toc { display: none; }
+  body { font-size: 12pt; }
+  .hero, .glossary {
+    color: var(--ink) !important; background: white !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .glossary h2, .glossary .term dt, .glossary .lede, .glossary .term .zh-name { color: var(--ink) !important; }
+  .glossary .term dd { color: var(--ink-soft) !important; }
+  pre.code { background: #f3f5f8 !important; color: #121821 !important; border: 1px solid #ccd; white-space: pre-wrap; }
+  pre.code .c, pre.code .k, pre.code .s, pre.code .a { color: inherit !important; }
+  section { page-break-inside: avoid; }
+}
+
+/* ---------- 整合版：模式列、圖卡帶、燈箱 ---------- */
+.modebar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; padding: 10px var(--gutter); background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--paper-shadow); font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.modebar .brand { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.modebar .left { display: flex; align-items: center; gap: 14px; }
+.modebar .homelink { font-size: 12px; font-weight: 600; color: var(--ink-mute); text-decoration: none; }
+.modebar .homelink:hover { color: var(--primary); text-decoration: underline; }
+.modebar .switch { display: flex; gap: 6px; }
+.modebar button { font: inherit; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.modebar button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+.modebar button:focus-visible, .cardlabel .zoom:focus-visible, .lightbox .close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.modebar .canvaslink { font-size: 12px; color: var(--ink-mute); }
+.cardband { max-width: 1600px; margin: 4px auto 40px; padding: 0 var(--gutter); }
+.cardlabel { display: flex; align-items: baseline; gap: 14px; padding: 0 2px 8px; font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.cardlabel .n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--warm); }
+.cardlabel .zoom { margin-left: auto; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--paper-shadow); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; font-size: 16px; color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(18, 24, 33, 0.86); display: none; align-items: center; justify-content: center; padding: 24px; }
+.lightbox.open { display: flex; }
+.lightbox .frame { border: none; border-radius: 8px; max-width: none; width: auto; flex: none; }
+.lightbox .close { position: absolute; top: 14px; right: 18px; font: inherit; font-family: var(--font-sans); font-size: 13px; color: #FFFFFF; background: transparent; border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.faq { margin: 36px 0 8px; padding: 0; }
+.faq > div { padding: 18px 0; border-top: 1px solid var(--paper-shadow); }
+.faq > div:last-child { border-bottom: 1px solid var(--paper-shadow); }
+.faq dt { margin: 0 0 6px; font-weight: 700; font-size: 17px; color: var(--ink); }
+.faq dt::before { content: "問"; display: inline-block; margin-right: 10px; padding: 1px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; color: #FFFFFF; background: var(--primary); vertical-align: 2px; }
+.faq dd { margin: 0; font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+body.mode-cards section .prose { display: none; }
+body.mode-cards section.nocard { display: none; }
+body.mode-cards section { padding-block: 44px; }
+body.mode-cards .toc li.nocard { display: none; }
+@media (max-width: 768px) { .cardband { margin-bottom: 32px; } .modebar { font-size: 12px; } }
+@media print {
+  .modebar, .lightbox, .cardlabel .zoom { display: none !important; }
+  body.mode-cards section .prose { display: block !important; }
+  body.mode-cards section.nocard { display: block !important; }
+  section { page-break-inside: auto; }
+  .cardband, .story, .explain, .thought, .stat-grid, .values, .cards, .table-scroll { page-break-inside: avoid; }
+  .frame { height: auto !important; border: none; border-radius: 0; }
+  .frame > div { transform: none !important; zoom: 0.44; }
+}
+
+</style>
+</head>
+<body>
+<div class="modebar">
+  <div class="left"><a class="homelink" href="../../">← 首頁</a><span class="brand">Prompt Injection · 圖卡 + 教材</span></div>
+  <div class="switch" role="group" aria-label="閱讀模式">
+    <button type="button" data-mode="full" aria-pressed="true">圖卡＋詳解</button>
+    <button type="button" data-mode="cards" aria-pressed="false">只看圖卡</button>
+  </div>
+  <a class="canvaslink" href="cards.html">圖卡連續閱讀版</a>
+</div>
+<nav class="toc" aria-label="目錄">
+  <h5>目錄</h5>
+  <ol>
+    <li class="nocard"><a href="#prologue">為什麼讀這篇</a></li>
+    <li><a href="#what-is">指令藏在內容裡</a></li>
+    <li><a href="#two-scenarios">兩個情境</a></li>
+    <li><a href="#model-defenses">模型與找攻擊</a></li>
+    <li><a href="#product-defenses">產品與使用者</a></li>
+    <li><a href="#user-steps">你能做的四件事</a></li>
+    <li class="nocard"><a href="#looking-ahead">展望</a></li>
+    <li class="nocard"><a href="#glossary">名詞速查</a></li>
+  </ol>
+</nav>
+<header class="hero">
+  <div class="container">
+    <div class="hero-meta">
+      <span>OpenAI · 2025-11-07</span>
+      <span>資安說明文章 · Security</span>
+      <span>作者 OpenAI（頁面沒有個人署名）</span>
+    </div>
+    <p class="eyebrow">Prompt Injection · 圖卡＋教材整合版</p>
+    <h1>看懂 prompt injection<span class="accent">第三方把指令藏進 AI 會讀的內容 OpenAI 說這是前沿的資安難題</span></h1>
+    <p class="lede">AI 工具開始替你上網、查資料、規劃行程、買東西，也讀得到你在其他 app 裡的資料。OpenAI 這篇說明文章談的是隨之而來的攻擊：第三方把指令藏在網頁、文件或郵件裡，騙 AI 做你沒要求的事。文章先用兩個情境說明攻擊的樣子，再列出 OpenAI 的七層防禦，最後給使用者四個做法。本頁分八章重述。每章開頭先放一張圖解卡講重點，往下是詳細作法；想速讀就切到「只看圖卡」。</p>
+    <dl class="hero-keystat">
+      <div><dt>防禦的層數</dt><dd>7<small>層</small></dd></div>
+      <div><dt>表格裡的情境</dt><dd>2<small>個</small></dd></div>
+      <div><dt>使用者的做法</dt><dd>4<small>件</small></dd></div>
+      <div><dt>專攻注入的紅隊時數</dt><dd>數千<small>小時</small></dd></div>
+    </dl>
+  </div>
+</header>
+
+<section id="prologue" data-toc="為什麼讀這篇" class="nocard">
+  <div class="container">
+    <p class="chapter">Prologue · 整理者的引言</p>
+    <h2><span class="seg">AI 能替你動手，</span><span class="seg">也就可能被別人使喚</span></h2>
+    <p class="lede">agent 會上網、讀你的信、替你按下購買；它讀到的內容只要有一段出自別人之手，別人就有機會對它下指令。OpenAI 這篇寫給一般使用者的說明，講的就是這件事。</p>
+    <p>這篇是 Stanford CS 329Z 第 8 週的選讀，屬於 Safety 分區的〈Agent Safety &amp; Guardrails〉那一講。那一講談工具存取帶來的隱私風險、prompt injection（包含間接注入）、<span style="white-space:nowrap">red-teaming</span>、沙箱與權限模型、輸出端的護欄、責任歸屬、負責任的部署，以及 <span style="white-space:nowrap">human-in-the-loop</span>。同一講的必讀是 Shao 等人的〈PrivacyLens〉、Zhang 與 Yang 的〈Searching for Privacy Risks in LLM Agents via Simulation〉、Li 的〈Agentic LLMs as Powerful Deanonymizers〉；另兩篇選讀是 Wen 等人的〈Contextualized Privacy Defense for LLM Agents〉，以及 Anthropic 的 Responsible Scaling Policy。</p>
+    <p>整理者把講題和原文對了一下。講題裡的間接注入，就是原文說的「藏在網頁、文件、郵件裡的指令」，只是原文沒有用「間接」這個詞（本頁第 1、2 章）；<span style="white-space:nowrap">red-teaming</span> 在第 3 章；沙箱與權限在第 4 章，以及第 5 章的第一個做法；<span style="white-space:nowrap">human-in-the-loop</span> 對應第 4 章的暫停確認與 Watch Mode，以及第 5 章的「確認前看清楚」；工具存取的隱私風險，在第 2 章銀行對帳單的情境。輸出端的護欄與責任歸屬，這篇沒有專門談，要看同一講的其他讀物。</p>
+    <p>原文是 OpenAI 在 2025 年 11 月 7 日發布、放在 Security 分類的文章，頁面上沒有個人署名，本頁把 OpenAI 當作者。它是公司寫給自家使用者的說明，文中關於自家產品與防禦的說法，例如 ChatGPT agent、ChatGPT Atlas 的登出模式與 Watch Mode、Canvas 與 Codex 的沙箱、監控器、紅隊的時數，本頁都寫成「作者說」；產品名照原文，功能是寫作當時的樣子。</p>
+    <p>原文分四段：先說 prompt injection 是什麼，附一張兩個情境的表；再列 OpenAI 的七層防禦；接著是使用者能做的四件事；最後是展望。本頁照這個順序走，把表格獨立成第 2 章，並把七層防禦依「繞著模型」與「落在產品上」分成第 3、4 章，這個分法是整理者的。</p>
+    <p>整理者的補充：本站的〈<a href="../mcp-specification/">MCP 規格讀法</a>〉有一章整理規格的安全原則，Anthropic 的〈<a href="../demystifying-agent-evals/">Demystifying evals for AI agents</a>〉談怎麼替 agent 建評估；本頁不用它們的內容擴寫。</p>
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>先把五個名詞對齊</h4>
+      <ul>
+        <li><strong>Prompt</strong>：交給語言模型的文字。對 agent 來說，它包含你的指令，也包含它為了完成任務而讀進來的內容。</li>
+        <li><strong>Agent</strong>：會自己上網、呼叫工具、替你完成多步驟任務的 AI，例如原文說的 ChatGPT agent。</li>
+        <li><strong>Context（脈絡）</strong>：模型這一輪看得到的全部文字；你的話、它的回應、它讀到的網頁都在裡面。</li>
+        <li><strong>社交工程</strong>：不直接攻擊系統，而是騙對象自己做出危險的事；對象可以是人，這篇談的是 AI。</li>
+        <li><strong>第三方</strong>：不是你、也不是 AI 的人，例如在網頁上留言、寄信給你的陌生人。</li>
+      </ul>
+    </div>
+    <div class="pullquote">
+      agent 讀得越多、做得越多，別人能對它說話的地方就越多。
+      <cite>序章核心觀念</cite>
+    </div>
+  </div>
+</section>
+
+<section id="what-is" data-toc="指令藏在內容裡">
+  <div class="container head">
+    <p class="chapter">Chapter 01 · What is a prompt injection?</p>
+    <h2><span class="seg">指令藏在網頁與郵件裡，</span><span class="seg">AI 讀到就可能照做</span></h2>
+    <p class="lede">原文說它是對話式 AI 特有的社交工程：早期的對話只有你和 AI，現在的對話會混進網頁、文件、郵件，不是你、也不是 AI 的第三方，就能把指令放進 AI 的 context。</p>
+    
+  </div>
+  <div class="cardband" id="card-02"><div class="cardlabel"><span class="n">圖卡 02 / 06</span><span class="t">指令藏在 AI 讀到的內容裡</span><button type="button" class="zoom" data-card="02">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">指令不只來自你，也藏在 AI 讀到的內容裡</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">AI 工具會上網、做研究、規劃行程、幫你買東西，也讀得到你在其他 app 的資料 —— 對話裡混進很多來源的內容，第三方就有機會把指令放進來</div>
+
+  <div style="position:absolute; left:60px; top:200px; width:220px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:700; color:#1C2431;">你：交代一個任務</div>
+  <div style="position:absolute; left:60px; top:320px; width:220px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:700; color:#FFFFFF;">AI agent</div>
+  <div style="position:absolute; left:60px; top:440px; width:220px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:16px; font-weight:700; color:#1C2431;">替你動手</div><div style="font-size:12.5px; color:#6B7380;">推薦、購買、寄信</div></div></div>
+  <div style="position:absolute; left:60px; top:512px; width:220px; font-size:13px; color:#C8501F; line-height:1.55; text-align:center;">被注入時，這一步做的<br>是第三方要的事</div>
+
+  <div style="position:absolute; left:470px; top:196px; font-size:13px; font-weight:700; color:#2B3340;">行動：上網、搜尋、打開文件與郵件</div>
+  <div style="position:absolute; left:470px; top:486px; font-size:13px; font-weight:700; color:#C8501F;">讀回來的內容，連同藏在裡面的指令</div>
+
+  <div style="position:absolute; left:840px; top:150px; width:700px; height:400px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #D5DAE1; border-radius:14px;"></div>
+  <div style="position:absolute; left:870px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">AI 讀到的內容，來自很多地方</div>
+  <div style="position:absolute; left:870px; top:214px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">WEB</div>
+  <div style="position:absolute; left:870px; top:236px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">房源頁面</div>
+    <div style="padding:9px 16px; border:1.5px solid #E6B49A; border-radius:999px; font-size:15px; color:#C8501F; background-color:#FCF1EA;">房源底下的留言（藏著指令）</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">評論</div>
+  </div>
+  <div style="position:absolute; left:870px; top:296px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">DOCUMENTS</div>
+  <div style="position:absolute; left:870px; top:318px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">你請它讀的文件</div>
+  </div>
+  <div style="position:absolute; left:870px; top:378px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">EMAIL</div>
+  <div style="position:absolute; left:870px; top:400px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">你的收件匣</div>
+    <div style="padding:9px 16px; border:1.5px solid #E6B49A; border-radius:999px; font-size:15px; color:#C8501F; background-color:#FCF1EA;">攻擊者寄來的信（第 03 卡）</div>
+  </div>
+  <div style="position:absolute; left:870px; top:460px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">OTHER APPS</div>
+  <div style="position:absolute; left:870px; top:482px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">你接上的其他 app 裡的資料</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; width:1480px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">prompt injection：第三方（不是你，也不是 AI）把指令藏進普通的內容，騙 AI 做你沒要求的事</div>
+
+  <div style="position:absolute; left:60px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#C8501F;">和網路釣魚同一招</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">釣魚信騙人交出敏感資料；<br>prompt injection 騙 AI 做你沒要求的事。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">原文說它是對話式 AI 特有的社交工程攻擊。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#C8501F;">例子：請 AI 做度假的功課</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">房源留言或評論裡的內容，想騙 AI 推薦錯的房源；<br>更糟的，是騙它偷走你的信用卡資料。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">藏的地方都很普通：網頁、文件、郵件。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">風險跟著三件事放大</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">AI 碰得到的資料越敏感、做事越主動、<br>任務拉得越長，被注入的風險就越高。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">早期的 AI 對話，只有一個使用者和一個 AI。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：把 AI 畫成讀取內容、再動手的迴圈是整理者的畫法；留言、評論、文件、郵件都是原文舉的藏匿處。攻擊用的文字原文沒寫，這裡也不寫。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ags-c02" markerWidth="10" markerHeight="10" refX="2" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M10 0L0 5L10 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+      <marker id="ao-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+    </defs>
+    <path d="M170 258L170 316" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-start="url(#ags-c02)" marker-end="url(#ag-c02)"></path>
+    <path d="M170 378L170 436" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c02)"></path>
+    <path d="M280 334C520 334 620 226 836 226" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c02)"></path>
+    <path d="M838 470C620 470 520 366 284 366" stroke="#C8501F" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#ao-c02)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>作者先從對話裡有誰說起。早期的 AI 系統，是一個使用者和一個 AI 之間的對話；今天的 AI 產品裡，你的對話可能包含來自很多地方的內容，網路上的內容也在內。對話裡一出現別人寫的內容，這個不是使用者、也不是 AI 的第三方，就可能把惡意的指令放進對話的 context，誤導模型。「prompt injection」這個名稱，就是從這個想法來的。</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>面向</th><th>早期的 AI 對話</th><th>現在的 AI 產品</th></tr></thead>
+        <tbody>
+          <tr><td>對話裡有誰</td><td>一個使用者、一個 AI</td><td>使用者、AI，加上 AI 讀進來的各種內容</td></tr>
+          <tr><td>內容從哪裡來</td><td>使用者和 AI 自己</td><td>很多來源，網路也是其中之一</td></tr>
+          <tr><td>誰可能下指令</td><td>使用者</td><td>使用者，以及寫了那些內容的第三方</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>作者拿網路釣魚來比。釣魚信與網路詐騙想騙人交出敏感資訊；prompt injection 想騙的是 AI，讓它做你沒有要求的事。原文因此把它歸成社交工程攻擊，而且是對話式 AI 特有的一種。</p>
+    <div class="quote-en">
+      "Prompt injection is a type of social engineering attack specific to conversational AI"
+      <span class="zh">「prompt injection 是對話式 AI 特有的一種社交工程攻擊。」這是原文第一節的第一句。</span>
+    </div>
+    <p>原文的例子是度假。你請 AI 上網幫你做度假的功課，它在瀏覽時讀到某個網頁上藏著誤導的內容或有害的指令，位置可能是一則房源底下的留言，或一篇評論。這段內容經過刻意設計，想騙 AI 推薦錯的房源；更糟的，是想騙它偷走你的信用卡資料。</p>
+    <p>作者把這類攻擊總結成：刻意設計、要騙 AI 做出你沒打算讓它做的事的有害指令，常常藏在網頁、文件、郵件這類普通的內容裡。他也說，AI 能碰到的資料越敏感、做事越主動、接手的任務越長，這些風險就越高。</p>
+    <div class="explain stone">
+      <span class="label">補充說明</span>
+      <h4>課程講題說的「間接注入」</h4>
+      <p>課程講題裡的間接注入，指的是指令不是使用者自己打進對話的，而是藏在 AI 讀進來的外部內容裡。原文沒有用這個詞，但它舉的例子全都是這一種：房源底下的留言、評論、寄給你的郵件。這段對照是整理者的補充。</p>
+    </div>
+  </div>
+</section>
+
+<section id="two-scenarios" data-toc="兩個情境">
+  <div class="container head">
+    <p class="chapter">Chapter 02 · What is a prompt injection? · The table</p>
+    <h2><span class="seg">得手的後果，</span><span class="seg">看 agent 手上有什麼</span></h2>
+    <p class="lede">原文的表格用兩個情境說明：同樣是把東西放在 AI 會讀的地方，找公寓時損失一個好推薦，替你回信時，銀行對帳單可能被寄給攻擊者。</p>
+    
+  </div>
+  <div class="cardband" id="card-03"><div class="cardlabel"><span class="n">圖卡 03 / 06</span><span class="t">兩個情境：錯的推薦與資料外洩</span><button type="button" class="zoom" data-card="03">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">同一招，能推薦錯公寓，也能寄走對帳單</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">原文表格的兩個情境：攻擊者都沒碰你的帳號，只把東西放在 AI 會讀的地方；得手後能做多少事，看 AI 手上有什麼、你交代得多廣</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">APARTMENT RESEARCH</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">找公寓：推薦了一間不理想的公寓</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">OVERNIGHT EMAIL</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">回昨晚的信：對帳單被寄給攻擊者</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:630px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:218px; width:700px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; padding:0px 16px; font-size:15px; font-weight:700; color:#1C2431;">你：照我給的幾個條件，幫我找公寓</div>
+  <div style="position:absolute; left:60px; top:274px; width:700px; height:42px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:72px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">READ</div><div style="font-size:15px; color:#2B3340;">AI 一間間瀏覽刊登，比對你給的條件</div></div>
+  <div style="position:absolute; left:60px; top:326px; width:700px; height:42px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:72px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">PLANTED</div><div style="font-size:15px; color:#1C2431;">攻擊者在自己的刊登裡，放了一段注入</div></div>
+  <div style="position:absolute; left:60px; top:378px; width:700px; height:42px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:72px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">AIM</div><div style="font-size:15px; color:#1C2431;">想讓 AI 以為非選這間不可，不管你的條件是什麼</div></div>
+  <div style="position:absolute; left:60px; top:430px; width:700px; height:42px; box-sizing:border-box; background-color:#C8501F; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:72px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:rgba(255,255,255,0.7);">RESULT</div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">得手的話：可能推薦一間照你的偏好並不理想的公寓</div></div>
+  <div style="position:absolute; left:60px; top:490px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">攻擊者要的，是你選他的房子。這個任務裡 AI 只查資料、給建議，<br>所以損失停在一個推薦。</div>
+
+  <div style="position:absolute; left:840px; top:218px; width:700px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; padding:0px 16px; font-size:15px; font-weight:700; color:#1C2431;">你：我今天早上很忙，昨晚的信你看著回</div>
+  <div style="position:absolute; left:840px; top:274px; width:700px; height:42px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:72px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">ACCESS</div><div style="font-size:15px; color:#2B3340;">為了回信，你讓它讀得到整個信箱</div></div>
+  <div style="position:absolute; left:840px; top:326px; width:700px; height:42px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:72px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">PLANTED</div><div style="font-size:15px; color:#1C2431;">攻擊者寄來一封信，裡面是誤導模型的假訊息</div></div>
+  <div style="position:absolute; left:840px; top:378px; width:700px; height:42px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:72px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">AIM</div><div style="font-size:15px; color:#1C2431;">想騙模型找出你的銀行對帳單，寄給攻擊者</div></div>
+  <div style="position:absolute; left:840px; top:430px; width:700px; height:42px; box-sizing:border-box; background-color:#C8501F; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:72px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:rgba(255,255,255,0.7);">RESULT</div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">得手的話：它可能在信箱裡找像對帳單的東西，寄出去</div></div>
+  <div style="position:absolute; left:840px; top:490px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">原文特別註明：信箱是你為了這個任務開放給它的。<br>「看著回」是很廣的交代，原文在這一列指向「給明確指令」那一段。</div>
+
+  <div style="position:absolute; left:60px; top:582px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">損失停在一個推薦</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">這個任務裡，AI 只查資料、給建議；<br>攻擊得手，你拿到的是一間不理想的公寓。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">原文的說法：依你的偏好來看，推薦了次佳的刊登。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:582px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">損失到了資料外洩</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">AI 讀得到你的信，也寄得出信；<br>攻擊得手，對帳單可能從你授權的信箱被寄出去。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">原文在這一列提醒：盡量給 agent 明確的指令（第 06 卡）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩列依原文表格重述，攻擊只寫到原文的程度：放在哪裡、想讓 AI 做什麼、得手的後果；兩張結果卡的對照是整理者的讀法。</div>
+</div></div></div>
+  <div class="container prose">
+    <p>原文在定義之後放了一張表，每一列是一個情境，欄位是你請 AI 做什麼、攻擊者做了什麼、攻擊得手的話可能怎樣。本頁把兩列重新排成下面的對照；攻擊只寫到原文寫的程度，也就是放在哪裡、想讓 AI 做什麼。</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>面向</th><th>找公寓</th><th>回昨晚的信</th></tr></thead>
+        <tbody>
+          <tr><td>你交代的事</td><td>照你給的條件，研究有哪些公寓可選</td><td>你今天早上很忙，請 agent 把昨晚的信大致回一回</td></tr>
+          <tr><td>AI 為了這件事<br>讀到什麼</td><td>一間間的公寓刊登</td><td>你的信箱，是你為了這個任務開放給它的</td></tr>
+          <tr><td>攻擊者做的事</td><td>在自己的刊登裡放一段注入，要 AI 以為非選這間不可，不管你說了什麼條件</td><td>寄一封信給你，信裡的假訊息要騙模型找出你的銀行對帳單，交給攻擊者</td></tr>
+          <tr><td>得手的話</td><td>AI 可能推薦一間照你的偏好來看並不理想的公寓</td><td>agent 可能在信箱裡找任何像銀行對帳單的東西，寄給攻擊者</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>兩個情境的手法一樣：攻擊者沒有碰你的帳號，只是把東西放在 AI 一定會讀到的地方。差別在後果。找公寓的任務裡，AI 只查資料、給建議，得手的損失是一個不好的推薦；回信的任務裡，agent 讀得到整個信箱，也寄得出信，得手就可能是資料外洩。原文在第二列特地加了括號，說信箱是你為了這個任務開放給它的。這個對照是整理者的讀法。</p>
+    <p>第二列還有一個細節。原文在「你請 AI 做什麼」那一格，特地指向後面「盡量給 agent 明確指令」那一段。「大致回一回」是很廣的交代，每封信要怎麼處理都由 agent 自己決定，藏在信裡的內容就有更多機會帶偏它。本頁第 5 章會回到這一點。</p>
+    <div class="thought">
+      <span class="label">整理者的思考題 · 01</span>
+      <h4>你交給 AI 的任務裡，它會讀到哪些不是你寫的內容？</h4>
+      <p>挑一個你常交給 AI 或 agent 的任務，列出它為了完成任務會讀進來的東西：網頁、文件、郵件、其他 app 裡的資料。其中哪些是陌生人也寫得進去的？</p>
+      <p class="hint">整理者的建議：把來源分成「只有你寫得進去」與「別人也寫得進去」兩類。後者越多、agent 能動用的權限越大，越值得套用第 5 章的做法。</p>
+    </div>
+  </div>
+</section>
+
+<section id="model-defenses" data-toc="模型與找攻擊">
+  <div class="container head">
+    <p class="chapter">Chapter 03 · Our approach · Safety training · Monitoring · <span style="white-space:nowrap">Red-teaming</span> · Bug bounty</p>
+    <h2><span class="seg">新攻擊一出現，</span><span class="seg">防禦就得跟著更新</span></h2>
+    <p class="lede">作者說防禦的目標，是有人主動誤導時，AI 仍然完成你真正要它做的事。七層防禦裡，本章講繞著模型的四層：讓模型認得出的安全訓練、模型之外的監控器，以及替它們找出新攻擊的紅隊與漏洞賞金。</p>
+    
+  </div>
+  <div class="cardband" id="card-04"><div class="cardlabel"><span class="n">圖卡 04 / 06</span><span class="t">訓練與監控器，跟著新攻擊更新</span><button type="button" class="zoom" data-card="04">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">訓練讓模型認得出，監控器先擋新攻擊</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">作者預期對手會一直發展新攻擊。模型這一側有兩層自動防禦：讓模型自己認得出的訓練，和模型之外、可以很快更新的監控器</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">SAFETY TRAINING</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">安全訓練：讓模型自己認出、不上當</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">MONITORING</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">監控器：在模型之外，再擋一層</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:330px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:230px; top:222px; width:360px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">Instruction Hierarchy</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">分辨哪些指令可信、哪些不可信</div></div></div>
+  <div style="position:absolute; left:230px; top:306px; width:360px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">訓練模型認出注入的模式</div>
+  <div style="position:absolute; left:150px; top:384px; width:220px; height:44px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">忽略它</div>
+  <div style="position:absolute; left:450px; top:384px; width:220px; height:44px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">提醒使用者</div>
+  <div style="position:absolute; left:60px; top:446px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">對抗攻擊的穩健性是機器學習長期的難題，作者說這仍是困難、未解的問題。</div>
+
+  <div style="position:absolute; left:1010px; top:222px; width:360px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">多個 AI 驅動的監控器</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">自動化，在模型之外認出並擋下注入</div></div></div>
+  <div style="position:absolute; left:1010px; top:306px; width:360px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">發現新攻擊時，很快更新</div>
+  <div style="position:absolute; left:930px; top:384px; width:220px; height:44px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">擋下針對使用者的攻擊</div>
+  <div style="position:absolute; left:1230px; top:384px; width:220px; height:44px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">抓到平台上的攻擊測試</div>
+  <div style="position:absolute; left:840px; top:446px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">作者說監控器和訓練互補，理由就是它能很快更新；平台上的攻擊測試，在流出去之前就被抓到。</div>
+
+  <div style="position:absolute; left:60px; top:496px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">新攻擊從這裡找到</div>
+    <div style="font-size:15px; color:#2B3340;">自動化紅隊自己做出新攻擊 · 內外部紅隊模擬攻擊者 · 漏洞賞金：善意研究者示範攻擊路徑 · 監控器看到的攻擊測試</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">訓練：難，還沒解決</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">要 AI 認得出注入、不上當；作者坦白，<br>這是困難、還沒解決的問題，所以持續研究新的訓練方法。</div>
+    <div style="font-size:13px; color:#8A93A0;">自動化紅隊做出的新攻擊，拿來訓練。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:590px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">監控器：可以很快更新</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">新攻擊一被發現，更新監控器就能很快擋下；<br>攻擊還在平台上測試的時候，也抓得到。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說監控器不只一個，都由 AI 驅動。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:590px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">紅隊與漏洞賞金：找攻擊</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">內外部紅隊模擬攻擊者，專攻注入的時數以千計；<br>示範出真實攻擊路徑的善意研究者，領得到賞金。</div>
+    <div style="font-size:13px; color:#8A93A0;">賞金的條件：那條路徑可能讓使用者資料意外外洩。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：四層在原文是分開的四節；並排比較、把新攻擊的來源畫成共用條是整理者的畫法。原文只說監控器能很快更新，所以和訓練互補。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M410 278L410 304" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M410 352L260 382" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M410 352L560 382" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1190 278L1190 304" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1190 352L1040 382" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1190 352L1340 382" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>作者說，防禦 prompt injection 是整個 AI 產業都面對的挑戰，也是 OpenAI 的工作重點。他們預期對手會繼續發展這類攻擊，所以防禦的設計目標是：就算有人正積極地誤導 AI，它仍然完成使用者原本想做的事。作者說，要安全地實現 AGI 的好處，這個能力不可少。為了保護使用者、也為了讓模型更抵擋得住這些攻擊，他們採取多層的做法，原文列了七項；本章是其中四項。</p>
+    <div class="values">
+      <div class="value-card"><span class="tag">Safety training</span><h4>安全訓練</h4><p>要 AI 認得出注入、不上當。Instruction Hierarchy 讓模型分辨可信與不可信的指令，訓練它認出注入的模式後忽略，或提醒使用者。</p></div>
+      <div class="value-card"><span class="tag">Monitoring</span><h4>監控器</h4><p>多個自動化、由 AI 驅動的監控器，認出並擋下注入攻擊；發現新攻擊時，可以很快更新。</p></div>
+      <div class="value-card"><span class="tag"><span style="white-space:nowrap">Red-teaming</span></span><h4>紅隊</h4><p>內部與外部團隊模擬攻擊者，專門針對 prompt injection 的時數以千計；找到新手法就修補。</p></div>
+      <div class="value-card"><span class="tag">Bug bounty</span><h4>漏洞賞金</h4><p>善意的獨立研究者，示範出可能讓使用者資料意外外洩的真實攻擊路徑，就能領到獎金。</p></div>
+    </div>
+    <p>安全訓練的目標，是讓 AI 自己認得出 prompt injection、不上當。作者也坦白這很難：對抗攻擊的穩健性是機器學習與 AI 長期的難題，這仍是一個困難、還沒解決的問題。他們的研究 Instruction Hierarchy，方向是讓模型分辨哪些指令可信、哪些不可信；他們也持續開發新的訓練方法，讓模型更認得出注入的模式，然後忽略它，或提醒使用者。其中一個技術是自動化紅隊，用自動化的方式做出新的注入攻擊，作者說這是他們研究了好幾年的領域。</p>
+    <p>監控器在模型之外再擋一層。作者說他們開發了多個自動化、由 AI 驅動的監控器，用來認出並擋下注入攻擊。它們和安全訓練互補，理由是可以很快更新：一發現新的攻擊，很快就能擋下。監控器還有第二個用途：有人在 OpenAI 的平台上做對抗性的注入研究與測試時，監控器也抓得到，而且是在這些攻擊被拿到外面使用之前。</p>
+    <p>另外兩層負責把新攻擊找出來。紅隊由內部與外部團隊組成，用來測試並改進防禦、模擬攻擊者的行為；作者說其中專門針對 prompt injection 的時數以千計，找到新的手法與攻擊後，團隊會主動修補漏洞、改進模型的防護。漏洞賞金則向外部開放：善意的獨立資安研究者，只要示範出一條真實、可能讓使用者資料意外外洩的攻擊路徑，就能拿到獎金。作者說這是為了鼓勵外部的人盡快把問題提出來，讓他們修好、再加強防禦。</p>
+    <div class="explain stone">
+      <span class="label">整理者的讀法</span>
+      <h4>四層的分工：兩層擋，兩層找</h4>
+      <p>把四節放在一起看，安全訓練與監控器負責擋，紅隊與漏洞賞金負責找；自動化紅隊與監控器也會找到新攻擊。找到之後，監控器可以很快更新，原文說它和訓練互補的理由就在這裡。第 04 卡把兩層畫成並排、把新攻擊的四個來源畫成一條共用條，這是整理者的畫法。</p>
+    </div>
+    <div class="pullquote">
+      讓模型自己不上當，作者承認還沒解決；所以模型之外，還要一層更新得快的監控器。
+      <cite>整理自原文 Safety training 與 Monitoring 兩節</cite>
+    </div>
+  </div>
+</section>
+
+<section id="product-defenses" data-toc="產品與使用者">
+  <div class="container head">
+    <p class="chapter">Chapter 04 · Our approach · Security protections · Give users control · Let users decide</p>
+    <h2><span class="seg">產品在關鍵處設關卡，</span><span class="seg">把決定交回給你</span></h2>
+    <p class="lede">另外三層落在產品上：某些連結要你先核准、跑程式放進沙箱、購買前暫停確認、敏感網站要你看著，接上其他 app 前先說明風險。作者說，目的是讓你知道 agent 在做什麼，也管得住它。</p>
+    
+  </div>
+  <div class="cardband" id="card-05"><div class="cardlabel"><span class="n">圖卡 05 / 06</span><span class="t">產品在四個時間點設關卡</span><button type="button" class="zoom" data-card="05">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">從接上 app 到按下購買，產品一路設關卡</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">七層裡落在產品上的三層：安全保護、使用者控制、讓使用者決定。作者舉的例子，落在一個 agent 任務的四個時間點</div>
+
+  <div style="position:absolute; left:60px; top:136px; font-size:14px; font-weight:700; color:#4B5866;">設定的時候</div>
+  <div style="position:absolute; left:450px; top:136px; font-size:14px; font-weight:700; color:#4B5866;">開始任務</div>
+  <div style="position:absolute; left:840px; top:136px; font-size:14px; font-weight:700; color:#4B5866;">任務進行中</div>
+  <div style="position:absolute; left:1230px; top:136px; font-size:14px; font-weight:700; color:#4B5866;">敏感的一步</div>
+
+  <div style="position:absolute; left:60px; top:164px; width:310px; height:110px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; gap:6px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;"><div style="font-size:15.5px; font-weight:700; color:#1C2431; white-space:nowrap;">接上其他 app 之前</div><div style="flex-shrink:0; padding:2px 8px; border-radius:4px; font-size:11.5px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">讓使用者決定</div></div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.55;">說明會讀哪些資料、怎麼用、<br>可能有什麼風險，附更安全的做法</div>
+  </div>
+  <div style="position:absolute; left:60px; top:288px; width:310px; height:110px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; gap:6px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;"><div style="font-size:15.5px; font-weight:700; color:#1C2431; white-space:nowrap;">組織的工作區</div><div style="flex-shrink:0; padding:2px 8px; border-radius:4px; font-size:11.5px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">讓使用者決定</div></div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.55;">管理員決定工作區的成員，<br>能開啟、使用哪些功能</div>
+  </div>
+
+  <div style="position:absolute; left:450px; top:226px; width:310px; height:110px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; gap:6px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;"><div style="font-size:15.5px; font-weight:700; color:#1C2431; white-space:nowrap;">登出模式</div><div style="flex-shrink:0; padding:2px 8px; border-radius:4px; font-size:11.5px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">使用者控制</div></div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.55;">ChatGPT Atlas 裡，agent 不登入<br>任何網站，也能開始做事</div>
+  </div>
+
+  <div style="position:absolute; left:840px; top:164px; width:310px; height:110px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; gap:6px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;"><div style="font-size:15.5px; font-weight:700; color:#1C2431; white-space:nowrap;">瀏覽：連結先核准</div><div style="flex-shrink:0; padding:2px 8px; border-radius:4px; font-size:11.5px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">安全保護</div></div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.55;">特別是要求不被收錄的網站，<br>ChatGPT 先問過你才開</div>
+  </div>
+  <div style="position:absolute; left:840px; top:288px; width:310px; height:110px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; gap:6px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;"><div style="font-size:15.5px; font-weight:700; color:#1C2431; white-space:nowrap;">跑程式：放進沙箱</div><div style="flex-shrink:0; padding:2px 8px; border-radius:4px; font-size:11.5px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">安全保護</div></div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.55;">Canvas、Codex 用工具跑程式時，<br>擋下注入可能造成的有害變更</div>
+  </div>
+
+  <div style="position:absolute; left:1230px; top:164px; width:310px; height:110px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; gap:6px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;"><div style="font-size:15.5px; font-weight:700; color:#1C2431; white-space:nowrap;">購買前：暫停確認</div><div style="flex-shrink:0; padding:2px 8px; border-radius:4px; font-size:11.5px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">使用者控制</div></div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.55;">完成購買這類敏感步驟之前，<br>ChatGPT agent 先停下來問你</div>
+  </div>
+  <div style="position:absolute; left:1230px; top:288px; width:310px; height:110px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; gap:6px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;"><div style="font-size:15.5px; font-weight:700; color:#1C2431; white-space:nowrap;">敏感網站：Watch Mode</div><div style="flex-shrink:0; padding:2px 8px; border-radius:4px; font-size:11.5px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">使用者控制</div></div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.55;">要你把分頁留在前面看著；<br>你一離開，agent 就暫停</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:430px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">兩種關卡</div>
+    <div style="font-size:15px; color:#2B3340;">綠底：產品在這一步把決定交給你（先說明、先核准、先確認、要你看著）。灰底：先把 agent 能碰的範圍縮小（組織管理、不登入、沙箱）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:518px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:536px; font-size:20px; font-weight:700; color:#1C2431;">作者說三層各有用意</div>
+
+  <div style="position:absolute; left:60px; top:580px; width:470px; height:184px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">讓使用者決定：先說清楚</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">接上其他 app 時，說明資料會被怎麼讀、怎麼用，<br>也說明可能有網站想偷你的資料。</div>
+    <div style="font-size:13px; color:#8A93A0;">目的：讓使用者做出知情的決定。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:580px; width:470px; height:184px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">使用者控制：敏感時停下來</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">購買前暫停確認；敏感網站要你看著，<br>一離開分頁就暫停；只做研究可以不登入。</div>
+    <div style="font-size:13px; color:#8A93A0;">目的：讓你一直知道、也管得住 agent 在做什麼。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:580px; width:470px; height:184px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">安全保護：依產品量身做</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">好幾道保護彼此重疊，依每個產品設計：<br>ChatGPT 的連結核准，Canvas 與 Codex 的沙箱。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說，更多技術細節會在之後的文章說明。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：把三層的例子排在一條任務時間線上、分成綠灰兩種關卡，是整理者的畫法；疊在同一欄的兩格，原文沒有說先後。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M404 273L416 281L404 289Z" fill="#9AA3AE"></path>
+    <path d="M794 273L806 281L794 289Z" fill="#9AA3AE"></path>
+    <path d="M1184 273L1196 281L1184 289Z" fill="#9AA3AE"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>第一層是安全保護。作者說，他們在產品與基礎設施裡設計了好幾道彼此重疊的保護，依每個產品量身調整，技術細節會在之後的文章說明。原文舉了兩個例子。第一個是連結：為了幫你避開不可信的網站，ChatGPT 會請你先核准某些連結才開啟，特別是那些要求不被收錄的網站。第二個是沙箱：AI 用工具執行其他程式或程式碼時，例如在 Canvas 或開發工具 Codex 裡，他們用沙箱防止模型做出有害的變更，這些變更可能正是 prompt injection 造成的。</p>
+    <p>第二層是使用者控制，也就是產品內建、讓你保護自己的開關。作者舉的是 ChatGPT Atlas 與 ChatGPT agent。Atlas 有登出模式，agent 可以在沒有登入任何網站的狀態下開始任務。agent 在完成購買這類敏感步驟之前，會停下來請你確認。agent 在敏感網站上操作時，有一個 Watch Mode，會提醒你這個網站的敏感性，而且要你把那個分頁留在前面看著它做；你一切到別的分頁，agent 就暫停。作者說，這些設計讓你一直知道、也掌控 agent 正在做的事。</p>
+    <p>第三層是讓使用者做知情的決定。作者說，他們會說明使用某些功能的風險。例如把 ChatGPT 接上其他 app 時，會說明哪些資料可能被讀取、會怎麼使用、可能出現哪些風險，像是某個網站想偷你的資料，並附上一個教你怎麼更安全的連結。組織也能決定，自己工作區裡的成員可以開啟或使用哪些功能。</p>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>時間點</th><th>原文的層</th><th>作者舉的例子</th></tr></thead>
+        <tbody>
+          <tr><td>接上其他 app 前</td><td>讓使用者決定</td><td>說明會讀哪些資料、怎麼用、有什麼風險；組織決定成員能用哪些功能</td></tr>
+          <tr><td>開始一個任務</td><td>使用者控制</td><td>ChatGPT Atlas 的登出模式：agent 不登入網站也能開始</td></tr>
+          <tr><td>瀏覽網頁時</td><td>安全保護</td><td>某些連結先請你核准，特別是要求不被收錄的網站</td></tr>
+          <tr><td>執行程式時</td><td>安全保護</td><td>Canvas、Codex 用工具跑程式時放進沙箱，擋下有害的變更</td></tr>
+          <tr><td>敏感的一步之前</td><td>使用者控制</td><td>完成購買前暫停，請你確認</td></tr>
+          <tr><td>在敏感網站上</td><td>使用者控制</td><td>Watch Mode：要你看著，一離開分頁 agent 就暫停</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>把三層的例子排在一個 agent 任務的時間線上，會看到兩種做法。一種在事情發生之前把決定交給你：先說明風險、先核准連結、購買前確認、要你看著。另一種先把 agent 能碰的範圍縮小：組織只開放部分功能、做研究不帶登入、跑程式放進沙箱。時間點那一欄與這兩種的分法，都是整理者的讀法，原文沒有這樣排。</p>
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>這些是作者對自家產品的描述</h4>
+      <p>本章的例子都是 OpenAI 對自家產品的說明，功能名稱與行為以寫作當時、官方文件的說法為準。第 5 章給使用者的做法，則不限於哪一個產品。</p>
+    </div>
+  </div>
+</section>
+
+<section id="user-steps" data-toc="你能做的四件事">
+  <div class="container head">
+    <p class="chapter">Chapter 05 · Steps you can take to stay safer</p>
+    <h2><span class="seg">你能做的，</span><span class="seg">是讓攻擊更難得手</span></h2>
+    <p class="lede">原文給使用者四個做法：只給需要的存取、確認前看清楚、指令講具體、跟上最新的做法。作者也說，這些做法不保證擋下所有攻擊。</p>
+    
+  </div>
+  <div class="cardband" id="card-06"><div class="cardlabel"><span class="n">圖卡 06 / 06</span><span class="t">放手之前的三道關</span><button type="button" class="zoom" data-card="06">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">放手之前三道關：權限、指令、確認</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">原文給使用者的四個做法，前三個都用在一次任務裡；作者說它們不保證擋下所有攻擊，但能讓攻擊更難得手</div>
+
+  <div style="position:absolute; left:60px; top:196px; width:230px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:700; color:#FFFFFF;">交代任務給 agent</div>
+  <div style="position:absolute; left:360px; top:196px; width:230px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#1C2431; line-height:1.3;"><div>只給它需要的<br>資料與登入？</div></div>
+  <div style="position:absolute; left:660px; top:196px; width:230px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#1C2431; line-height:1.3;"><div>指令夠具體、<br>範圍夠窄？</div></div>
+  <div style="position:absolute; left:960px; top:196px; width:230px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#1C2431; line-height:1.3;"><div>確認前，看過動作<br>與要分享的資訊？</div></div>
+  <div style="position:absolute; left:1260px; top:196px; width:230px; height:64px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#FFFFFF; line-height:1.3;"><div>讓它做事<br>敏感網站上看著它</div></div>
+
+  <div style="position:absolute; left:610px; top:202px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#6B7380;">是</div>
+  <div style="position:absolute; left:910px; top:202px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#6B7380;">是</div>
+  <div style="position:absolute; left:1210px; top:202px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#2E7B4F;">是</div>
+  <div style="position:absolute; left:486px; top:286px; font-size:13px; font-weight:700; color:#C8501F;">否</div>
+  <div style="position:absolute; left:786px; top:286px; font-size:13px; font-weight:700; color:#C8501F;">否</div>
+  <div style="position:absolute; left:1086px; top:286px; font-size:13px; font-weight:700; color:#C8501F;">否</div>
+
+  <div style="position:absolute; left:340px; top:336px; width:270px; height:104px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:6px;">
+    <div style="font-size:15px; font-weight:700; color:#C8501F;">碰得到的越多，風險越高</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">能碰的資料越敏感，風險就越高；<br>對帳單就在它讀得到的信箱裡</div>
+  </div>
+  <div style="position:absolute; left:640px; top:336px; width:270px; height:104px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:6px;">
+    <div style="font-size:15px; font-weight:700; color:#C8501F;">廣泛的交代，容易被帶偏</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">「看我的信，需要做什麼就做」，<br>讓藏起來的惡意內容更容易誤導模型</div>
+  </div>
+  <div style="position:absolute; left:940px; top:336px; width:270px; height:104px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:6px;">
+    <div style="font-size:15px; font-weight:700; color:#C8501F;">沒看清楚，錯的也放行</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">購買、寄信這類有後果的動作，<br>動作或資訊不對，確認就讓它過關</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:462px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">第四個做法不在一次任務裡：跟上 OpenAI 與其他可信來源的更新。作者說新的風險與防護會一直出現。</div>
+
+  <div style="position:absolute; left:60px; top:504px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:522px; font-size:20px; font-weight:700; color:#1C2431;">三個做法，原文的例子</div>
+  <div style="position:absolute; left:60px; top:570px; width:470px; height:182px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">只做研究，就用登出模式</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">用 ChatGPT Atlas 的 agent 模式查度假資料，<br>不需要登入的研究，就不帶登入去做。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">原則：只給任務需要的敏感資料與憑證。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:570px; width:470px; height:182px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">要它做具體的事</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">別給它很大的空間自己決定要做什麼；<br>具體的交代，讓信裡這類外來的指令比較難得逞。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者說：不保證沒有攻擊，但攻擊者比較難成功。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:570px; width:470px; height:182px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">確認前看清楚，敏感網站看著做</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">檢查動作對不對、要分享的資訊該不該分享；<br>在銀行這類網站上，看著 agent 做事。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">像坐在自動駕駛的車裡，手仍放在方向盤上。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：把三個做法排成一串問題、寫出「否」的後果，是整理者的畫法；做法與例子都出自原文，順序照一次任務的先後重排。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M290 228L358 228" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M590 228L658 228" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M890 228L958 228" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1190 228L1258 228" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c06)"></path>
+    <path d="M475 260L475 334" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c06)"></path>
+    <path d="M775 260L775 334" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c06)"></path>
+    <path d="M1075 260L1075 334" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c06)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+    <p>作者說，prompt injection 是會隨時間一直變化的前沿資安問題；AI 有了新的智慧與能力，技術、社會與降低風險的策略就得一起演進。他拿 2000 年代初的電腦病毒來比，認為每個人都該了解 prompt injection 的威脅、知道怎麼應對風險，大家才能安全地從這項技術得到好處。使用會替你行動的 AI 與 agent 功能時，保持警覺、謹慎一點，資料就比較安全。原文接著給了四個做法：</p>
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>只給任務需要的存取</strong>能的話，agent 只拿到完成任務需要的敏感資料與登入憑證。例如用 ChatGPT Atlas 的 agent 模式查度假資料，只是研究、不需要登入，就用登出模式。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>確認前看清楚</strong>作者說，他們常把 agent 設計成在完成購買、寄出郵件這類有後果的動作前，請你最後確認。這時檢查動作看起來對不對、要分享的資訊在這個情境下該不該分享；在銀行這類敏感網站上，看著 agent 做事。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>指令講具體</strong>「看我的信，需要做什麼就做」這種很廣的交代，讓藏起來的惡意內容更容易誤導模型，即使它在敏感動作前會先問你。要它做具體的事，比較安全。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>跟上新的做法</strong>AI 技術一直在變，新的風險與防護也會一直出現；追蹤 OpenAI 與其他可信來源的更新，學習最佳做法。</div></div>
+    </div>
+    <p>第三個做法有一個細節。agent 本來就設計成在敏感動作前先問你，作者仍然建議把指令講具體：廣泛的交代給 agent 很大的空間，讓它可能照著別處來的有害指令做事，例如信裡的內容。作者的說法也很保守，具體的指令不保證沒有攻擊，只是讓攻擊者比較難成功。</p>
+    <div class="story">
+      <div class="label">關鍵觀念 · 一</div>
+      <h4>手放在方向盤上</h4>
+      <p>作者用自動駕駛車比喻「在敏感網站上看著 agent 做事」：車子會自己開，你仍然坐在駕駛座，手放在方向盤上。第 4 章的 Watch Mode 把這個比喻做成了產品規則，你離開那個分頁，agent 就停下來等你。把兩處連起來看是整理者的讀法。</p>
+    </div>
+    <p>把四個做法套回第 2 章的郵件情境，可以看到各自擋在哪裡。攻擊者靠的是兩件事：agent 讀得到整個信箱，而你只交代了「大致回一回」。第一個做法縮小它能碰的資料，第三個做法縮小它自己決定的空間；把對帳單寄出去是寄信這類有後果的動作，agent 若停下來請你確認，第二個做法就是最後一道關。這個對照是整理者的整理，原文只在表格裡指向第三個做法。</p>
+    <div class="thought">
+      <span class="label">整理者的思考題 · 02</span>
+      <h4>把你最近交給 agent 的一個指令，改寫得更具體</h4>
+      <p>找一個你說過的廣泛交代，例如「幫我整理信箱」。它讓 agent 自己決定了哪些事？其中哪些，你心裡其實早有答案？</p>
+      <p class="hint">整理者的建議：寫出要處理的範圍（哪幾封、哪個資料夾）與要做的動作（回覆、標記），沒寫到的就不做；需要登入的網站與要分享的資料，也一起寫清楚。</p>
+    </div>
+  </div>
+</section>
+
+<section id="looking-ahead" data-toc="展望" class="nocard">
+  <div class="container">
+    <p class="chapter">Chapter 06 · Looking ahead</p>
+    <h2><span class="seg">攻擊還沒普及，</span><span class="seg">防禦要先走在前面</span></h2>
+    <p class="lede">作者說還沒看到攻擊者大量使用這一招，但預期對手會投入大量時間與資源；OpenAI 會繼續投資，也會陸續公開進展。</p>
+    <p>作者在結尾重申，prompt injection 仍是前沿、困難的研究問題；它和網路上的傳統詐騙一樣，防禦的工作會一直持續下去。他說目前還沒有看到攻擊者大量採用這種手法，但預期對手會花大量的時間與資源，想辦法讓 AI 上當。</p>
+    <p>作者說，OpenAI 會繼續重金投資：讓產品更安全，也研究怎麼讓 AI 更抵擋得住這個風險，並在學到更多時分享進展。作者舉了一個正在做的例子：他們在準備一份即將公開的報告，說明怎麼偵測 AI 和網路之間的通訊，會不會把你對話裡的資訊傳出去。</p>
+    <p>作者給的目標是：和這些系統一起工作，要像和你最信任、最懂資安的同事或朋友一起工作一樣可靠、安全。他們會從真實世界的使用裡學習、安全地迭代，並隨著技術進展公開學到的東西。</p>
+    <dl class="faq">
+      <div><dt>攻擊者已經大量使用 prompt injection 了嗎？</dt><dd>作者說還沒有看到攻擊者大量採用這種手法，但預期對手會投入大量的時間與資源。</dd></div>
+      <div><dt>有了這些防禦，AI 就不會被注入了嗎？</dt><dd>作者沒有這樣說。他說讓模型認得出注入是困難、還沒解決的問題，防禦也是多層的：模型之外還有監控器、產品裡的關卡與使用者控制（第 3、4 章）。</dd></div>
+      <div><dt>指令講具體了，就安全了嗎？</dt><dd>作者說具體的指令不保證沒有攻擊，只是讓攻擊者比較難成功；原文另外還列了限制存取、確認前看清楚等做法（第 5 章）。</dd></div>
+      <div><dt>agent 請我確認時，要看什麼？</dt><dd>看動作對不對，以及要分享的資訊在這個情境下該不該分享；在銀行這類敏感網站上，看著它做（第 5 章）。</dd></div>
+    </dl>
+    <div class="pullquote bronze">
+      目標是讓 agent 像你最信任、最懂資安的同事一樣可靠。
+      <cite>整理自原文 Looking ahead</cite>
+    </div>
+    <div class="thought">
+      <span class="label">整理者的思考題 · 03</span>
+      <h4>如果你在做會替使用者行動的 agent，哪幾步該停下來問人？</h4>
+      <p>列出你的 agent 做得到的動作：讀、寫、寄出、付款、改設定。原文的產品在哪些動作前會停下來？你的產品呢？</p>
+      <p class="hint">整理者的建議：拿原文的例子當底線。購買與寄信這類有後果的動作前先確認，跑程式放進沙箱，不需要登入的任務就不給登入。</p>
+    </div>
+  </div>
+</section>
+
+<section id="glossary" class="nocard glossary" data-toc="名詞速查">
+  <div class="wide">
+    <p class="eyebrow">Reference · 名詞速查</p>
+    <h2><span class="seg">十八個名詞，</span><span class="seg">看懂注入的攻與防</span></h2>
+    <p class="lede">依「攻擊、防禦、使用者的做法」的順序排，解釋是整理者依原文的用法寫的。</p>
+    <dl class="glossary-grid">
+      <div class="term"><dt>Prompt injection</dt><span class="zh-name">提示注入</span><dd>第三方把惡意指令藏進 AI 會讀到的內容，騙它做你沒要求的事。</dd></div>
+      <div class="term"><dt>Social engineering</dt><span class="zh-name">社交工程</span><dd>不直接攻擊系統，而是騙對象自己做出危險的事；原文說 prompt injection 是對話式 AI 特有的一種。</dd></div>
+      <div class="term"><dt>Phishing</dt><span class="zh-name">網路釣魚</span><dd>騙人交出敏感資訊的信件或網頁；原文拿它和 prompt injection 對照。</dd></div>
+      <div class="term"><dt>Conversation context</dt><span class="zh-name">對話的 context</span><dd>模型這一輪看得到的全部內容；現在的 AI 產品裡，會混進網頁、文件、郵件。</dd></div>
+      <div class="term"><dt>Third party</dt><span class="zh-name">第三方</span><dd>不是使用者、也不是 AI 的一方；把指令放進 context 的就是它。</dd></div>
+      <div class="term"><dt>Indirect prompt injection</dt><span class="zh-name">間接注入</span><dd>指令藏在 AI 讀進來的外部內容裡，而不是使用者自己打的；這是課程講題的用詞，原文沒有用。</dd></div>
+      <div class="term"><dt>Instruction Hierarchy</dt><span class="zh-name">指令層級</span><dd>OpenAI 的研究，方向是讓模型分辨可信與不可信的指令。</dd></div>
+      <div class="term"><dt>Adversarial robustness</dt><span class="zh-name">對抗穩健性</span><dd>面對刻意設計的攻擊，仍然照原本的目的做事的能力；原文說這是機器學習長期的難題。</dd></div>
+      <div class="term"><dt>Automated <span style="white-space:nowrap">red-teaming</span></dt><span class="zh-name">自動化紅隊</span><dd>用自動化的方式做出新的注入攻擊；原文把它列在安全訓練底下。</dd></div>
+      <div class="term"><dt><span style="white-space:nowrap">Red-teaming</span></dt><span class="zh-name">紅隊演練</span><dd>由團隊模擬攻擊者來找弱點；原文說專門針對注入的時數以千計。</dd></div>
+      <div class="term"><dt>Monitor</dt><span class="zh-name">監控器</span><dd>模型之外、自動化的 AI 檢查，認出並擋下注入攻擊；發現新攻擊時可以很快更新。</dd></div>
+      <div class="term"><dt>Bug bounty</dt><span class="zh-name">漏洞賞金</span><dd>付獎金給示範真實攻擊路徑的善意研究者，鼓勵他們盡快回報。</dd></div>
+      <div class="term"><dt>Sandboxing</dt><span class="zh-name">沙箱</span><dd>讓程式在隔開的環境裡跑，防止有害的變更；原文的例子是 Canvas 與 Codex。</dd></div>
+      <div class="term"><dt>Link approval</dt><span class="zh-name">連結核准</span><dd>ChatGPT 開啟某些連結前先請你核准，特別是要求不被收錄的網站。</dd></div>
+      <div class="term"><dt><span style="white-space:nowrap">Logged-out</span> mode</dt><span class="zh-name">登出模式</span><dd>ChatGPT Atlas 裡，agent 不登入任何網站就開始任務的模式。</dd></div>
+      <div class="term"><dt>Watch Mode</dt><span class="zh-name">監看模式</span><dd>agent 在敏感網站上操作時，要你留在分頁上看著；一離開，agent 就暫停。</dd></div>
+      <div class="term"><dt>Confirmation</dt><span class="zh-name">確認</span><dd>agent 在購買、寄信這類有後果的動作前，停下來請你同意。</dd></div>
+      <div class="term"><dt>Least privilege</dt><span class="zh-name">最小權限</span><dd>只給完成任務需要的存取；原文沒有用這個詞，第 5 章的第一個做法就是它。</dd></div>
+    </dl>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>資料來源：OpenAI，〈Understanding prompt injections: a frontier security challenge〉，分類 Security，頁面沒有個人署名，2025 年 11 月 7 日。<br><a href="https://openai.com/index/prompt-injections/">openai.com/index/prompt-injections/</a></p>
+    <p class="credit">整理於 2026-09-29</p>
+    <p class="disclaimer">本頁為學習用的重述與整理，不是原文逐句翻譯。觀點與著作權屬於原作者。程式片段為教學用精簡版，實際用法請以原文與官方文件為準。</p>
+  </div>
+</footer>
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="圖卡大圖"><button type="button" class="close">關閉（Esc）</button><div class="frame"></div></div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fitFrames() {
+    var frames = document.querySelectorAll('.cardband .frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  var KEY = 'rearranged-article-mode';
+  function setMode(m, save) {
+    document.body.classList.toggle('mode-cards', m === 'cards');
+    var btns = document.querySelectorAll('.modebar button[data-mode]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-mode') === m ? 'true' : 'false');
+    }
+    if (save) { try { localStorage.setItem(KEY, m); } catch (e) {} }
+    fitFrames();
+  }
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  setMode(saved === 'cards' ? 'cards' : 'full', false);
+
+  var box = document.getElementById('lightbox');
+  var boxFrame = box.querySelector('.frame');
+  function fitLightbox() {
+    if (!box.classList.contains('open')) return;
+    var root = boxFrame.firstElementChild;
+    if (!root) return;
+    var s = Math.min(1, (window.innerWidth - 48) / W, (window.innerHeight - 48) / H);
+    root.style.transform = 'scale(' + s + ')';
+    boxFrame.style.width = Math.round(W * s) + 'px';
+    boxFrame.style.height = Math.round(H * s) + 'px';
+  }
+  function openLightbox(num) {
+    var bandEl = document.getElementById('card-' + num);
+    if (!bandEl) return;
+    var root = bandEl.querySelector('.frame > div');
+    boxFrame.innerHTML = '';
+    var clone = root.cloneNode(true);
+    clone.style.transform = '';
+    boxFrame.appendChild(clone);
+    box.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    fitLightbox();
+  }
+  function closeLightbox() {
+    box.classList.remove('open');
+    boxFrame.innerHTML = '';
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var b = t.closest('.modebar button[data-mode]');
+    if (b) { setMode(b.getAttribute('data-mode'), true); return; }
+    var z = t.closest('.cardlabel .zoom');
+    if (z) { openLightbox(z.getAttribute('data-card')); return; }
+    if (t.closest('.lightbox') && !t.closest('.lightbox .frame')) { closeLightbox(); }
+  });
+  document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') closeLightbox(); });
+  window.addEventListener('resize', function () { fitFrames(); fitLightbox(); });
+  window.addEventListener('load', fitFrames);
+  fitFrames();
+})();
+</script>
+</body>
+</html>

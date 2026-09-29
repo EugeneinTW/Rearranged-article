@@ -1,6 +1,42 @@
 window.ARTICLES = {
   "articles": [
     {
+      "slug": "prompt-injection-security",
+      "path": "articles/prompt-injection-security/index.html",
+      "title": "Understanding Prompt Injections：第三方把指令藏進 AI 會讀的內容",
+      "summary": "OpenAI 2025 年 11 月的資安說明文章：AI 會上網、讀你的信、替你動手之後，第三方可以把指令藏在網頁、文件或郵件裡，騙它做你沒要求的事。從攻擊長什麼樣子、表格裡的兩個情境，到 OpenAI 說的七層防禦與使用者能做的四件事，每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "OpenAI · Security",
+        "url": "https://openai.com/index/prompt-injections/",
+        "date": "2025-11-07"
+      },
+      "date": "2026-09-29",
+      "tags": [
+        "prompt-injection",
+        "ai-security",
+        "agent-safety",
+        "openai",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 8,
+        "kind": "選讀",
+        "section": "Safety",
+        "lecture": "Agent Safety & Guardrails",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/prompt-injection-security/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "validating-llm-evaluators",
       "path": "articles/validating-llm-evaluators/index.html",
       "title": "誰來驗證評估器：EvalGen 用少量人工評分挑出 LLM 評估器，並發現評估標準會隨評分漂移",
