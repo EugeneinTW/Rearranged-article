@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SWE-bench（Jimenez et al. 2023） · 圖解卡</title>
+<meta name="description" content="Princeton 團隊的 SWE-bench 從 12 個熱門 Python repo 的 PR 與 issue 篩出 2,294 題：模型拿到 issue 與整個 codebase，要寫出一個 patch，再用 PR 附的測試判斷有沒有修好，至少要讓一個原本失敗的測試通過，其他測試也不能壞。作者用 BM25 與 oracle 兩種方式挑檔案餵給模型，也微調了 CodeLlama 成 SWE-Llama；寫作當時最好的模型在 BM25 設定下也只解出 3.79%，給的程式越多分數越低，模型寫的 patch 也比人寫的短、改得比較直接。這份整理逐章重述基準怎麼建、一題長什麼樣、怎麼判定、檢索設定與結果分析，每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="swe-bench, benchmarks, software-engineering-agents, code-generation, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2310.06770">
+<meta name="date" content="2026-09-29">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+:root { color-scheme: light; --bg: #F4F5F7; --line: #E5E9EE; --ink: #1C2431; --mute: #8A93A0; --orange: #C8501F; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: #C8501F; } a:hover { color: #9E3E16; }
+a:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.wrap { max-width: 1600px; margin: 0 auto; padding-block: 24px 48px; padding-inline: 16px; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; padding: 6px 4px 18px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; letter-spacing: 0.12em; color: var(--mute); }
+.head nav { display: flex; flex-wrap: wrap; gap: 6px 14px; letter-spacing: 0.04em; }
+.head nav a { color: var(--mute); text-decoration: none; font-weight: 600; }
+.head nav a:hover { color: var(--orange); }
+.page { margin-bottom: 36px; scroll-margin-top: 16px; }
+.label { display: flex; align-items: baseline; gap: 14px; padding: 0 4px 8px; font-size: 13px; color: var(--mute); }
+.label .n { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-weight: 600; font-size: 12px; letter-spacing: 0.1em; color: var(--orange); }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--line); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; }
+.foot { padding: 12px 4px 0; font-size: 12px; color: var(--mute); line-height: 1.7; }
+@media print {
+  @page { size: 1600px 900px; margin: 0; }
+  body { background: #FFFFFF; }
+  .wrap { max-width: none; padding: 0; }
+  .head, .label, .foot { display: none; }
+  .page { margin: 0; page-break-after: always; }
+  .frame { border: none; border-radius: 0; height: auto !important; }
+  .frame > div { transform: none !important; }
+}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><span>SWE-bench（Jimenez et al. 2023） · 圖解卡 · 13 張 · 連續閱讀版</span><nav class="site" aria-label="導覽"><a href="../../">首頁</a><a href="index.html">圖卡＋教材版</a></nav><nav aria-label="跳頁"><a href="#p01" title="封面">01</a><a href="#p02" title="考題是整個 repo 的 issue">02</a><a href="#p03" title="九萬多個 PR 篩到 2,294 題">03</a><a href="#p04" title="一題的組成與看不到的測試">04</a><a href="#p05" title="怎樣才算解出">05</a><a href="#p06" title="SWE-Llama 怎麼微調">06</a><a href="#p07" title="BM25 與 oracle 兩種挑檔案法">07</a><a href="#p08" title="解題率都在個位數">08</a><a href="#p09" title="檔案給得越多，分數越低">09</a><a href="#p10" title="2023 年前後的題差不多">10</a><a href="#p11" title="模型的 patch 比參考解短">11</a><a href="#p12" title="沒解出的 patch 落在哪一格">12</a><a href="#p13" title="三條原則與五個方向">13</a></nav></div>
+<section class="page" id="p01">
+  <div class="label"><span class="n">01 / 13</span><span>封面</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;"><span style="letter-spacing:0.14em">SWE-BENCH</span> &#183; 圖解卡 &#183; 16:9 &#183; 13 張</div>
+  <div style="position:absolute; left:60px; top:110px; width:860px; font-size:58px; font-weight:700; color:#1C2431; line-height:1.3; letter-spacing:0.01em;">真實的 GitHub issue，<br>語言模型解得了嗎？</div>
+  <div style="position:absolute; left:60px; top:292px; width:840px; font-size:19px; color:#6B7380; line-height:1.7;">整理自 arXiv 論文〈SWE-bench: Can Language Models Resolve Real-World GitHub Issues?〉<br>（2023-10-10，v3 2024-11-11，ICLR 2024），Carlos E. Jimenez、John Yang 等 7 人，<br>Princeton 與 University of Chicago。十二張卡講一件事：<br>從真實的 PR 與 issue 出題、用 PR 附的測試改考卷，寫作當時的模型只解得出幾個百分比。</div>
+  <div style="position:absolute; left:60px; top:486px; display:flex; align-items:center; gap:34px;">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#C8501F;"></div>
+      <div style="font-size:15px; color:#2B3340;">沒過的測試／限制</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#2E7B4F;"></div>
+      <div style="font-size:15px; color:#2B3340;">通過／有效的做法</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#1F2A3A;"></div>
+      <div style="font-size:15px; color:#2B3340;">主體／終點</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div>
+      <div style="font-size:15px; color:#2B3340;">中性節點</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; top:534px; width:840px; font-size:13px; color:#8A93A0; line-height:1.7;">整組共用同一套語意色：橘是沒過的測試、被篩掉的題目與論文的限制，綠是通過的測試與有效的做法，深藍是 SWE-bench、模型與流程的終點。數字依 arXiv v3；結果是 2023 到 2024 年寫作當時的模型與分數。</div>
+
+  <div style="position:absolute; left:960px; top:110px; width:580px; box-sizing:border-box; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 34px; display:flex; flex-direction:column;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">本組 &#183; 13 張</div>
+    <div style="margin-top:10px; display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">01</div><div style="font-size:16px; color:#1C2431;">封面</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">02</div><div style="font-size:16px; color:#1C2431;">考題是整個 repo 的 issue</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">03</div><div style="font-size:16px; color:#1C2431;">九萬多個 PR 篩到 2,294 題</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">04</div><div style="font-size:16px; color:#1C2431;">一題的組成與看不到的測試</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">05</div><div style="font-size:16px; color:#1C2431;">怎樣才算解出</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">06</div><div style="font-size:16px; color:#1C2431;">SWE-Llama 怎麼微調</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">07</div><div style="font-size:16px; color:#1C2431;">BM25 與 oracle 兩種挑檔案法</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">08</div><div style="font-size:16px; color:#1C2431;">解題率都在個位數</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">09</div><div style="font-size:16px; color:#1C2431;">檔案給得越多，分數越低</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">10</div><div style="font-size:16px; color:#1C2431;">2023 年前後的題差不多</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">11</div><div style="font-size:16px; color:#1C2431;">模型的 patch 比參考解短</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">12</div><div style="font-size:16px; color:#1C2431;">沒解出的 patch 落在哪一格</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#2E7B4F;">13</div><div style="font-size:16px; color:#1C2431;">三條原則與五個方向</div></div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">來源：arxiv.org/abs/2310.06770 —— 本組為學習用重述，數字依 arXiv v3，prompt 與設定為教學用精簡版。</div>
+</div></div>
+</section>
+<section class="page" id="p02">
+  <div class="label"><span class="n">02 / 13</span><span>考題是整個 repo 的 issue</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">考題不是一小段函式，是整個 repo 的 issue</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 1、2.3 節：HumanEval 這類程式基準多是幾行寫得完的獨立題；SWE-bench 給一個真實的 issue 和整個 codebase，改完用 repo 自己的測試判對錯</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 傳統的程式基準</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ SWE-bench</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:80px; top:200px; width:330px; height:52px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">題目：一個函式的簽名與說明</div>
+  <div style="position:absolute; left:80px; top:276px; width:330px; height:52px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">模型補完這一個函式</div>
+  <div style="position:absolute; left:80px; top:352px; width:330px; height:52px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">產出：一小段程式</div>
+  <div style="position:absolute; left:80px; top:428px; width:330px; height:52px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">驗證：這一題的單元測試</div>
+
+  <div style="position:absolute; left:430px; top:200px; width:340px; height:52px; display:flex; align-items:center; font-size:13.5px; font-weight:500; color:#C8501F; line-height:1.45;"><div>✗ 題目自成一格，<br>幾行就寫得完</div></div>
+  <div style="position:absolute; left:430px; top:276px; width:340px; height:52px; display:flex; align-items:center; font-size:13.5px; font-weight:500; color:#C8501F; line-height:1.45;"><div>✗ 範圍事先框好：<br>一個函式、類別，或是填空</div></div>
+  <div style="position:absolute; left:430px; top:352px; width:340px; height:52px; display:flex; align-items:center; font-size:13.5px; font-weight:500; color:#C8501F; line-height:1.45;"><div>✗ 輸入與輸出都很短</div></div>
+  <div style="position:absolute; left:430px; top:428px; width:340px; height:52px; display:flex; align-items:center; font-size:13.5px; color:#6B7380; line-height:1.45;"><div>結果容易驗證，<br>但考不出真實的軟體工程</div></div>
+  <div style="position:absolute; left:60px; top:500px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">第 1 節：HumanEval 這類既有的程式基準，多半是自成一格、幾行就寫得完的題目。<br>第 2.3 節：傳統基準的輸入輸出都短，題目常是為了基準刻意造的。</div>
+
+  <div style="position:absolute; left:860px; top:200px; width:330px; height:52px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">題目：真實的 issue＋整個 codebase</div>
+  <div style="position:absolute; left:860px; top:276px; width:330px; height:52px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">模型寫出一個 patch</div>
+  <div style="position:absolute; left:860px; top:352px; width:330px; height:52px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">產出：跨檔案的修改</div>
+  <div style="position:absolute; left:860px; top:428px; width:330px; height:52px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">驗證：那個 PR 附的測試</div>
+
+  <div style="position:absolute; left:1210px; top:200px; width:340px; height:52px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>issue 平均 195 字；<br>codebase 平均 3,010 個檔案</div></div>
+  <div style="position:absolute; left:1210px; top:276px; width:340px; height:52px; display:flex; align-items:center; font-size:13.5px; font-weight:500; color:#2E7B4F; line-height:1.45;"><div>✓ 要在一大片 context 裡，<br>自己找出該改的那幾行</div></div>
+  <div style="position:absolute; left:1210px; top:352px; width:340px; height:52px; display:flex; align-items:center; font-size:13.5px; color:#2B3340; line-height:1.45;"><div>參考解平均改 1.7 個檔案、<br>3.0 個函式、32.8 行</div></div>
+  <div style="position:absolute; left:1210px; top:428px; width:340px; height:52px; display:flex; align-items:center; font-size:13.5px; font-weight:500; color:#2E7B4F; line-height:1.45;"><div>✓ 至少一個測試從失敗變通過，<br>其他測試也不能壞</div></div>
+  <div style="position:absolute; left:840px; top:500px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">圖 1 的例子：scikit-learn 的 issue 回報梯度提升樹在 warm start 時有資料洩漏；<br>五個測試裡，三個在 PR 之前失敗、之後通過，兩個前後都通過。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#C8501F;">一小段程式，考不出工程能力</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">HumanEval 這類題目多半幾行就寫完；<br>傳統基準的輸入輸出都很短，有些題目是為了基準刻意造出來的。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者也說既有的基準正在飽和，量不出最新模型的邊界。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#2E7B4F;">一個 issue，考的是整個 repo</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">要在上千個檔案裡找到該改的幾行、跨檔修改，<br>再用 repo 自己的測試判；40% 的題有兩個以上 F2P 測試。</div>
+    <div style="font-size:13px; color:#8A93A0;">表 1：非測試檔平均 438K 行；中位數另有 51 個測試守住原本的功能。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左欄是整理者依第 1、2.3 節對既有基準的描述畫的，右欄依圖 1 與表 1；論文說 HumanEval 這類題目「多半」幾行寫得完，不是全部。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M245 252V274" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M245 328V350" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M245 404V426" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1025 252V274" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1025 328V350" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1025 404V426" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p03">
+  <div class="label"><span class="n">03 / 13</span><span>九萬多個 PR 篩到 2,294 題</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">九萬多個 PR，三道篩選後剩 2,294 題</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2.1 節、附錄 A.1、A.3 與表 10：從 12 個熱門 Python repo 爬 PR，先看屬性、再實際安裝跑測試；每一格的大數字是這一步之後還剩多少</div>
+
+  <div style="position:absolute; left:636px; top:130px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">閘：已合併、連到 issue、改了測試</div>
+  <div style="position:absolute; left:924px; top:130px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">閘：至少一個測試失敗→通過</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:120px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">Step 1　挑 repo</div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#1C2431; line-height:1.2;">12</div>
+    <div style="margin-top:4px; font-size:12.5px; color:#6B7380;">個熱門的 Python repo</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:120px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">Step 2　爬 PR</div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#1C2431; line-height:1.2;">93,139</div>
+    <div style="margin-top:4px; font-size:12.5px; color:#6B7380;">個 PR（正文寫約 90,000）</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:120px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">Step 3　屬性篩選</div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#2E7B4F; line-height:1.2;">11,407</div>
+    <div style="margin-top:4px; font-size:12.5px; color:#6B7380;">個候選，轉成一題的格式</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:120px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">Step 4　執行篩選</div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#2E7B4F; line-height:1.2;">2,294</div>
+    <div style="margin-top:4px; font-size:12.5px; color:#6B7380;">題，這就是 SWE-bench</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:120px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#FFFFFF;">Step 5　再抽出 Lite</div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#FFFFFF; line-height:1.2;">300</div>
+    <div style="margin-top:4px; font-size:12.5px; color:rgba(255,255,255,0.75);">題，較自足的 bug 修復</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:310px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">同一套流程</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">另做 225 題的開發集：另外 6 個 repo，只收 2019 年 1 月 1 日之後建立的題目。Lite 的完整篩選條件，v3 的第 2.4 節與附錄 A.7 都沒有寫出來。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:420px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:444px; font-size:20px; font-weight:700; color:#1C2431;">兩道閘，和各 repo 之間很大的落差</div>
+
+  <div style="position:absolute; left:60px; top:486px; width:470px; height:236px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">屬性閘：連到 issue、附了測試</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">PR 要已合併，說明或 commit 訊息<br>寫了「fixes #24」這類字眼；<br>還要改到路徑含 test 的檔案。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">93,139 → 11,407，約留下八分之一（整理者算的）。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:486px; width:470px; height:236px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">執行閘：至少一個測試翻轉</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">依 release 版本建 conda 環境，套上測試，<br>在參考解前後各跑一次；至少一個測試<br>從失敗變通過，安裝或執行出錯就刪。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">也刪掉測試用到參考解才新增名字的題目。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:486px; width:470px; height:236px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">落差很大：django 850，flask 11</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">django 從 16,914 個 PR 留下 850 題，<br>佔全部的 37%；flask 的 2,434 個 PR<br>只剩 11 題，requests 只有 84 個候選。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">37% 是整理者算的；逐 repo 的數字見表 10。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：第 2 到 4 格取自表 10 的合計，第 2.1 節寫約 90,000 個 PR；附錄 A.3 說執行那一步通常刷掉一半候選。五格的切法是整理者依第 2.1、2.4 節畫的。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 212L343 220L331 228Z" fill="#9AA3AE"></path>
+    <path d="M619 212L631 220L619 228Z" fill="#9AA3AE"></path>
+    <path d="M907 212L919 220L907 228Z" fill="#9AA3AE"></path>
+    <path d="M1195 212L1207 220L1195 228Z" fill="#9AA3AE"></path>
+    <path d="M1345 282L1345 308" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p04">
+  <div class="label"><span class="n">04 / 13</span><span>一題的組成與看不到的測試</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">模型看得到 issue 和 repo，看不到測試</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">附錄 A.1、A.2 與表 9：一個合併的 PR 拆成 codebase C、問題描述 P、測試 T、參考解 δ 四個部分；模型只拿到前兩個，輸出一個 patch</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:440px; height:370px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:10px;"></div>
+  <div style="position:absolute; left:80px; top:164px; font-size:12px; color:#8A93A0;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; letter-spacing:0.12em">ONE MERGED PR</span> &#183; 一題</div>
+  <div style="position:absolute; left:80px; top:192px; width:400px; height:58px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; padding:0px 14px; display:flex; align-items:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">問題描述 P</div><div style="font-size:12.5px; color:#6B7380;">相關 issue 的標題、內文，與 PR 之前的留言</div></div></div>
+  <div style="position:absolute; left:80px; top:260px; width:400px; height:58px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; padding:0px 14px; display:flex; align-items:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">codebase C</div><div style="font-size:12.5px; color:#6B7380;">repo 加上 base commit，從鏡像 checkout</div></div></div>
+  <div style="position:absolute; left:80px; top:328px; width:400px; height:58px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:6px; padding:0px 14px; display:flex; align-items:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">測試 T · <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px;">test_patch</span></div><div style="font-size:12.5px; color:#6B7380;">PR 改到測試檔的部分，評估時才套上</div></div></div>
+  <div style="position:absolute; left:80px; top:396px; width:400px; height:58px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:6px; padding:0px 14px; display:flex; align-items:center;"><div><div style="font-size:15px; font-weight:700; color:#1C2431;">參考解 δ · <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px;">patch</span></div><div style="font-size:12.5px; color:#6B7380;">PR 其餘的改動，也就是人寫的解法</div></div></div>
+  <div style="position:absolute; left:80px; top:472px; width:400px; font-size:13px; color:#6B7380; line-height:1.5;">綠色兩塊交給模型，灰色虛框兩塊評估時才用</div>
+
+  <div style="position:absolute; left:505px; top:248px; width:66px; text-align:center; font-size:12.5px; color:#8A93A0;">展開</div>
+
+  <div style="position:absolute; left:580px; top:150px; width:500px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:17px; font-weight:700; color:#FFFFFF;">表 9 的 14 個欄位，分成五組</div>
+  <div style="position:absolute; left:580px; top:198px; width:500px; height:322px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:14px 22px; display:flex; flex-direction:column; justify-content:center; gap:10px;">
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">C</div>
+      <div style="display:flex; flex-direction:column; gap:2px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:15.5px; font-weight:700; color:#1C2431;">codebase</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">4 FIELDS</div></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380; line-height:1.5;">repo、base_commit、version、env_install_commit</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">P</div>
+      <div style="display:flex; flex-direction:column; gap:2px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:15.5px; font-weight:700; color:#1C2431;">問題描述</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">4 FIELDS</div></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380; line-height:1.5;">problem_statement、issue_numbers、created_at、hints_text</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">T</div>
+      <div style="display:flex; flex-direction:column; gap:2px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:15.5px; font-weight:700; color:#1C2431;">測試</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">3 FIELDS</div></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380; line-height:1.5;">test_patch、FAIL_TO_PASS、PASS_TO_PASS</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">δ</div>
+      <div style="display:flex; flex-direction:column; gap:2px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:15.5px; font-weight:700; color:#1C2431;">參考解</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">1 FIELD</div></div><div style="font-size:12.5px; color:#6B7380; line-height:1.5;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px;">patch</span>：PR 裡測試檔以外的改動</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#9AA3AE; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">#</div>
+      <div style="display:flex; flex-direction:column; gap:2px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:15.5px; font-weight:700; color:#1C2431;">編號</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">2 FIELDS</div></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380; line-height:1.5;">instance_id、pull_number</div></div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:1140px; top:150px; font-size:12px; color:#8A93A0;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; letter-spacing:0.12em">WRITERS</span> &#183; 誰填這些欄位</div>
+  <div style="position:absolute; left:1140px; top:178px; width:400px; height:76px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#FFFFFF;">爬 issue</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">找 fixes #N，收 issue 的標題、內文與 PR 前的留言</div></div>
+  <div style="position:absolute; left:1140px; top:264px; width:400px; height:76px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">鏡像 repo</div><div style="font-size:12.5px; color:#6B7380;">保留 commit 歷史，checkout base commit</div></div>
+  <div style="position:absolute; left:1140px; top:350px; width:400px; height:76px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">拆 PR 的 diff</div><div style="font-size:12.5px; color:#6B7380;">路徑含 test 的區塊成為 T，其餘成為 δ</div></div>
+  <div style="position:absolute; left:1140px; top:436px; width:400px; height:76px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">驗證紀錄</div><div style="font-size:12.5px; color:#6B7380;">參考解前後各跑一次測試，算出 F2P 與 P2P</div></div>
+
+  <div style="position:absolute; left:60px; top:570px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">模型只拿到 P 與 C</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">issue 只收 PR 第一個 commit 之前的留言，<br>免得洩漏解法；模型要輸出一個 patch。</div>
+    <div style="font-size:13px; color:#8A93A0;">PR 的留言另存成 hints_text，論文的實驗沒有用。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:570px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">表 1：平均很大</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">issue 195.1 字；codebase 3,010 個檔、438K 行；<br>參考解改 1.7 個檔、32.8 行；測試 120.8 個。</div>
+    <div style="font-size:13px; color:#8A93A0;">最大的一題，參考解改了 5,888 行。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:570px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">中位數小得多</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">issue 140 字；codebase 將近 1,900 個檔；<br>參考解通常改一個函式、約 15 行；1 個 F2P。</div>
+    <div style="font-size:13px; color:#8A93A0;">附錄 A.5 依圖 9 的累積分布讀出；P2P 中位數 51 個。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：五組的分法與右側四個寫入者，是整理者依表 9 與附錄 A.1、A.2 對的；論文把一題寫成 C、P、T、δ 四個部分，以圖 7 的 sympy 題為例。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+    </defs>
+    <path d="M482 271H576" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1138 216H1084" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c04)"></path>
+    <path d="M1138 302H1084" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1138 388H1084" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M1138 474H1084" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p05">
+  <div class="label"><span class="n">05 / 13</span><span>怎樣才算解出</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">套得上、跑得動、測試全過，才算解出</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2.2 節與附錄 A.4：每一題都走同一條流程，任何一關沒過，這一題就不算解出；指標是解出的題數佔全部題數的百分比</div>
+
+  <div style="position:absolute; left:60px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:17px; font-weight:700; color:#FFFFFF;">模型的 patch</div><div style="margin-top:2px; font-size:12.5px; color:rgba(255,255,255,0.75);">codebase 與測試已備好</div></div></div>
+  <div style="position:absolute; left:360px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#1C2431; line-height:1.3;"><div>patch<br>套得上？</div></div>
+  <div style="position:absolute; left:660px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#1C2431; line-height:1.3;"><div>測試指令<br>跑得完？</div></div>
+  <div style="position:absolute; left:960px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#1C2431; line-height:1.3;"><div>F2P 與 P2P<br>全部通過？</div></div>
+  <div style="position:absolute; left:1260px; top:190px; width:230px; height:64px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#FFFFFF; line-height:1.3;"><div>解出<br>計入解題率</div></div>
+
+  <div style="position:absolute; left:610px; top:196px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#6B7380;">是</div>
+  <div style="position:absolute; left:910px; top:196px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#6B7380;">是</div>
+  <div style="position:absolute; left:1210px; top:196px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#2E7B4F;">是</div>
+  <div style="position:absolute; left:486px; top:280px; font-size:13px; font-weight:700; color:#C8501F;">否</div>
+  <div style="position:absolute; left:786px; top:280px; font-size:13px; font-weight:700; color:#C8501F;">否</div>
+  <div style="position:absolute; left:1086px; top:280px; font-size:13px; font-weight:700; color:#C8501F;">否</div>
+  <div style="position:absolute; left:246px; top:296px; width:76px; text-align:right; font-size:12.5px; font-weight:700; color:#C8501F; line-height:1.4;">修好後<br>再套一次</div>
+
+  <div style="position:absolute; left:360px; top:330px; width:230px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:15px; font-weight:700; color:#C8501F;">自動修一次</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">刪掉多餘的 context 行、<br>重算 header；還不行就 0 分</div>
+  </div>
+  <div style="position:absolute; left:660px; top:330px; width:230px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:15px; font-weight:700; color:#C8501F;">直接 0 分</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">測試的指令出錯，<br>這一題不算解出</div>
+  </div>
+  <div style="position:absolute; left:960px; top:330px; width:230px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:15px; font-weight:700; color:#C8501F;">沒解出</div>
+    <div style="font-size:13px; color:#6B7380; line-height:1.5;">有測試沒過或找不到；<br>第 12 卡再把它們分五種</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:480px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:506px; font-size:20px; font-weight:700; color:#1C2431;">三個讓判定穩定的設計</div>
+  <div style="position:absolute; left:60px; top:550px; width:470px; height:230px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">環境照 release 版本建</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">每一題回到自己的 base commit，<br>啟動所屬版本的 conda 環境。<br>每題各建太費工，整個 repo 一個又裝不了舊版。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">附錄 A.3：在安裝成功與人工之間取平衡。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:550px; width:470px; height:230px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">標準答案先存好</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">建集時就把測試分成 F2F、F2P、<br>P2F、P2P 四組；評估只看 F2P 與 P2P<br>是否全部通過，找不到的算失敗。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">評估時不必重跑參考解（附錄 A.3、A.4）。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:550px; width:470px; height:230px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">修 patch 很常見</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">表 14：Claude 2 在 BM25 13k 下，<br>套得上的 988 個裡有 302 個修過（30.57%）；<br><span style="white-space:nowrap">GPT-4</span> 在 BM25 27k 是 69.41%。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">SWE-Llama 要修的比例較低，作者歸功於微調。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：流程依附錄 A.4 的七步畫，原文的第 1 到 4 步（checkout、啟動環境、安裝、套上測試）建集時驗過，併成起點；F2P 證明 issue 解決了，P2P 證明原本的功能沒壞。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M290 222L358 222" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M590 222L658 222" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M890 222L958 222" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M1190 222L1258 222" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+    <path d="M475 254L475 328" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c05)"></path>
+    <path d="M775 254L775 328" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c05)"></path>
+    <path d="M1075 254L1075 328" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c05)"></path>
+    <path d="M360 380H334V232" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c05)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p06">
+  <div class="label"><span class="n">06 / 13</span><span>SWE-Llama 怎麼微調</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">用另外 37 個 repo 的 PR，教模型寫 patch</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3 節與附錄 B.1：現成的 CodeLlama 跟不上「產生 repo 範圍修改」的詳細指示，常輸出佔位字或無關的程式，所以先做監督式微調</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　另找 repo</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">37 個熱門的 Python 套件，<br>和評估的 12 個不重疊</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　收 issue 與 PR</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">19,000 組，不要求改測試；<br>就是 <span style="white-space:nowrap">SWE-bench-train</span></div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　刪掉太長的</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">超過 30,000 token 的不要</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">剩 10,000 筆</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　組成訓練樣本</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">輸入：指示＋issue＋oracle 檔案<br>目標：參考解的 patch</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　LoRA 微調</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;"><span style="white-space:nowrap">CodeLlama-Python</span> 7b／13b<br>成為 <span style="white-space:nowrap">SWE-Llama</span> 7b／13b</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:300px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">LoRA 設定</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">只調每個注意力子層的 query、key、value、output 投影；r＝16、α＝16、dropout 0.05；學習率 6e-4，每步 32 個序列，最多 4 個 epoch；每 50 步存檔，用保留的 100 筆驗證損失挑最好的。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:420px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:444px; font-size:20px; font-weight:700; color:#1C2431;">微調之後的三個結果</div>
+
+  <div style="position:absolute; left:60px; top:486px; width:470px; height:240px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">看 oracle 學，考 BM25 就掉</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">訓練時 context 裡的檔案都要改，<br>模型學會把每個檔案都改；<br>BM25 挑來的檔案卻大多不該改。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">13b：oracle 3.97%，BM25 只有 0.70%（第 5 節）。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:486px; width:470px; height:240px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">patch 的格式最穩</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">表 5 的套用率，SWE-Llama 最高：<br>13b 53.62%、7b 51.74%。<br>表 14 也顯示它要自動修補的比例較低。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者說微調有助於產生格式正確的 patch。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:486px; width:470px; height:240px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">訓練成本</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">7b：4 張 A100、20 小時；<br>13b：8 張 A100、47 小時；<br>長 context 用 <span style="white-space:nowrap">DeepSpeed Ulysses</span> 與 <span style="white-space:nowrap">Flash Attention</span>。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者說 13b 在某些設定下能和 Claude 2 相比。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：Step 4 的「相關程式檔」是 oracle 檔案，這是第 5 節補充的，第 3 節只寫相關的程式檔；oracle 下 13b 解出 3.97%，Claude 2 是 4.80%（表 18）。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M1345 262L1345 296" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p07">
+  <div class="label"><span class="n">07 / 13</span><span>BM25 與 oracle 兩種挑檔案法</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">codebase 塞不進 context，就先挑檔案</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4.1 節與附錄 D.1：issue 平均 195 字，codebase 平均 438K 行；主結果用 BM25，oracle 只供分析，兩邊並列只看差別</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">SPARSE RETRIEVAL</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">BM25：用 issue 去搜檔案</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">ORACLE</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">oracle：直接給參考解改到的檔案</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:180px; top:222px; width:440px; height:46px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">查詢：issue 的文字</div>
+  <div style="position:absolute; left:180px; top:290px; width:440px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">文件：每個檔案，內容前面加上它的路徑</div>
+  <div style="position:absolute; left:180px; top:358px; width:440px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">照分數排序，塞到 13k／27k／50k 為止</div>
+  <div style="position:absolute; left:180px; top:426px; width:440px; height:46px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#4B5866;">放進 prompt 的檔案</div>
+  <div style="position:absolute; left:60px; top:492px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">作者說 dense 檢索不適合：key 與 query 都很長，又是用自然語言找程式。<br>三個上限都跑，每個模型報最好的一個；結果都是最短的 13k 最好。</div>
+
+  <div style="position:absolute; left:960px; top:222px; width:440px; height:46px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">參考解的 patch</div>
+  <div style="position:absolute; left:960px; top:290px; width:440px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">取出它改到的檔案（不含測試檔）</div>
+  <div style="position:absolute; left:960px; top:358px; width:440px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">把這幾個檔案整份放進去</div>
+  <div style="position:absolute; left:960px; top:426px; width:440px; height:46px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#4B5866;">放進 prompt 的檔案</div>
+  <div style="position:absolute; left:840px; top:492px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">作者說它比較不真實：工程師事先不一定知道要改哪些檔案；<br>也不一定完整：只給被改的檔案，未必看得懂其他部分怎麼互動。只供分析。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">BM25 找得準嗎：表 3</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">27k 時，約 40% 的題取到全部 oracle 檔案（All 39.83），<br>將近一半一個都沒取到（Any 51.27）；上限越寬 recall 越高。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">Avg 一列：13k 29.58、27k 44.41、50k 51.06。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">放得下嗎：表 4</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;"><span style="white-space:nowrap">ChatGPT-3.5</span> 只有 16,385 token，oracle 的輸入放得下 58.1% 的題；<br><span style="white-space:nowrap">GPT-4</span> 32,768 放得下 84.1%，Claude 2 100,000 放得下 96.4%。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">token 的算法各家不同：Llama 切出來的平均比 <span style="white-space:nowrap">GPT-4</span> 多 42%。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩邊最後都組成同一種 prompt：指示、issue、檔案與 README、patch 範例（附錄 D.3）；每題只生成一個 patch，用 greedy decoding（附錄 D.2）。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M400 268V288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M400 336V356" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M400 404V424" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M1180 268V288" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M1180 336V356" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M1180 404V424" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p08">
+  <div class="label"><span class="n">08 / 13</span><span>解題率都在個位數</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">解題率都在個位數，BM25 最高 3.79%</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 5 與附錄表 18，全部是 % Resolved：上兩列用 BM25 檢索（完整的 SWE-bench、300 題的 Lite），第三列直接給參考解改到的檔案（oracle）</div>
+
+  <div style="position:absolute; left:60px; top:136px; display:flex; gap:22px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:7px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>Claude 3 Opus</div>
+    <div style="display:flex; align-items:center; gap:7px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>Claude 2</div>
+    <div style="display:flex; align-items:center; gap:7px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#6B7380;"></div><span style="white-space:nowrap">GPT-4-turbo／GPT-4</span></div>
+    <div style="display:flex; align-items:center; gap:7px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #6B7380; box-sizing:border-box;"></div><span style="white-space:nowrap">ChatGPT-3.5</span></div>
+    <div style="display:flex; align-items:center; gap:7px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div><span style="white-space:nowrap">SWE-Llama 13b</span></div>
+    <div style="display:flex; align-items:center; gap:7px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #2E7B4F; box-sizing:border-box;"></div><span style="white-space:nowrap">SWE-Llama 7b</span></div>
+    <div style="color:#8A93A0;">實心與空心，區分同一家族的兩個模型</div>
+  </div>
+
+  <div style="position:absolute; left:444px; top:172px; width:1px; height:300px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:708px; top:172px; width:1px; height:300px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:972px; top:172px; width:1px; height:300px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:1236px; top:172px; width:1px; height:300px; background-color:#EEF1F5;"></div>
+
+  <div style="position:absolute; left:180px; top:188px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:218px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:248px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:290px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:320px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:350px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:392px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:422px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:452px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+
+  <div style="position:absolute; left:60px; top:200px; width:112px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">SWE-bench</div><div style="font-size:12px; color:#8A93A0;">BM25 檢索 · 表 5</div></div>
+  <div style="position:absolute; left:60px; top:302px; width:112px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">Lite</div><div style="font-size:12px; color:#8A93A0;">BM25 檢索 · 表 5</div></div>
+  <div style="position:absolute; left:60px; top:404px; width:112px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">SWE-bench</div><div style="font-size:12px; color:#8A93A0;">給對檔案 · 表 18</div></div>
+
+  <div style="position:absolute; left:217px; top:240px; width:16px; height:16px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #6B7380; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:238px; top:239px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; color:#2B3340;">ChatGPT-3.5 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.17</span></div>
+  <div style="position:absolute; left:357px; top:210px; width:16px; height:16px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #2E7B4F; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:378px; top:209px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; color:#2B3340;">SWE-Llama 7b <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.70</span></div>
+  <div style="position:absolute; left:357px; top:180px; width:16px; height:16px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:378px; top:179px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; color:#2B3340;">SWE-Llama 13b <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.70</span></div>
+  <div style="position:absolute; left:518px; top:240px; width:16px; height:16px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:539px; top:239px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; color:#2B3340;">GPT-4-turbo <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">1.31</span></div>
+  <div style="position:absolute; left:692px; top:210px; width:16px; height:16px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:713px; top:209px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; color:#2B3340;">Claude 2 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">1.97</span></div>
+  <div style="position:absolute; left:1173px; top:240px; width:16px; height:16px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1194px; top:239px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; font-weight:700; color:#1C2431;">Claude 3 Opus <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">3.79</span></div>
+
+  <div style="position:absolute; left:259px; top:342px; width:16px; height:16px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #6B7380; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:280px; top:341px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; color:#2B3340;">ChatGPT-3.5 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.33</span></div>
+  <div style="position:absolute; left:436px; top:312px; width:16px; height:16px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:457px; top:311px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; color:#2B3340;">SWE-Llama 13b <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">1.00</span></div>
+  <div style="position:absolute; left:523px; top:282px; width:16px; height:16px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #2E7B4F; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:544px; top:281px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; color:#2B3340;">SWE-Llama 7b <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">1.33</span></div>
+  <div style="position:absolute; left:877px; top:342px; width:16px; height:16px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:898px; top:341px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; color:#2B3340;">GPT-4-turbo <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">2.67</span></div>
+  <div style="position:absolute; left:964px; top:312px; width:16px; height:16px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:985px; top:311px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; color:#2B3340;">Claude 2 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">3.00</span></div>
+  <div style="position:absolute; left:1315px; top:282px; width:16px; height:16px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1336px; top:281px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; font-weight:700; color:#1C2431;">Claude 3 Opus <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">4.33</span></div>
+
+  <div style="position:absolute; left:309px; top:444px; width:16px; height:16px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #6B7380; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:330px; top:443px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; color:#2B3340;">ChatGPT-3.5 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.52</span></div>
+  <div style="position:absolute; left:631px; top:414px; width:16px; height:16px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:652px; top:413px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; color:#2B3340;">GPT-4＊ <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">1.74</span></div>
+  <div style="position:absolute; left:967px; top:444px; width:16px; height:16px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #2E7B4F; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:988px; top:443px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; color:#2B3340;">SWE-Llama 7b <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">3.01</span></div>
+  <div style="position:absolute; left:1220px; top:414px; width:16px; height:16px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1241px; top:413px; white-space:nowrap; background-color:#FFFFFF; font-size:13px; color:#2B3340;">SWE-Llama 13b <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">3.97</span></div>
+  <div style="position:absolute; left:1439px; top:384px; width:16px; height:16px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:1318px; top:383px; width:114px; text-align:right; white-space:nowrap; background-color:#FFFFFF; font-size:13px; font-weight:700; color:#1C2431;">Claude 2 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">4.80</span></div>
+
+  <div style="position:absolute; left:180px; top:482px; width:1320px; height:36px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:491px; width:20px; text-align:left; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0</div>
+  <div style="position:absolute; left:434px; top:491px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">1</div>
+  <div style="position:absolute; left:698px; top:491px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">2</div>
+  <div style="position:absolute; left:962px; top:491px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">3</div>
+  <div style="position:absolute; left:1226px; top:491px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">4</div>
+  <div style="position:absolute; left:1474px; top:491px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">5</div>
+  <div style="position:absolute; left:1290px; top:522px; width:210px; text-align:right; font-size:12px; color:#8A93A0;">解題率 %</div>
+  <div style="position:absolute; left:60px; top:540px; width:1220px; font-size:13px; color:#8A93A0; line-height:1.6;">只標表上的數字。Claude 3 Opus 與 GPT-4-turbo 是 v3 才加的，oracle 列（表 18）沒有這兩個模型；oracle 列的 GPT-4＊ 只在 25% 子集上跑。<br>整理者的讀法：換成 Lite 或直接給對檔案，同一個模型的分數都高一點，但這三列裡沒有一個超過 5%。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#1C2431;">摘要寫的是 1.96%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">摘要與正文說最好的是 Claude 2 的 1.96%，<br>那是 v1、v2 的結果。<br>v3 的表 5 加了 Claude 3 Opus，最高分變成 3.79%。</div>
+    <div style="font-size:13px; color:#8A93A0;">v3 表 5 的 Claude 2 是 1.97%；兩邊照錄。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#2E7B4F;">套得上，不等於解得出</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;"><span style="white-space:nowrap">SWE-Llama 13b</span> 的套用率 53.62% 最高，<br>解題率卻只有 0.70%。<br>Claude 3 Opus 是套用率 46.56%、解題率 3.79%。</div>
+    <div style="font-size:13px; color:#8A93A0;">套用率只看 patch 有沒有套上 codebase，不看測試。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:190px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#C8501F;">給對檔案，也不到 5%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">oracle 下 Claude 2 解出 4.80%，<br><span style="white-space:nowrap">SWE-Llama 13b</span> 解出 3.97%；兩者重疊不多，<br>Claude 2 只解出 SWE-Llama 所解題目的 42%。</div>
+    <div style="font-size:13px; color:#8A93A0;">逐 repo：好幾個模型在 requests 最高，seaborn 都是 0。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三列用同一條量尺（0 到 5%）；點的顏色是整理者依模型家族分的，實心與空心只為了區分同一家族的兩個模型。</div>
+</div></div>
+</section>
+<section class="page" id="p09">
+  <div class="label"><span class="n">09 / 13</span><span>檔案給得越多，分數越低</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">BM25 找回更多對的檔案，分數卻下降</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 3 與表 2：同一個 BM25 上限從 13k 放寬到 27k、50k；上列是取回 oracle 檔案的 recall，下列是解題率，兩列各用自己的量尺</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="an-c09" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+      <marker id="ao-c09" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+    </defs>
+    <path d="M180 196H1500" stroke="#EEF1F5" stroke-width="1" stroke-dasharray="4 4"></path>
+    <path d="M180 240H1500" stroke="#EEF1F5" stroke-width="1" stroke-dasharray="4 4"></path>
+    <path d="M180 284H1500" stroke="#EEF1F5" stroke-width="1" stroke-dasharray="4 4"></path>
+    <path d="M180 402H1500" stroke="#EEF1F5" stroke-width="1" stroke-dasharray="4 4"></path>
+    <path d="M180 446H1500" stroke="#EEF1F5" stroke-width="1" stroke-dasharray="4 4"></path>
+    <path d="M180 490H1500" stroke="#EEF1F5" stroke-width="1" stroke-dasharray="4 4"></path>
+    <path d="M746 196H1134" stroke="#2E7B4F" stroke-width="2" marker-end="url(#an-c09)"></path>
+    <path d="M680 240H1037" stroke="#2E7B4F" stroke-width="2" marker-end="url(#an-c09)"></path>
+    <path d="M844 284H1272" stroke="#2E7B4F" stroke-width="2" marker-end="url(#an-c09)"></path>
+    <path d="M1250 402H860" stroke="#C8501F" stroke-width="2" marker-end="url(#ao-c09)"></path>
+    <path d="M557 446H189" stroke="#C8501F" stroke-width="2" marker-end="url(#ao-c09)"></path>
+    <path d="M557 490H189" stroke="#C8501F" stroke-width="2" marker-end="url(#ao-c09)"></path>
+  </svg>
+
+  <div style="position:absolute; left:60px; top:146px; font-size:15px; font-weight:700; color:#2E7B4F;">上列：BM25 取回 oracle 檔案的 recall（表 3）→ 上限越寬，找到的越全</div>
+  <div style="position:absolute; left:60px; top:188px; width:112px; font-size:13px; color:#2B3340;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">Avg</span> · 平均</div>
+  <div style="position:absolute; left:60px; top:232px; width:112px; font-size:13px; color:#2B3340;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">All</span> · 全部取到</div>
+  <div style="position:absolute; left:60px; top:276px; width:112px; font-size:13px; color:#2B3340;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">Any</span> · 取到一個</div>
+
+  <div style="position:absolute; left:731px; top:189px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1010px; top:189px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1136px; top:189px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:698px; top:170px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">13k <b>29.58</b></div>
+  <div style="position:absolute; left:977px; top:170px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">27k <b>44.41</b></div>
+  <div style="position:absolute; left:1103px; top:170px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">50k <b>51.06</b></div>
+
+  <div style="position:absolute; left:665px; top:233px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:924px; top:233px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1039px; top:233px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:632px; top:214px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">13k <b>26.09</b></div>
+  <div style="position:absolute; left:891px; top:214px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">27k <b>39.83</b></div>
+  <div style="position:absolute; left:1006px; top:214px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">50k <b>45.90</b></div>
+
+  <div style="position:absolute; left:829px; top:277px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1140px; top:277px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1274px; top:277px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:796px; top:258px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">13k <b>34.77</b></div>
+  <div style="position:absolute; left:1107px; top:258px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">27k <b>51.27</b></div>
+  <div style="position:absolute; left:1241px; top:258px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">50k <b>58.38</b></div>
+
+  <div style="position:absolute; left:180px; top:310px; width:1320px; height:28px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:315px; width:20px; text-align:left; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#FFFFFF;">0</div>
+  <div style="position:absolute; left:358px; top:315px; width:22px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#FFFFFF;">10</div>
+  <div style="position:absolute; left:546px; top:315px; width:22px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#FFFFFF;">20</div>
+  <div style="position:absolute; left:735px; top:315px; width:22px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#FFFFFF;">30</div>
+  <div style="position:absolute; left:923px; top:315px; width:22px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#FFFFFF;">40</div>
+  <div style="position:absolute; left:1112px; top:315px; width:22px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#FFFFFF;">50</div>
+  <div style="position:absolute; left:1300px; top:315px; width:22px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#FFFFFF;">60</div>
+  <div style="position:absolute; left:1466px; top:315px; width:26px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#FFFFFF;">70</div>
+  <div style="position:absolute; left:1300px; top:340px; width:200px; text-align:right; font-size:12px; color:#8A93A0;">recall %</div>
+
+  <div style="position:absolute; left:60px; top:356px; font-size:15px; font-weight:700; color:#C8501F;">下列：解題率（表 2）← 上限越寬，解出的越少</div>
+  <div style="position:absolute; left:60px; top:394px; width:112px; font-size:13px; font-weight:700; color:#2B3340;">Claude 2</div>
+  <div style="position:absolute; left:60px; top:438px; width:112px; font-size:13px; font-weight:700; color:#2B3340; white-space:nowrap;">SWE-Llama 13b</div>
+  <div style="position:absolute; left:60px; top:482px; width:112px; font-size:13px; font-weight:700; color:#2B3340; white-space:nowrap;">SWE-Llama 7b</div>
+
+  <div style="position:absolute; left:1251px; top:395px; width:14px; height:14px; border-radius:50%; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:1201px; top:395px; width:14px; height:14px; border-radius:50%; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:844px; top:395px; width:14px; height:14px; border-radius:50%; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:1272px; top:393px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">13k <b>1.96</b></div>
+  <div style="position:absolute; left:1168px; top:376px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">27k <b>1.87</b></div>
+  <div style="position:absolute; left:811px; top:376px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">50k <b>1.22</b></div>
+
+  <div style="position:absolute; left:558px; top:439px; width:14px; height:14px; border-radius:50%; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:437px; top:439px; width:14px; height:14px; border-radius:50%; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:173px; top:439px; width:14px; height:14px; border-radius:50%; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:525px; top:420px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">13k <b>0.70</b></div>
+  <div style="position:absolute; left:404px; top:420px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">27k <b>0.48</b></div>
+  <div style="position:absolute; left:192px; top:420px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">50k <b>0.00</b></div>
+
+  <div style="position:absolute; left:558px; top:483px; width:14px; height:14px; border-radius:50%; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:343px; top:483px; width:14px; height:14px; border-radius:50%; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:173px; top:483px; width:14px; height:14px; border-radius:50%; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:525px; top:464px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">13k <b>0.70</b></div>
+  <div style="position:absolute; left:310px; top:464px; width:80px; text-align:center; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">27k <b>0.31</b></div>
+  <div style="position:absolute; left:192px; top:464px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">50k <b>0.00</b></div>
+
+  <div style="position:absolute; left:180px; top:516px; width:1320px; height:28px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:521px; width:20px; text-align:left; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#FFFFFF;">0</div>
+  <div style="position:absolute; left:440px; top:521px; width:30px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#FFFFFF;">0.5</div>
+  <div style="position:absolute; left:715px; top:521px; width:30px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#FFFFFF;">1.0</div>
+  <div style="position:absolute; left:990px; top:521px; width:30px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#FFFFFF;">1.5</div>
+  <div style="position:absolute; left:1265px; top:521px; width:30px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#FFFFFF;">2.0</div>
+  <div style="position:absolute; left:1300px; top:546px; width:200px; text-align:right; font-size:12px; color:#8A93A0;">解題率 %</div>
+  <div style="position:absolute; left:60px; top:562px; width:1200px; font-size:13px; color:#8A93A0; line-height:1.6;">兩列各用自己的量尺：上列 0 到 70%，下列 0 到 2.4%，同一個水平位置在兩列代表不同的數；箭頭指向上限放寬的方向。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:196px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#C8501F;">上限放寬，解題率下降</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">Claude 2：13k 1.96%、27k 1.87%、50k 1.22%；<br>兩個 SWE-Llama 到 50k 都是 0。<br>同一組上限，recall 卻一路升高。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者：模型不擅長在程式裡找出該改的地方。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:196px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#2E7B4F;">只留改動附近，分數就升</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">oracle-collapsed 只留參考解改動的行，<br>上下各多留 15 行：<br>Claude 2 從 4.80% 到 5.93%，<span style="white-space:nowrap">GPT-4</span> 從 1.74% 到 3.40%。</div>
+    <div style="font-size:13px; color:#8A93A0;">表 18 與表 6；Claude 3 Opus 在這個設定下 9.39%，全篇最高。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:196px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#1C2431;">作者的解釋：被多餘的程式分心</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">聊天模型平常只拿一小段 context 寫一小段程式；<br>這裡卻看到大量無關的程式，<br>又對目標內容在輸入裡的位置很敏感。</div>
+    <div style="font-size:13px; color:#8A93A0;">呼應 Liu 等人 2023 年的〈Lost in the middle〉。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：正文寫 GPT-4 從 1.3% 升到 3.4%，表 18 的起點是 1.74%（v1 就是這樣）；圖 5 依總輸入長度分組也是同樣的走勢，但圖上沒有標數字。</div>
+</div></div>
+</section>
+<section class="page" id="p10">
+  <div class="label"><span class="n">10 / 13</span><span>2023 年前後的題差不多</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">2023 年前後的題，解題率差不多</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">附錄表 21 與表 7，oracle 設定：依 issue 建立的年份把題目分組，看模型是不是靠記住新版的 repo 答題；點上只標表 21 印出的數字</div>
+
+  <div style="position:absolute; left:1250px; top:124px; display:flex; gap:22px; align-items:center; font-size:13px; color:#2B3340;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:20px; height:3px; background-color:#1F2A3A;"></div>Claude 2</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:20px; height:3px; background-color:#2E7B4F;"></div><span style="white-space:nowrap">SWE-Llama 13b</span></div>
+  </div>
+
+  <div style="position:absolute; left:180px; top:150px; width:1320px; height:1px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:210px; width:1320px; height:1px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:270px; width:1320px; height:1px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:330px; width:1320px; height:1px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:124px; top:142px; width:44px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">6%</div>
+  <div style="position:absolute; left:124px; top:202px; width:44px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">5%</div>
+  <div style="position:absolute; left:124px; top:262px; width:44px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">4%</div>
+  <div style="position:absolute; left:124px; top:322px; width:44px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">3%</div>
+  <div style="position:absolute; left:60px; top:230px; width:60px; font-size:12px; color:#8A93A0; line-height:1.5;">解題率</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M274 240.6L462 183.0L650 166.8L838 201.0L1026 259.2L1214 267.0L1402 239.4" stroke="#1F2A3A" stroke-width="3"></path>
+    <path d="M274 307.8L462 295.8L650 237.0L838 272.4L1026 243.0L1214 342.0L1402 265.8" stroke="#2E7B4F" stroke-width="3"></path>
+    <circle cx="274" cy="240.6" r="6" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="2"></circle>
+    <circle cx="462" cy="183.0" r="6" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="2"></circle>
+    <circle cx="650" cy="166.8" r="6" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="2"></circle>
+    <circle cx="838" cy="201.0" r="6" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="2"></circle>
+    <circle cx="1026" cy="259.2" r="6" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="2"></circle>
+    <circle cx="1214" cy="267.0" r="6" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="2"></circle>
+    <circle cx="1402" cy="239.4" r="6" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="2"></circle>
+    <circle cx="274" cy="307.8" r="6" fill="#2E7B4F" stroke="#FFFFFF" stroke-width="2"></circle>
+    <circle cx="462" cy="295.8" r="6" fill="#2E7B4F" stroke="#FFFFFF" stroke-width="2"></circle>
+    <circle cx="650" cy="237.0" r="6" fill="#2E7B4F" stroke="#FFFFFF" stroke-width="2"></circle>
+    <circle cx="838" cy="272.4" r="6" fill="#2E7B4F" stroke="#FFFFFF" stroke-width="2"></circle>
+    <circle cx="1026" cy="243.0" r="6" fill="#2E7B4F" stroke="#FFFFFF" stroke-width="2"></circle>
+    <circle cx="1214" cy="342.0" r="6" fill="#2E7B4F" stroke="#FFFFFF" stroke-width="2"></circle>
+    <circle cx="1402" cy="265.8" r="6" fill="#2E7B4F" stroke="#FFFFFF" stroke-width="2"></circle>
+    <path d="M180 390H1500" stroke="#D5DAE1" stroke-width="2"></path>
+    <circle cx="274" cy="390" r="7" fill="#9AA3AE" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="462" cy="390" r="7" fill="#9AA3AE" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="650" cy="390" r="7" fill="#9AA3AE" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="838" cy="390" r="7" fill="#9AA3AE" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="1026" cy="390" r="7" fill="#9AA3AE" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="1214" cy="390" r="7" fill="#9AA3AE" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="1402" cy="390" r="7" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="3"></circle>
+  </svg>
+
+  <div style="position:absolute; left:252px; top:215px; width:44px; text-align:center; white-space:nowrap; background-color:#FFFFFF; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#1F2A3A;">4.49</div>
+  <div style="position:absolute; left:440px; top:157px; width:44px; text-align:center; white-space:nowrap; background-color:#FFFFFF; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#1F2A3A;">5.45</div>
+  <div style="position:absolute; left:628px; top:141px; width:44px; text-align:center; white-space:nowrap; background-color:#FFFFFF; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#1F2A3A;">5.72</div>
+  <div style="position:absolute; left:816px; top:175px; width:44px; text-align:center; white-space:nowrap; background-color:#FFFFFF; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#1F2A3A;">5.15</div>
+  <div style="position:absolute; left:1004px; top:269px; width:44px; text-align:center; white-space:nowrap; background-color:#FFFFFF; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#1F2A3A;">4.18</div>
+  <div style="position:absolute; left:1192px; top:241px; width:44px; text-align:center; white-space:nowrap; background-color:#FFFFFF; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#1F2A3A;">4.05</div>
+  <div style="position:absolute; left:1380px; top:213px; width:44px; text-align:center; white-space:nowrap; background-color:#FFFFFF; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#1F2A3A;">4.51</div>
+
+  <div style="position:absolute; left:252px; top:318px; width:44px; text-align:center; white-space:nowrap; background-color:#FFFFFF; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#2E7B4F;">3.37</div>
+  <div style="position:absolute; left:440px; top:306px; width:44px; text-align:center; white-space:nowrap; background-color:#FFFFFF; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#2E7B4F;">3.57</div>
+  <div style="position:absolute; left:628px; top:247px; width:44px; text-align:center; white-space:nowrap; background-color:#FFFFFF; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#2E7B4F;">4.55</div>
+  <div style="position:absolute; left:816px; top:282px; width:44px; text-align:center; white-space:nowrap; background-color:#FFFFFF; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#2E7B4F;">3.96</div>
+  <div style="position:absolute; left:1004px; top:217px; width:44px; text-align:center; white-space:nowrap; background-color:#FFFFFF; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#2E7B4F;">4.45</div>
+  <div style="position:absolute; left:1192px; top:352px; width:44px; text-align:center; white-space:nowrap; background-color:#FFFFFF; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#2E7B4F;">2.80</div>
+  <div style="position:absolute; left:1380px; top:276px; width:44px; text-align:center; white-space:nowrap; background-color:#FFFFFF; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#2E7B4F;">4.07</div>
+
+  <div style="position:absolute; left:194px; top:406px; width:160px; display:flex; flex-direction:column; align-items:center; gap:2px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#1C2431;">&lt; 2018</div><div style="font-size:13px; color:#6B7380;">89 題</div></div>
+  <div style="position:absolute; left:382px; top:406px; width:160px; display:flex; flex-direction:column; align-items:center; gap:2px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#1C2431;">2018</div><div style="font-size:13px; color:#6B7380;">165 題</div></div>
+  <div style="position:absolute; left:570px; top:406px; width:160px; display:flex; flex-direction:column; align-items:center; gap:2px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#1C2431;">2019</div><div style="font-size:13px; color:#6B7380;">437 題</div></div>
+  <div style="position:absolute; left:758px; top:406px; width:160px; display:flex; flex-direction:column; align-items:center; gap:2px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#1C2431;">2020</div><div style="font-size:13px; color:#6B7380;">427 題</div></div>
+  <div style="position:absolute; left:946px; top:406px; width:160px; display:flex; flex-direction:column; align-items:center; gap:2px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#1C2431;">2021</div><div style="font-size:13px; color:#6B7380;">383 題</div></div>
+  <div style="position:absolute; left:1134px; top:406px; width:160px; display:flex; flex-direction:column; align-items:center; gap:2px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#1C2431;">2022</div><div style="font-size:13px; color:#6B7380;">395 題</div></div>
+  <div style="position:absolute; left:1322px; top:406px; width:160px; display:flex; flex-direction:column; align-items:center; gap:2px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#1C2431;">2023</div><div style="font-size:13px; color:#6B7380;">244 題</div></div>
+
+  <div style="position:absolute; left:60px; top:464px; width:1440px; font-size:13px; color:#8A93A0; line-height:1.6;">題數是表 21 的「Total」欄，加起來是 2,140，不是 2,294（整理者算的），論文沒有說明。<br>GPT-4＊ 只在 25% 子集上跑，逐年是 0 到 3.42%，沒有畫進折線；ChatGPT-3.5 逐年都在 1.56% 以下。</div>
+
+  <div style="position:absolute; left:60px; top:530px; width:470px; height:206px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">表 7：2023 年前後差不多</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">Claude 2 是 4.87% 對 4.23%，<br><span style="white-space:nowrap">SWE-Llama 13b</span> 是 3.98% 對 3.85%，<br><span style="white-space:nowrap">SWE-Llama 7b</span> 是 2.95% 對 3.46%。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">前者是 2023 年以前，後者是以後；<span style="white-space:nowrap">ChatGPT-3.5</span> 是 0.49% 對 0.77%。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:530px; width:470px; height:206px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;"><span style="white-space:nowrap">GPT-4</span> 是例外：1.96% 對 0.0%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">表 7 的註說，<span style="white-space:nowrap">GPT-4</span> 只在 25% 的子集上評估，<br>可能影響它的表現。<br>逐年看，它有三個年份是 0（表 21）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">表 21 的「25% 子集」欄加總是 574，就是那個子集。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:530px; width:470px; height:206px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">作者的讀法：不像靠背答案</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">模型可能看過某些版本的程式碼，<br>在比較新的題目上卻沒有明顯變差；<br>作者認為它們不是靠生成新版的 repo 來「作弊」。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">收集流程能只拿訓練日期之後的 PR 出新題。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：折線依附錄表 21 畫；表 7 的「2023 年之後」和表 21 的「2023」列數字不同（Claude 2 是 4.23 對 4.51），論文沒有說明分法；附錄 C.4 的正文說 6 個分組，表有 7 列。</div>
+</div></div>
+</section>
+<section class="page" id="p11">
+  <div class="label"><span class="n">11 / 13</span><span>模型的 patch 比參考解短</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">模型的 patch，比參考解短一大截</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 8：oracle 設定下套得上的 patch，patch 檔平均有幾行；每個模型下方一條是同一批題目的參考解，最下面兩條是參考解的整體平均</div>
+
+  <div style="position:absolute; left:60px; top:136px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FCF1EA; border:1px solid #E6B49A;"></div>模型套得上的 patch</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF6F0; border:1px solid #B4D5C0;"></div>同一批題目的參考解</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1;"></div>參考解的整體平均</div>
+    <div style="color:#8A93A0;">長條末端是表 8 的數字，單位是行</div>
+  </div>
+
+  <div style="position:absolute; left:615px; top:168px; width:1px; height:378px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:910px; top:168px; width:1px; height:378px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:1205px; top:168px; width:1px; height:378px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:1500px; top:168px; width:1px; height:378px; background-color:#EEF1F5;"></div>
+  <div style="position:absolute; left:320px; top:168px; width:1px; height:378px; background-color:#D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:186px; font-size:15px; font-weight:700; color:#1C2431;">Claude 2</div>
+  <div style="position:absolute; left:250px; top:179px; width:62px; text-align:right; font-size:12px; color:#6B7380;">模型</div>
+  <div style="position:absolute; left:250px; top:202px; width:62px; text-align:right; font-size:12px; color:#6B7380;">參考解</div>
+  <div style="position:absolute; left:320px; top:176px; width:289px; height:22px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:617px; top:178px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#C8501F;">19.6</div>
+  <div style="position:absolute; left:320px; top:202px; width:651px; height:18px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:979px; top:202px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">44.1</div>
+
+  <div style="position:absolute; left:60px; top:248px; font-size:15px; font-weight:700; color:#1C2431; white-space:nowrap;">ChatGPT-3.5</div>
+  <div style="position:absolute; left:250px; top:241px; width:62px; text-align:right; font-size:12px; color:#6B7380;">模型</div>
+  <div style="position:absolute; left:250px; top:264px; width:62px; text-align:right; font-size:12px; color:#6B7380;">參考解</div>
+  <div style="position:absolute; left:320px; top:238px; width:444px; height:22px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:772px; top:240px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#C8501F;">30.1</div>
+  <div style="position:absolute; left:320px; top:264px; width:584px; height:18px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:912px; top:264px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">39.6</div>
+
+  <div style="position:absolute; left:60px; top:310px; font-size:15px; font-weight:700; color:#1C2431; white-space:nowrap;">GPT-4</div>
+  <div style="position:absolute; left:250px; top:303px; width:62px; text-align:right; font-size:12px; color:#6B7380;">模型</div>
+  <div style="position:absolute; left:250px; top:326px; width:62px; text-align:right; font-size:12px; color:#6B7380;">參考解</div>
+  <div style="position:absolute; left:320px; top:300px; width:308px; height:22px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:636px; top:302px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#C8501F;">20.9</div>
+  <div style="position:absolute; left:320px; top:326px; width:496px; height:18px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:824px; top:326px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">33.6</div>
+
+  <div style="position:absolute; left:60px; top:372px; font-size:15px; font-weight:700; color:#1C2431; white-space:nowrap;">SWE-Llama 13b</div>
+  <div style="position:absolute; left:250px; top:365px; width:62px; text-align:right; font-size:12px; color:#6B7380;">模型</div>
+  <div style="position:absolute; left:250px; top:388px; width:62px; text-align:right; font-size:12px; color:#6B7380;">參考解</div>
+  <div style="position:absolute; left:320px; top:362px; width:260px; height:22px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:588px; top:364px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#C8501F;">17.6</div>
+  <div style="position:absolute; left:320px; top:388px; width:558px; height:18px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:886px; top:388px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">37.8</div>
+
+  <div style="position:absolute; left:60px; top:434px; font-size:15px; font-weight:700; color:#1C2431; white-space:nowrap;">SWE-Llama 7b</div>
+  <div style="position:absolute; left:250px; top:427px; width:62px; text-align:right; font-size:12px; color:#6B7380;">模型</div>
+  <div style="position:absolute; left:250px; top:450px; width:62px; text-align:right; font-size:12px; color:#6B7380;">參考解</div>
+  <div style="position:absolute; left:320px; top:424px; width:246px; height:22px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:574px; top:426px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#C8501F;">16.7</div>
+  <div style="position:absolute; left:320px; top:450px; width:593px; height:18px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:921px; top:450px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">40.2</div>
+
+  <div style="position:absolute; left:60px; top:488px; font-size:15px; font-weight:700; color:#4B5866;">Avg Gold</div>
+  <div style="position:absolute; left:170px; top:490px; width:142px; text-align:right; font-size:12px; color:#6B7380;">五批參考解的平均</div>
+  <div style="position:absolute; left:320px; top:486px; width:577px; height:22px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:905px; top:488px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#1C2431;">39.1</div>
+  <div style="position:absolute; left:60px; top:520px; font-size:15px; font-weight:700; color:#4B5866;">All Gold</div>
+  <div style="position:absolute; left:170px; top:522px; width:142px; text-align:right; font-size:12px; color:#6B7380;">全部 2,294 題的參考解</div>
+  <div style="position:absolute; left:320px; top:518px; width:1099px; height:22px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:0px 4px 4px 0px;"></div>
+  <div style="position:absolute; left:1427px; top:520px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#1C2431;">74.5</div>
+
+  <div style="position:absolute; left:313px; top:552px; width:14px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">0</div>
+  <div style="position:absolute; left:603px; top:552px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">20</div>
+  <div style="position:absolute; left:898px; top:552px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">40</div>
+  <div style="position:absolute; left:1193px; top:552px; width:24px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">60</div>
+  <div style="position:absolute; left:1478px; top:552px; width:44px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">80 行</div>
+
+  <div style="position:absolute; left:60px; top:606px; width:470px; height:190px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#C8501F;">不到一半：30.1 對 74.5 行</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">作者拿套得上的 patch 和全部參考解比：<br>最長的 <span style="white-space:nowrap">ChatGPT-3.5</span> 也只有 30.1 行，<br>參考解平均 74.5 行；也很少改超過一個檔案。</div>
+    <div style="font-size:13px; color:#8A93A0;">和同一批參考解比，從 42% 到 76%（整理者算的）。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:606px; width:470px; height:190px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#2E7B4F;">寫 patch 比重寫整個檔案好</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">要 Claude 2 重寫整個檔案，只解出 2.2%，<br>寫 patch 是 4.8%；只看較短的一半題目，<br>也是 3.9% 對 7.8%（oracle 設定）。</div>
+    <div style="font-size:13px; color:#8A93A0;">所以作者還是要模型輸出 patch（第 5 節）。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:606px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#1C2431;">改得短，也改得直接</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">模型寫原始的 Python、只解眼前的問題，<br>參考解常做結構上的改善。<br>圖 10 的模型只改 6 行，卻讓 HTTPAdapter 變複雜。</div>
+    <div style="font-size:13px; color:#8A93A0;">它的 Cyclomatic 複雜度從 3 升到 5（附錄 C.7）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：表 8 只算套得上的 patch，每個模型的參考解只算它套得上的那幾題；附錄表 24 算上套不上的，SWE-Llama 的 patch 反而比參考解長（13b 68.9 對 61.5 行）。</div>
+</div></div>
+</section>
+<section class="page" id="p12">
+  <div class="label"><span class="n">12 / 13</span><span>沒解出的 patch 落在哪一格</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">沒解出的 patch，多半一個 F2P 都沒過</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">附錄 C.5 的表 22 與表 23：套得上的 patch，依 F2P 與 P2P 測試各通過多少分成六種；右邊是五個模型各落在哪一種</div>
+
+  <div style="position:absolute; left:60px; top:146px; font-size:13px; font-weight:700; color:#4B5866;">列：P2P 測試　欄：F2P 測試</div>
+  <div style="position:absolute; left:260px; top:172px; width:150px; text-align:center; font-size:13px; font-weight:700; color:#1C2431;">F2P 全過</div>
+  <div style="position:absolute; left:420px; top:172px; width:150px; text-align:center; font-size:13px; font-weight:700; color:#1C2431;">F2P 部分通過</div>
+  <div style="position:absolute; left:580px; top:172px; width:150px; text-align:center; font-size:13px; font-weight:700; color:#C8501F;">F2P 全沒過</div>
+
+  <div style="position:absolute; left:60px; top:224px; width:184px; text-align:right;"><div style="font-size:14px; font-weight:700; color:#1C2431;">P2P 全過</div><div style="font-size:12px; color:#8A93A0;">原本的功能都在</div></div>
+  <div style="position:absolute; left:60px; top:314px; width:184px; text-align:right;"><div style="font-size:14px; font-weight:700; color:#1C2431;">P2P 部分通過</div><div style="font-size:12px; color:#8A93A0;">原本的功能壞了一些</div></div>
+  <div style="position:absolute; left:60px; top:404px; width:184px; text-align:right;"><div style="font-size:14px; font-weight:700; color:#1C2431;">P2P 全沒過</div><div style="font-size:12px; color:#8A93A0;">原本的功能全壞了</div></div>
+
+  <div style="position:absolute; left:574px; top:198px; width:162px; height:276px; box-sizing:border-box; border:1.5px dashed #C8501F; border-radius:10px;"></div>
+
+  <div style="position:absolute; left:260px; top:206px; width:150px; height:80px; box-sizing:border-box; border-radius:6px; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#FFFFFF;">Resolved</div><div style="font-size:12px; color:rgba(255,255,255,0.8);">解出</div></div></div>
+  <div style="position:absolute; left:420px; top:206px; width:150px; height:80px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1px solid #B4D5C0; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13.5px; font-weight:700; color:#2E7B4F; white-space:nowrap;">Partially Resolved</div><div style="font-size:12px; color:#6B7380;">部分解出</div></div></div>
+  <div style="position:absolute; left:580px; top:206px; width:150px; height:80px; box-sizing:border-box; border-radius:6px; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">No-Op</div><div style="font-size:12px; color:#6B7380;">修改沒有作用</div></div></div>
+  <div style="position:absolute; left:260px; top:296px; width:150px; height:80px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1px solid #B4D5C0; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13.5px; font-weight:700; color:#2E7B4F; white-space:nowrap;">Breaking Resolved</div><div style="font-size:12px; color:#6B7380;">解了，但弄壞別的</div></div></div>
+  <div style="position:absolute; left:420px; top:296px; width:150px; height:80px; box-sizing:border-box; border-radius:6px; background-color:#F7F8FA; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13.5px; font-weight:700; color:#4B5866; white-space:nowrap;">Work in Progress</div><div style="font-size:12px; color:#6B7380;">做到一半</div></div></div>
+  <div style="position:absolute; left:580px; top:296px; width:150px; height:80px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#C8501F;">Regression</div><div style="font-size:12px; color:#6B7380;">還弄壞原本的</div></div></div>
+  <div style="position:absolute; left:260px; top:386px; width:150px; height:80px; box-sizing:border-box; border-radius:6px; background-color:#EEF6F0; border:1px solid #B4D5C0; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13.5px; font-weight:700; color:#2E7B4F; white-space:nowrap;">Breaking Resolved</div><div style="font-size:12px; color:#6B7380;">解了，但弄壞別的</div></div></div>
+  <div style="position:absolute; left:420px; top:386px; width:150px; height:80px; box-sizing:border-box; border-radius:6px; background-color:#F7F8FA; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:13.5px; font-weight:700; color:#4B5866; white-space:nowrap;">Work in Progress</div><div style="font-size:12px; color:#6B7380;">做到一半</div></div></div>
+  <div style="position:absolute; left:580px; top:386px; width:150px; height:80px; box-sizing:border-box; border-radius:6px; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#C8501F;">Regression</div><div style="font-size:12px; color:#6B7380;">還弄壞原本的</div></div></div>
+  <div style="position:absolute; left:560px; top:478px; width:190px; text-align:center; font-size:12.5px; font-weight:700; color:#C8501F;">這一欄：一個 F2P 都沒過</div>
+
+  <div style="position:absolute; left:800px; top:146px; font-size:14px; font-weight:700; color:#1C2431;">表 23：套得上的 patch 各落在哪一種（次數）</div>
+  <div style="position:absolute; left:800px; top:172px; display:flex; gap:18px; align-items:center; font-size:12.5px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:6px;"><div style="width:12px; height:12px; border-radius:2px; background-color:#2E7B4F;"></div>Resolved</div>
+    <div style="display:flex; align-items:center; gap:6px;"><div style="width:12px; height:12px; border-radius:2px; background-color:#EEF6F0; border:1px solid #B4D5C0;"></div>中間三種</div>
+    <div style="display:flex; align-items:center; gap:6px;"><div style="width:12px; height:12px; border-radius:2px; background-color:#EEF1F5; border:1px solid #D5DAE1;"></div>No-Op</div>
+    <div style="display:flex; align-items:center; gap:6px;"><div style="width:12px; height:12px; border-radius:2px; background-color:#FCF1EA; border:1px solid #E6B49A;"></div>Regression</div>
+    <div style="color:#8A93A0;">右欄＝套得上的總數</div>
+  </div>
+
+  <div style="position:absolute; left:800px; top:209px; width:112px; font-size:13px; font-weight:700; color:#1C2431;">Claude 2</div>
+  <div style="position:absolute; left:920px; top:204px; width:53px; height:30px; box-sizing:border-box; background-color:#2E7B4F; border-radius:4px 0px 0px 4px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">110</div>
+  <div style="position:absolute; left:973px; top:204px; width:29px; height:30px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0;"></div>
+  <div style="position:absolute; left:1002px; top:204px; width:227px; height:30px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#4B5866;">471</div>
+  <div style="position:absolute; left:1229px; top:204px; width:211px; height:30px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:0px 4px 4px 0px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">436</div>
+  <div style="position:absolute; left:1452px; top:210px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#1C2431;">1,078</div>
+
+  <div style="position:absolute; left:800px; top:251px; width:112px; font-size:13px; font-weight:700; color:#1C2431; white-space:nowrap;">ChatGPT-3.5</div>
+  <div style="position:absolute; left:920px; top:246px; width:22px; height:30px; box-sizing:border-box; background-color:#2E7B4F; border-radius:4px 0px 0px 4px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; font-weight:600; color:#FFFFFF;">12</div>
+  <div style="position:absolute; left:942px; top:246px; width:15px; height:30px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0;"></div>
+  <div style="position:absolute; left:957px; top:246px; width:319px; height:30px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#4B5866;">174</div>
+  <div style="position:absolute; left:1276px; top:246px; width:164px; height:30px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:0px 4px 4px 0px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">90</div>
+  <div style="position:absolute; left:1452px; top:252px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#1C2431;">284</div>
+
+  <div style="position:absolute; left:800px; top:293px; width:112px; font-size:13px; font-weight:700; color:#1C2431; white-space:nowrap;">GPT-4＊</div>
+  <div style="position:absolute; left:920px; top:288px; width:68px; height:30px; box-sizing:border-box; background-color:#2E7B4F; border-radius:4px 0px 0px 4px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">10</div>
+  <div style="position:absolute; left:988px; top:288px; width:48px; height:30px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0;"></div>
+  <div style="position:absolute; left:1036px; top:288px; width:205px; height:30px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#4B5866;">30</div>
+  <div style="position:absolute; left:1241px; top:288px; width:199px; height:30px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:0px 4px 4px 0px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">29</div>
+  <div style="position:absolute; left:1452px; top:294px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#1C2431;">76</div>
+
+  <div style="position:absolute; left:800px; top:335px; width:112px; font-size:13px; font-weight:700; color:#1C2431; white-space:nowrap;">SWE-Llama 7b</div>
+  <div style="position:absolute; left:920px; top:330px; width:29px; height:30px; box-sizing:border-box; background-color:#2E7B4F; border-radius:4px 0px 0px 4px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; font-weight:600; color:#FFFFFF;">69</div>
+  <div style="position:absolute; left:949px; top:330px; width:21px; height:30px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0;"></div>
+  <div style="position:absolute; left:970px; top:330px; width:296px; height:30px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#4B5866;">716</div>
+  <div style="position:absolute; left:1266px; top:330px; width:174px; height:30px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:0px 4px 4px 0px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">421</div>
+  <div style="position:absolute; left:1452px; top:336px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#1C2431;">1,257</div>
+
+  <div style="position:absolute; left:800px; top:377px; width:112px; font-size:13px; font-weight:700; color:#1C2431; white-space:nowrap;">SWE-Llama 13b</div>
+  <div style="position:absolute; left:920px; top:372px; width:40px; height:30px; box-sizing:border-box; background-color:#2E7B4F; border-radius:4px 0px 0px 4px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF;">91</div>
+  <div style="position:absolute; left:960px; top:372px; width:16px; height:30px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0;"></div>
+  <div style="position:absolute; left:976px; top:372px; width:292px; height:30px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#4B5866;">672</div>
+  <div style="position:absolute; left:1268px; top:372px; width:172px; height:30px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:0px 4px 4px 0px; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">397</div>
+  <div style="position:absolute; left:1452px; top:378px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; font-weight:600; color:#1C2431;">1,196</div>
+
+  <div style="position:absolute; left:800px; top:414px; width:740px; font-size:12.5px; color:#8A93A0; line-height:1.6;">長條長度照每個模型自己的總數等比例畫。<br>中間三種是 Breaking Resolved、Partially Resolved、Work in Progress 的合計（整理者加總）：<br><span style="white-space:nowrap">Claude 2 61</span>、<span style="white-space:nowrap">ChatGPT-3.5 8</span>、<span style="white-space:nowrap">GPT-4 7</span>、<span style="white-space:nowrap">SWE-Llama 7b 51</span>、<span style="white-space:nowrap">13b 36</span>。</div>
+
+  <div style="position:absolute; left:60px; top:506px; width:1480px; height:52px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">讀法</div>
+    <div style="font-size:15px; color:#2B3340;">沒解出的 patch 裡，一個 F2P 都沒過（No-Op 加 Regression）的佔 89% 到 97%；作者說其中 60% 到 70% 是 No-Op，整理者算出 51% 到 66%。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:582px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#1C2431;">No-Op 最多：什麼都沒改變</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">修改沒有作用：原本的功能都在，<br>issue 的 F2P 測試卻一個都沒過。<br>Claude 2 有 471 個，<span style="white-space:nowrap">SWE-Llama 13b</span> 有 672 個。</div>
+    <div style="font-size:13px; color:#8A93A0;">Claude 2 與 GPT-4 的 No-Op 比例約 51% 到 52%。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:582px; width:470px; height:200px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#C8501F;">Regression 其次：還弄壞東西</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">issue 沒解決，原本能過的 P2P 也壞了，<br>codebase 比改之前更糟。<br>Claude 2 有 436 個，<span style="white-space:nowrap">SWE-Llama 13b</span> 有 397 個。</div>
+    <div style="font-size:13px; color:#8A93A0;">部分通過的三種加起來，都比這兩種少得多。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:582px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#2E7B4F;">作者的建議：讓模型跑測試</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">部分通過的 patch 多半懂需求，<br>卻看不到跨檔案的相依關係；<br>能跑既有的測試再決定要不要改，可能很有價值。</div>
+    <div style="font-size:13px; color:#8A93A0;">論文的基線沒有這一步；第 7 節鼓勵之後試 agent。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：表 23 的「套得上」和表 14 對不上（Claude 2 是 1,078 對 1,441），v2 就是這樣；比例都用表 23 自己的數字算，格子與長條的配色是整理者依語意畫的。</div>
+</div></div>
+</section>
+<section class="page" id="p13">
+  <div class="label"><span class="n">13 / 13</span><span>三條原則與五個方向</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">考題定好了，更好的解法留給 agent</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 7 節、倫理一節與附錄 E：作者列了三個限制，也點名了之後的方向；上排三條原則是整理者從全篇歸納的</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:330px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:28px 32px; display:flex; flex-direction:column; gap:13px;">
+    <div style="font-size:13px; color:#8A93A0;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">01</span>　題目要真實，也要驗得了</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">從真實的修改出題，<br>用當時附的測試改考卷</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">三道篩選只留已合併、連到 issue、附了測試，<br>而且至少一個測試從失敗變通過的 PR；<br>F2P 與 P2P 都要全過才算解出。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 幾行就寫完的獨立題目<br>✓ 整個 repo 裡的真實 issue</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:330px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:28px 32px; display:flex; flex-direction:column; gap:13px;">
+    <div style="font-size:13px; color:#8A93A0;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">02</span>　分數要連著設定一起讀</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">同一個模型，<br>換個給法分數就變</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">BM25 放寬上限，Claude 2 從 1.96% 掉到 1.22%；<br>給 oracle 檔案是 4.80%、折疊後 5.93%，<br>重寫整個檔案卻只剩 2.2%。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 只報一個解題率<br>✓ 連同檢索設定與輸出格式一起報</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:330px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 32px; display:flex; flex-direction:column; gap:13px;">
+    <div style="font-size:13px; color:#8A93A0;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">03</span>　基準要能一直換新題</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">持續加題，<br>也順便檢查年份</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">收集幾乎不用人工，<br>可以只拿模型訓練日期之後的 PR 出題；<br>2023 年前後的解題率差不多，不像靠背答案。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">論文用的詞是「作弊」；<br>把它看成污染檢查，是整理者的讀法。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:530px; font-size:20px; font-weight:700; color:#1C2431;">作者點名的方向（不排順序）</div>
+  <div style="position:absolute; left:60px; top:570px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">01</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">更多程式語言</div>
+  </div>
+  <div style="position:absolute; left:360px; top:570px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">02</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">agent 與工具增強的模型</div>
+  </div>
+  <div style="position:absolute; left:660px; top:570px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">03</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">測試以外的品質指標</div>
+  </div>
+  <div style="position:absolute; left:960px; top:570px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">04</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">看得懂 issue 裡的圖片</div>
+  </div>
+  <div style="position:absolute; left:1260px; top:570px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">05</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">讓模型跑測試再決定</div>
+  </div>
+  <div style="position:absolute; left:60px; top:662px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">01 到 03 出自第 7 節的限制與討論（03 另見附錄 C.7 用 Cyclomatic 複雜度比較 patch），04 出自第 5 節對 issue 內嵌圖片的分析，05 出自附錄 C.5。<br>灰底表示這些還是提案，論文沒有做實驗；作者也希望 SWE-bench 成為設計 AI 安全措施的受控場地（附錄 E）。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">硬規則：解題率要連同檢索設定（BM25 或 oracle、context 上限）與輸出格式一起讀；上排三條原則是整理者歸納的，不是論文的結論句。</div>
+</div></div>
+</section>
+  <div class="foot">整理自 arXiv · Carlos E. Jimenez、John Yang、Alexander Wettig、Shunyu Yao、Kexin Pei、Ofir Press、Karthik Narasimhan（Princeton University、Princeton Language and Intelligence、University of Chicago），2023-10-10：<a href="https://arxiv.org/abs/2310.06770">https://arxiv.org/abs/2310.06770</a>。這些圖卡是學習用的重新整理，不是原文的逐句翻譯；觀點與著作權屬於原作者。<a href="index.html">回到圖卡＋教材版</a> · <a href="../../">回首頁</a></div>
+</div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fit() {
+    var frames = document.querySelectorAll('.frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('load', fit);
+  fit();
+})();
+</script>
+</body>
+</html>

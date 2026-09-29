@@ -1,6 +1,42 @@
 window.ARTICLES = {
   "articles": [
     {
+      "slug": "swe-bench-github-issues",
+      "path": "articles/swe-bench-github-issues/index.html",
+      "title": "SWE-bench：拿真實的 GitHub issue 出題，考語言模型能不能在整個 repo 裡寫出修好問題的 patch",
+      "summary": "Princeton 團隊的 SWE-bench 從 12 個熱門 Python repo 的 PR 與 issue 篩出 2,294 題：模型拿到 issue 與整個 codebase，要寫出一個 patch，再用 PR 附的測試判斷有沒有修好，至少要讓一個原本失敗的測試通過，其他測試也不能壞。作者用 BM25 與 oracle 兩種方式挑檔案餵給模型，也微調了 CodeLlama 成 SWE-Llama；寫作當時最好的模型在 BM25 設定下也只解出 3.79%，給的程式越多分數越低，模型寫的 patch 也比人寫的短、改得比較直接。這份整理逐章重述基準怎麼建、一題長什麼樣、怎麼判定、檢索設定與結果分析，每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "arXiv · Carlos E. Jimenez、John Yang、Alexander Wettig、Shunyu Yao、Kexin Pei、Ofir Press、Karthik Narasimhan（Princeton University、Princeton Language and Intelligence、University of Chicago）",
+        "url": "https://arxiv.org/abs/2310.06770",
+        "date": "2023-10-10"
+      },
+      "date": "2026-09-29",
+      "tags": [
+        "swe-bench",
+        "benchmarks",
+        "software-engineering-agents",
+        "code-generation",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 9,
+        "kind": "選讀",
+        "section": "Coding Agents & Proactive Agents",
+        "lecture": "Coding & Software Agents",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/swe-bench-github-issues/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "responsible-scaling-policy",
       "path": "articles/responsible-scaling-policy/index.html",
       "title": "Anthropic 負責任擴展政策讀法：能力到哪一級，措施就得先到哪一級（1.0 版）",
