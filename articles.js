@@ -37,6 +37,42 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "swe-agent-interfaces",
+      "path": "articles/swe-agent-interfaces/index.html",
+      "title": "SWE-agent：替語言模型設計專用的電腦介面，讓它自己在真實 repo 裡修 bug",
+      "summary": "Princeton 團隊的 SWE-agent 主張 LM agent 是一種新的使用者，需要替它設計的 agent-computer interface（ACI）：少量簡單的搜尋、檢視與編輯指令，每一輪精簡的回饋，再加上擋下語法錯誤的護欄。GPT-4 Turbo 加上這套介面，在 SWE-bench 解出 12.47%，先前最好的不互動系統是 3.8%；消融也顯示，照人的習慣設計的逐筆搜尋，比完全不給搜尋還差。這份整理交代四條設計原則、四個元件怎麼運作、每個數字取自哪張表，以及軌跡與失敗模式的分析，每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "arXiv · John Yang、Carlos E. Jimenez、Alexander Wettig、Kilian Lieret、Shunyu Yao、Karthik Narasimhan、Ofir Press（Princeton University）",
+        "url": "https://arxiv.org/abs/2405.15793",
+        "date": "2024-05-06"
+      },
+      "date": "2026-09-29",
+      "tags": [
+        "swe-agent",
+        "agent-computer-interface",
+        "coding-agents",
+        "swe-bench",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 9,
+        "kind": "必讀",
+        "section": "Coding Agents & Proactive Agents",
+        "lecture": "Coding & Software Agents",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/swe-agent-interfaces/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "responsible-scaling-policy",
       "path": "articles/responsible-scaling-policy/index.html",
       "title": "Anthropic 負責任擴展政策讀法：能力到哪一級，措施就得先到哪一級（1.0 版）",

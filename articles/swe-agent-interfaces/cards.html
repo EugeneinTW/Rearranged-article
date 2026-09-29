@@ -1,0 +1,891 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SWE-agent（Yang et al. 2024） · 圖解卡</title>
+<meta name="description" content="Princeton 團隊的 SWE-agent 主張 LM agent 是一種新的使用者，需要替它設計的 agent-computer interface（ACI）：少量簡單的搜尋、檢視與編輯指令，每一輪精簡的回饋，再加上擋下語法錯誤的護欄。GPT-4 Turbo 加上這套介面，在 SWE-bench 解出 12.47%，先前最好的不互動系統是 3.8%；消融也顯示，照人的習慣設計的逐筆搜尋，比完全不給搜尋還差。這份整理交代四條設計原則、四個元件怎麼運作、每個數字取自哪張表，以及軌跡與失敗模式的分析，每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="swe-agent, agent-computer-interface, coding-agents, swe-bench, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2405.15793">
+<meta name="date" content="2026-09-29">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+:root { color-scheme: light; --bg: #F4F5F7; --line: #E5E9EE; --ink: #1C2431; --mute: #8A93A0; --orange: #C8501F; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: #C8501F; } a:hover { color: #9E3E16; }
+a:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.wrap { max-width: 1600px; margin: 0 auto; padding-block: 24px 48px; padding-inline: 16px; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; padding: 6px 4px 18px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; letter-spacing: 0.12em; color: var(--mute); }
+.head nav { display: flex; flex-wrap: wrap; gap: 6px 14px; letter-spacing: 0.04em; }
+.head nav a { color: var(--mute); text-decoration: none; font-weight: 600; }
+.head nav a:hover { color: var(--orange); }
+.page { margin-bottom: 36px; scroll-margin-top: 16px; }
+.label { display: flex; align-items: baseline; gap: 14px; padding: 0 4px 8px; font-size: 13px; color: var(--mute); }
+.label .n { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-weight: 600; font-size: 12px; letter-spacing: 0.1em; color: var(--orange); }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--line); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; }
+.foot { padding: 12px 4px 0; font-size: 12px; color: var(--mute); line-height: 1.7; }
+@media print {
+  @page { size: 1600px 900px; margin: 0; }
+  body { background: #FFFFFF; }
+  .wrap { max-width: none; padding: 0; }
+  .head, .label, .foot { display: none; }
+  .page { margin: 0; page-break-after: always; }
+  .frame { border: none; border-radius: 0; height: auto !important; }
+  .frame > div { transform: none !important; }
+}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><span>SWE-agent（Yang et al. 2024） · 圖解卡 · 13 張 · 連續閱讀版</span><nav class="site" aria-label="導覽"><a href="../../">首頁</a><a href="index.html">圖卡＋教材版</a></nav><nav aria-label="跳頁"><a href="#p01" title="封面">01</a><a href="#p02" title="shell 是給人用的介面">02</a><a href="#p03" title="四條設計原則">03</a><a href="#p04" title="SWE-agent 的架構">04</a><a href="#p05" title="檢視器與搜尋">05</a><a href="#p06" title="edit 與 linter 的護欄">06</a><a href="#p07" title="每一輪的三種回饋">07</a><a href="#p08" title="主結果：全集 12.47%">08</a><a href="#p09" title="介面消融的 12 格">09</a><a href="#p10" title="一條軌跡的形狀">10</a><a href="#p11" title="失敗的組成">11</a><a href="#p12" title="解出與沒解出的兩條軌跡">12</a><a href="#p13" title="三條原則與五個方向">13</a></nav></div>
+<section class="page" id="p01">
+  <div class="label"><span class="n">01 / 13</span><span>封面</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;"><span style="letter-spacing:0.14em">SWE-AGENT</span> &#183; 圖解卡 &#183; 16:9 &#183; 13 張</div>
+  <div style="position:absolute; left:60px; top:110px; width:840px; font-size:58px; font-weight:700; color:#1C2431; line-height:1.3; letter-spacing:0.01em;">替語言模型，<br>設計它自己的介面。</div>
+  <div style="position:absolute; left:60px; top:292px; width:820px; font-size:19px; color:#6B7380; line-height:1.7;">整理自 arXiv 論文〈<span style="white-space:nowrap">SWE-agent</span>: <span style="white-space:nowrap">Agent-Computer</span> Interfaces Enable Automated Software Engineering〉（2024-05-06，v3 2024-11-11，NeurIPS 2024），John Yang 等 7 人，Princeton University。十二張卡講一件事：模型不動，只替它設計好懂的指令、精簡的回饋與擋錯的護欄，同一個 <span style="white-space:nowrap">GPT-4 Turbo</span> 就在真實的 repo 裡解出更多 issue。</div>
+  <div style="position:absolute; left:60px; top:486px; display:flex; align-items:center; gap:34px;">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#C8501F;"></div>
+      <div style="font-size:15px; color:#2B3340;">卡點／失敗／代價</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#2E7B4F;"></div>
+      <div style="font-size:15px; color:#2B3340;">ACI 的設計／預設</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#1F2A3A;"></div>
+      <div style="font-size:15px; color:#2B3340;">LM agent／終點</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div>
+      <div style="font-size:15px; color:#2B3340;">中性節點</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; top:534px; width:820px; font-size:13px; color:#8A93A0; line-height:1.7;">整組共用同一套語意色：橘是 shell 的卡點、失敗與成本，綠是 ACI 的設計與表現最好的預設，深藍是 LM agent 與流程的終點。<br>數字依 arXiv v3，結果是 2024 年的模型（<span style="white-space:nowrap">GPT-4 Turbo</span>、Claude 3 Opus）。</div>
+
+  <div style="position:absolute; left:960px; top:110px; width:580px; box-sizing:border-box; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 34px; display:flex; flex-direction:column;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">本組 &#183; 13 張</div>
+    <div style="margin-top:10px; display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">01</div><div style="font-size:16px; color:#1C2431;">封面</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">02</div><div style="font-size:16px; color:#1C2431;">shell 是給人用的介面</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">03</div><div style="font-size:16px; color:#1C2431;">四條設計原則</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">04</div><div style="font-size:16px; color:#1C2431;"><span style="white-space:nowrap">SWE-agent</span> 的架構</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">05</div><div style="font-size:16px; color:#1C2431;">檢視器與搜尋</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">06</div><div style="font-size:16px; color:#1C2431;">edit 與 linter 的護欄</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">07</div><div style="font-size:16px; color:#1C2431;">每一輪的三種回饋</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">08</div><div style="font-size:16px; color:#1C2431;">主結果：全集 12.47%</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">09</div><div style="font-size:16px; color:#1C2431;">介面消融的 12 格</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">10</div><div style="font-size:16px; color:#1C2431;">一條軌跡的形狀</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">11</div><div style="font-size:16px; color:#1C2431;">失敗的組成</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">12</div><div style="font-size:16px; color:#1C2431;">解出與沒解出的兩條軌跡</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#2E7B4F;">13</div><div style="font-size:16px; color:#1C2431;">三條原則與五個方向</div></div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">來源：arxiv.org/abs/2405.15793 —— 本組為學習用重述，數字依 arXiv v3，指令與 prompt 為教學用精簡版。</div>
+</div></div>
+</section>
+<section class="page" id="p02">
+  <div class="label"><span class="n">02 / 13</span><span>shell 是給人用的介面</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">卡住的不是模型，是給人用的介面</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 1 節與表 1：同一個 <span style="white-space:nowrap">GPT-4 Turbo</span>，一邊直接操作 Linux shell，一邊經過專為 LM 設計的 ACI；在 Lite 的 300 題上，解題率差了一截</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ Shell-only：直接用 Linux shell</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ <span style="white-space:nowrap">SWE-agent</span>：經過 ACI</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:440px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:290px; top:200px; width:240px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">LM agent 下 bash 指令</div>
+  <div style="position:absolute; left:70px; top:320px; width:200px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">cat 印出整個檔案</div>
+  <div style="position:absolute; left:310px; top:320px; width:200px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">sed 改檔、重導向覆寫</div>
+  <div style="position:absolute; left:550px; top:320px; width:200px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">grep、find 找字</div>
+  <div style="position:absolute; left:70px; top:440px; width:200px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">灌滿 context</div>
+  <div style="position:absolute; left:310px; top:440px; width:200px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">改多行費力，改錯沒回饋</div>
+  <div style="position:absolute; left:550px; top:440px; width:200px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">結果一大串</div>
+  <div style="position:absolute; left:60px; top:506px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">shell 的動作空間細碎、又能任意設定：<br>沒有一個簡單的指令能改一小段檔案，改完也不告訴 agent 結果；<br>看檔與找字，一不小心就吐出一大串，佔掉 context。</div>
+
+  <div style="position:absolute; left:1070px; top:200px; width:240px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">同一個 LM agent</div>
+  <div style="position:absolute; left:990px; top:300px; width:400px; height:50px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:#FFFFFF;">ACI：少量好懂的指令 ＋ 精簡的回饋</div>
+  <div style="position:absolute; left:850px; top:420px; width:200px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">搜尋只回摘要</div>
+  <div style="position:absolute; left:1090px; top:420px; width:200px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">一次看 100 行</div>
+  <div style="position:absolute; left:1330px; top:420px; width:200px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#2B3340;">edit 先過 linter</div>
+  <div style="position:absolute; left:1320px; top:262px; font-size:13px; font-weight:500; color:#2E7B4F;">每一輪再下一個指令</div>
+  <div style="position:absolute; left:850px; top:480px; font-size:13px; font-weight:500; color:#2E7B4F;">每一輪都回報：剛才那個指令造成了什麼</div>
+  <div style="position:absolute; left:840px; top:506px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">ACI 夾在 LM 與電腦之間：只給幾個看檔、搜尋、改檔的指令，<br>用護欄擋下常見的錯誤；每一輪都給具體又簡潔的回饋，<br>讓 agent 知道現在的狀態。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#C8501F;">Lite 11.00%</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">只給 shell、附上示範時的解題率；<br>拿掉示範，只剩 7.33%。</div>
+    <div style="font-size:13px; color:#8A93A0;">表 1：<span style="white-space:nowrap">GPT-4 Turbo</span>，Lite 300 題；Shell-only 沒有在全集上跑。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:26px; font-weight:700; color:#2E7B4F;">Lite 18.00%</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">同一個模型換上 ACI，<br>比有示範的 Shell-only 相對多 64%（第 5 節）。</div>
+    <div style="font-size:13px; color:#8A93A0;">引言的「多 10.7 個百分點」，對得上沒有示範的 7.33%（整理者核對）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩邊用的是同一個 <span style="white-space:nowrap">GPT-4 Turbo</span>，差別只在介面；Shell-only 改編自 InterCode。左邊三個卡點與右邊三格是整理者依第 1 節與附錄 A.1 整理的。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+      <marker id="an-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M410 250L170 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M410 250L410 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M410 250L650 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M170 366L170 438" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c02)"></path>
+    <path d="M410 366L410 438" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c02)"></path>
+    <path d="M650 366L650 438" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c02)"></path>
+    <path d="M1190 250L1190 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1190 350V385H950V418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1190 350L1190 418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1190 350V385H1430V418" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1530 443H1552V225H1312" stroke="#2E7B4F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#an-c02)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p03">
+  <div class="label"><span class="n">03 / 13</span><span>四條設計原則</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">四條原則，都從看 agent 的軌跡得來</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2 節：LM 固定不動，只改介面；作者人工檢查 agent 的行為找出困難，再用網格搜尋挑設定，歸納出這四條原則</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">原則</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">它在說什麼</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;"><span style="white-space:nowrap">SWE-agent</span>&#160;怎麼做</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">第 2 節指到的證據</div>
+  </div>
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">① 動作簡單好懂</div><div style="font-size:13px; color:#8A93A0;">每一個自訂指令的共同原則</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>bash 的說明動輒幾十個選項；<br>選項少、說明短，才不必靠示範或微調</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>每個指令只有少數參數，<br>加一句說明文件</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="2.5" stroke-linejoin="round"><path d="M12 4l9 16H3z"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">第 3 節的指令；<br>沒有單獨的消融</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:306px; width:1480px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#2E7B4F;">② 動作精簡有效率</div><div style="font-size:13px; color:#8A93A0;">表 3 掉最多的兩格在這裡</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>導覽、編輯壓成越少動作越好，<br>一步就有實質進展</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>edit 一步換掉整段；<br>搜尋一次列出所有結果</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2E7B4F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">第 5.1 節：沒有 edit 10.3%、<br>逐筆搜尋 12.0%</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:402px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">③ 回饋有料但簡潔</div><div style="font-size:13px; color:#8A93A0;">給狀態，不給多餘的細節</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>回報目前環境的狀態，<br>與剛才那個動作的效果</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>改完自動顯示新的視窗；<br>沒有輸出也明說</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2E7B4F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">圖 3a、3b 與表 3</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:498px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1C2431;">④ 護欄擋住錯誤擴散</div><div style="font-size:13px; color:#8A93A0;">LM 和人一樣會犯錯</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>自動偵測錯誤，<br>讓 agent 早點發現、早點改</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>edit 內建 flake8，<br>語法錯就不套用</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:10px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2E7B4F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15px; color:#2B3340; line-height:1.5;">表 3：拿掉 linting，<br>18.0% 掉到 15.0%</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:630px; width:470px; height:176px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">LM 是一種新的使用者</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">看不懂圖形介面；讀進的每一段內容，<br>都要付記憶與計算的成本。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">分散注意力的 context 還會拉低表現（第 2 節）。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:630px; width:470px; height:176px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">兩種方法找設計</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">人工看軌跡找出卡點，<br>再用網格搜尋挑設定（附錄 B.1）。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">37 題開發集：<span style="white-space:nowrap">GPT-4 Turbo</span> 最好的設定是 15.1%。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:630px; width:470px; height:176px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">原則會反覆出現</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">作者說這幾條原則出現在動作、<br>回饋與工作流程的每一處。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">第 04 到 07 卡看每個元件怎麼落實。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：欄位是整理者依第 2 節整理的；「證據」一欄照第 2 節自己點名的圖表，原則 ① 只有設計上的說明，沒有單獨的實驗。</div>
+</div></div>
+</section>
+<section class="page" id="p04">
+  <div class="label"><span class="n">04 / 13</span><span>SWE-agent 的架構</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">一個 LM 加一層 ACI，就是 <span style="white-space:nowrap">SWE-agent</span></div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3 節：每一輪 LM 寫一段想法和一個指令，ACI 在 Linux shell 裡執行、把結果整理後回給它（ReAct 的做法），直到 agent 下 submit 為止</div>
+
+  <div style="position:absolute; left:60px; top:200px; width:220px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#1C2431;">issue ＋ 三則開頭訊息</div>
+  <div style="position:absolute; left:60px; top:320px; width:220px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">LM：想法 ＋ 一個指令</div>
+  <div style="position:absolute; left:60px; top:440px; width:220px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#1C2431;">submit：交出 patch</div>
+  <div style="position:absolute; left:60px; top:512px; width:220px; font-size:13px; color:#8A93A0; line-height:1.55; text-align:center;">每一輪都回到模型；<br>下了 submit 才停</div>
+
+  <div style="position:absolute; left:450px; top:196px; font-size:13px; font-weight:700; color:#2B3340;">行動：一個自訂指令，或一般的 bash</div>
+  <div style="position:absolute; left:450px; top:486px; font-size:13px; font-weight:700; color:#2B3340;">回饋：輸出 ＋ 目前開啟的檔案與目錄</div>
+
+  <div style="position:absolute; left:840px; top:150px; width:700px; height:400px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #D5DAE1; border-radius:14px;"></div>
+  <div style="position:absolute; left:870px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">ACI：專為 LM 設計的四個元件</div>
+  <div style="position:absolute; left:870px; top:214px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">SEARCH</div>
+  <div style="position:absolute; left:870px; top:236px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">find_file</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">search_file</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">search_dir</div>
+    <div style="padding:9px 16px; border:1.5px solid #B4D5C0; border-radius:999px; font-size:15px; color:#2E7B4F; background-color:#EEF6F0;">只回摘要，最多 50 筆</div>
+  </div>
+  <div style="position:absolute; left:870px; top:296px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">FILE VIEWER</div>
+  <div style="position:absolute; left:870px; top:318px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">open</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">goto</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">scroll_up · scroll_down</div>
+    <div style="padding:9px 16px; border:1.5px solid #B4D5C0; border-radius:999px; font-size:15px; color:#2E7B4F; background-color:#EEF6F0;">100 行的視窗</div>
+  </div>
+  <div style="position:absolute; left:870px; top:378px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">FILE EDITOR</div>
+  <div style="position:absolute; left:870px; top:400px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">edit n:m</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">create</div>
+    <div style="padding:9px 16px; border:1.5px solid #B4D5C0; border-radius:999px; font-size:15px; color:#2E7B4F; background-color:#EEF6F0;">flake8 擋下語法錯誤</div>
+  </div>
+  <div style="position:absolute; left:870px; top:460px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">CONTEXT</div>
+  <div style="position:absolute; left:870px; top:482px; display:flex; gap:10px;">
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">system · 示範 · instance</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">只留最近 5 個觀察</div>
+    <div style="padding:9px 16px; border:1px solid #D5DAE1; border-radius:999px; font-size:15px; color:#2B3340; background-color:#F7F8FA;">格式錯就請它重答</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; width:1480px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">底層：Docker 容器裡的 Linux shell（環境改編自 InterCode）—— 一般的 bash 指令也照樣能用</div>
+
+  <div style="position:absolute; left:60px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:18px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">一個設定檔定義整個 ACI</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">prompt 模板、指令檔、控制流程、環境變數，<br>都寫在同一個 .yaml 裡。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">反覆改設定檔，是提升表現的主要方法（附錄 A.3）。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:18px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#2E7B4F;">指令是一段 bash 或 Python</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">註解寫簽名、說明與參數，<br>執行時編進 system 模板的指令文件。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">跨指令的狀態用全域變數，例如 CURRENT_LINE。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:670px; width:470px; height:150px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:18px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">每一題留下兩樣東西</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">記錄所有互動的軌跡，<br>和把修改彙整成的 patch。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">patch 直接交給 <span style="white-space:nowrap">SWE-bench</span> 評分（附錄 A.2）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：面板的四組照第 3 節的元件、指令取自表 4；左欄與兩條曲線是整理者依第 3 節與圖 1 畫的，綠色 pill 是各元件的設計重點。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ags-c04" markerWidth="10" markerHeight="10" refX="2" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M10 0L0 5L10 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c04" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+    </defs>
+    <path d="M170 258L170 316" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c04)"></path>
+    <path d="M170 378L170 436" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ag-c04)"></path>
+    <path d="M280 334C520 334 620 226 836 226" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c04)"></path>
+    <path d="M838 470C620 470 520 366 284 366" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c04)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p05">
+  <div class="label"><span class="n">05 / 13</span><span>檢視器與搜尋</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">檢視器一次給 100 行，位置全標出來</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3 節、附錄 A.1：cat 整個印出來會灌滿 context，head、tail 又沒辦法在檔案裡移動；檢視器記住位置，每次只給一個附行號的視窗</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:440px; height:370px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:10px;"></div>
+  <div style="position:absolute; left:80px; top:164px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">ONE OBSERVATION</div>
+  <div style="position:absolute; left:80px; top:190px; width:400px; height:36px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 12px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#4B5866; white-space:nowrap;">[File: solvers/diophantine.py (3093 lines total)]</div>
+  <div style="position:absolute; left:80px; top:232px; width:400px; height:30px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; padding:0px 12px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">(400 lines above)</div>
+  <div style="position:absolute; left:80px; top:268px; width:400px; height:92px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; padding:8px 12px; display:flex; flex-direction:column; justify-content:center; gap:2px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#1C2431; white-space:nowrap;">
+    <div style="white-space:pre;">401:    elif total_degree == 3:</div>
+    <div style="white-space:pre;">402:        diop_type = "cubic_thue"</div>
+    <div style="color:#8A93A0;">…</div>
+    <div style="white-space:pre;">409:        return var, coeff, diop_type</div>
+  </div>
+  <div style="position:absolute; left:80px; top:366px; width:400px; height:30px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; padding:0px 12px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">(2684 lines below)</div>
+  <div style="position:absolute; left:80px; top:402px; width:400px; height:40px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #9AA3AE; border-radius:6px; padding:0px 12px; display:flex; align-items:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#1C2431; white-space:nowrap;">(Open file: …) (Current directory: …) bash-$</div>
+  <div style="position:absolute; left:80px; top:456px; width:400px; font-size:13px; color:#6B7380; line-height:1.5;">範例依圖 3a 精簡，綠色那塊是 100 行以內的視窗；<br>最後一行是每一輪都附上的提示列</div>
+
+  <div style="position:absolute; left:505px; top:291px; width:66px; text-align:center; font-size:12.5px; color:#8A93A0;">展開</div>
+
+  <div style="position:absolute; left:580px; top:150px; width:500px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:17px; font-weight:700; color:#FFFFFF;">展開：檢視器告訴 agent 的四件事</div>
+  <div style="position:absolute; left:580px; top:198px; width:500px; height:322px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:14px 22px; display:flex; flex-direction:column; justify-content:center; gap:16px;">
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">1</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">路徑與總行數</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">FILE</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">開的是哪個檔案、一共幾行，判斷自己在哪一段</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">2</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">上下各省略幾行</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">ABOVE / BELOW</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">視窗外還有多少，決定往下捲還是直接 goto</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">3</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#2E7B4F;">附行號的視窗</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">WINDOW</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">最多 100 行，每行附行號，下 edit 時直接拿來用</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">4</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">開啟的檔案與目錄</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">PROMPT</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">每一輪附在觀察的最後，提醒目前的狀態</div></div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:1140px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">WRITERS</div>
+  <div style="position:absolute; left:1140px; top:178px; width:400px; height:76px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#FFFFFF;">open &lt;path&gt; [&lt;line&gt;]</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">打開檔案；給了行號，就直接把視窗移到那一行</div></div>
+  <div style="position:absolute; left:1140px; top:280px; width:400px; height:76px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">goto · scroll_up · scroll_down</div><div style="font-size:12.5px; color:#6B7380;">跳到指定的行，或把視窗上下移動 100 行</div></div>
+  <div style="position:absolute; left:1140px; top:382px; width:400px; height:76px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#2E7B4F;">edit n:m</div><div style="font-size:12.5px; color:#6B7380;">改完自動以修改的地方為中心，重新顯示視窗</div></div>
+  <div style="position:absolute; left:1140px; top:474px; width:400px; font-size:13px; color:#6B7380; line-height:1.5;">三個入口改的都是同一個 CURRENT_LINE；<br>agent 不必自己算行號（附錄 A.1、A.3）</div>
+
+  <div style="position:absolute; left:60px; top:570px; width:470px; height:182px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">一次 100 行</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">30 行掉到 14.3%，整個檔案掉到 12.7%；<br>預設的 100 行是 18.0%（表 3）。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者：內容太少或太多，都會拉低表現。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:570px; width:470px; height:182px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">不用自己算行號</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">用 sed 看下一段，得自己重算起訖行號；<br>檢視器記住位置，一個 scroll_down 就好。</div>
+    <div style="font-size:13px; color:#8A93A0;">指令與輸出互相配合，減少模型的算術。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:570px; width:470px; height:182px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">搜尋最多 50 筆</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">三個搜尋指令只回一份摘要；<br>超過 50 筆就不列，請它換更具體的查詢。</div>
+    <div style="font-size:13px; color:#8A93A0;">代價：每改一次查詢，就多一次 LM 呼叫。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：觀察的範例照圖 3a 精簡；右側三個寫入者依附錄 A.3（CURRENT_LINE 會被 open、goto、scroll、edit 改動），版面是整理者的畫法。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+      <marker id="an-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M482 314H576" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M1138 216H1084" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c05)"></path>
+    <path d="M1138 318H1084" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M1138 420H1084" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p06">
+  <div class="label"><span class="n">06 / 13</span><span>edit 與 linter 的護欄</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">語法錯的編輯，不會寫進檔案</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3 節、附錄 A.1：edit 一步換掉整段，套用之後跑 flake8；沒有錯誤才保留，有錯就退回，再把三段訊息交給 agent 看</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　看視窗</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">open 或 goto，<br>拿到附行號的 100 行</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　下 edit n:m</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">給起訖行號與新內容</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">一個動作改多行</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　套用到檔案</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">先寫進 codebase，<br>再檢查目前開啟的檔案</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#C8501F;">Step 4　flake8 檢查</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">未定義名稱、縮排、語法</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">有錯就退回</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　保留並顯示</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">以修改的地方為中心，<br>顯示更新後的視窗</div>
+  </div>
+
+  <div style="position:absolute; left:500px; top:300px; width:540px; text-align:center; font-size:13px; font-weight:500; color:#C8501F; line-height:1.5;">有錯：退回修改，給它看錯誤、改後的樣子、原本的樣子，請它重下</div>
+
+  <div style="position:absolute; left:60px; top:344px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#FFFFFF; background-color:#1F2A3A;">flake8</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">只查這幾類：F821、F822 未定義的名稱，F831 重複的參數，E111 到 E113 縮排，E999 語法錯誤，E902 讀不到檔案</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:440px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:462px; font-size:20px; font-weight:700; color:#1C2431;">錯誤訊息與護欄的三件事</div>
+
+  <div style="position:absolute; left:60px; top:504px; width:470px; height:212px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">三段訊息，缺一段都不行</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">沒有錯誤類型，agent 會誤判錯在哪；<br>沒有改後的片段，它常重下同一個指令；<br>沒有原本的片段，它得回頭翻舊的輪次。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者開發時拿掉過其中一兩段比較（附錄 A.1）。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:504px; width:470px; height:212px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">shell 改檔要算術，edit 不用</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">sed 要一長串參數，改多行得拆成好幾次，<br>改完還不告訴你結果；edit 用檢視器的行號，<br>找到、換掉，一個動作完成。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">拿掉 edit 掉到 10.3%，是表 3 掉最多的一格。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:504px; width:470px; height:212px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">護欄也有代價</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">想刪掉一個參數，得先刪掉所有的引用，<br>或在同一個動作裡一起刪；作者說要權衡<br>擋掉的錯誤，和被妨礙的工作方式。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">拿掉 linting：18.0% 掉到 15.0%（表 3）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：五格與回頭的虛線是整理者依附錄 A.1 畫的流程；錯誤碼照附錄 A.1 的 flake8 指令，訊息的三段照圖 11。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ao-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+    </defs>
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M1057 262V290H481V262" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c06)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p07">
+  <div class="label"><span class="n">07 / 13</span><span>每一輪的三種回饋</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">每一輪的回饋，依結果套三種模板</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">附錄 C、圖 26：開頭一次給齊 system、示範、instance 三則訊息；之後每一輪 LM 回應、動作執行，再依結果決定回給它什麼</div>
+
+  <div style="position:absolute; left:60px; top:286px; width:230px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:17px; font-weight:700; color:#FFFFFF; line-height:1.35;"><div>LM 回應，<br>動作在環境裡執行</div></div>
+  <div style="position:absolute; left:400px; top:276px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:17px; font-weight:700; color:#1C2431; line-height:1.35;"><div>這一輪的結果<br>是哪一種？</div></div>
+
+  <div style="position:absolute; left:790px; top:172px; font-size:13px; font-weight:700; color:#2E7B4F;">有輸出</div>
+  <div style="position:absolute; left:790px; top:292px; font-size:13px; font-weight:700; color:#2E7B4F;">沒有輸出</div>
+  <div style="position:absolute; left:790px; top:412px; font-size:13px; font-weight:700; color:#C8501F;">解析不出來</div>
+
+  <div style="position:absolute; left:940px; top:150px; width:600px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">Next Step：輸出 ＋ 提示列</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">指令的標準輸出，後面加上目前開啟的檔案與工作目錄，<br>再請它下一個指令</div>
+  </div>
+  <div style="position:absolute; left:940px; top:270px; width:600px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">No Output：明說執行成功</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">例如 rm、touch；只給空白會讓 agent 多下指令去確認，<br>所以直接說「成功了、沒有輸出」</div>
+  </div>
+  <div style="position:absolute; left:940px; top:390px; width:600px; height:96px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#C8501F;">Format Error：請它重新回應</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">回應不是一段想法加一個指令；<br>附上正確的格式範例，請它不要再犯同樣的錯</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:520px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">每一輪</div>
+    <div style="font-size:15px; color:#2B3340;">三種都回到下一輪；結束條件是 submit、成本超過上限、連續格式錯誤（圖 26 寫 2 次以上，附錄 C 正文寫 3 次）</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:600px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:624px; font-size:20px; font-weight:700; color:#1C2431;">歷史怎麼管</div>
+  <div style="position:absolute; left:60px; top:666px; width:470px; height:160px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">開頭的三則訊息</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">system 從不刪、也不折疊；示範是一條解出的軌跡；<br>instance 放 issue 與從失敗整理出的提示。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">拿掉示範：18.0% 降到 16.3%（表 3）。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:666px; width:470px; height:160px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#2E7B4F;">只留最近 5 個觀察</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">更早的觀察只剩一行「舊的輸出已省略」，<br>騰出空間，也不再看到過時的檔案內容。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">保留完整的歷史：降到 15.0%（表 3）。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:666px; width:470px; height:160px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:20px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#2E7B4F;">格式錯的回應會被清掉</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">下一次回應正確之後，錯的那次和錯誤訊息<br>從歷史裡刪掉，留下的都是正確的示範。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">全部執行只有 2 次因格式錯誤提早結束（表 13）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三個出口照圖 26；起點把「LM 推論」與「在環境執行」併成一格，是整理者的畫法。格式錯誤的連續次數，圖 26 與附錄 C 正文寫法不同，兩邊照錄。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+      <marker id="ao-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+    </defs>
+    <path d="M290 318L398 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M700 318H770" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M770 318V198H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c07)"></path>
+    <path d="M770 318H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c07)"></path>
+    <path d="M770 318V438H938" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c07)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p08">
+  <div class="label"><span class="n">08 / 13</span><span>主結果：全集 12.47%</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">全集解出 12.47%，前一個最佳是 3.8%</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 1：% Resolved；全集 2,294 題、Lite 300 題。同一條量尺上，比不和環境互動的 RAG、只給 shell 的 agent，和 <span style="white-space:nowrap">SWE-agent</span></div>
+
+  <div style="position:absolute; left:60px; top:146px; display:flex; gap:24px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#6B7380;"></div><span>RAG：檢索相關檔案，一次寫出 patch</span></div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#C8501F;"></div><span>Shell-only：只給 shell</span></div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#E6B49A;"></div><span>Shell-only 拿掉示範</span></div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div><span style="white-space:nowrap">SWE-agent</span></div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div><span>實心＝<span style="white-space:nowrap">GPT-4 Turbo</span></span></div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div><span>空心＝Claude 3 Opus</span></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:246px; font-size:18px; font-weight:700; color:#1C2431;">全集</div>
+  <div style="position:absolute; left:60px; top:272px; font-size:12px; color:#8A93A0;">2,294 題</div>
+  <div style="position:absolute; left:180px; top:262px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:257px; top:216px; white-space:nowrap; font-size:13px; font-weight:700; color:#6B7380;">RAG：不和環境互動，直接寫 patch</div>
+  <div style="position:absolute; left:861px; top:216px; white-space:nowrap; font-size:13px; font-weight:700; color:#2E7B4F;">SWE-agent：經過 ACI 互動</div>
+  <div style="position:absolute; left:257px; top:253px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:282px; top:252px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">1.31</div>
+  <div style="position:absolute; left:421px; top:253px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #6B7380; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:446px; top:252px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">3.79</div>
+  <div style="position:absolute; left:861px; top:253px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #2E7B4F; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:886px; top:252px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">10.46</div>
+  <div style="position:absolute; left:994px; top:253px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1019px; top:252px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">12.47</div>
+
+  <div style="position:absolute; left:60px; top:310px; font-size:14px; font-weight:700; color:#1C2431;">% Resolved</div>
+  <div style="position:absolute; left:180px; top:300px; width:1320px; height:40px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:311px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0</div>
+  <div style="position:absolute; left:500px; top:311px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">5</div>
+  <div style="position:absolute; left:830px; top:311px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">10</div>
+  <div style="position:absolute; left:1160px; top:311px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">15</div>
+  <div style="position:absolute; left:1462px; top:311px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">20</div>
+
+  <div style="position:absolute; left:60px; top:384px; font-size:18px; font-weight:700; color:#1C2431;">Lite</div>
+  <div style="position:absolute; left:60px; top:410px; font-size:12px; color:#8A93A0;">300 題</div>
+  <div style="position:absolute; left:180px; top:400px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:347px; top:391px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:372px; top:390px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">2.67</div>
+  <div style="position:absolute; left:457px; top:391px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #6B7380; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:482px; top:390px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">4.33</div>
+  <div style="position:absolute; left:655px; top:391px; width:18px; height:18px; border-radius:50%; background-color:#E6B49A;"></div>
+  <div style="position:absolute; left:680px; top:390px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">7.33</div>
+  <div style="position:absolute; left:897px; top:391px; width:18px; height:18px; border-radius:50%; background-color:#C8501F;"></div>
+  <div style="position:absolute; left:922px; top:390px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#C8501F;">11.00</div>
+  <div style="position:absolute; left:1029px; top:391px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #2E7B4F; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:1054px; top:390px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">13.00</div>
+  <div style="position:absolute; left:1359px; top:391px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1384px; top:390px; white-space:nowrap; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">18.00</div>
+  <div style="position:absolute; left:347px; top:424px; font-size:13px; font-weight:700; color:#6B7380;">RAG</div>
+  <div style="position:absolute; left:655px; top:424px; white-space:nowrap; font-size:13px; font-weight:700; color:#C8501F;">Shell-only（只跑 <span style="white-space:nowrap">GPT-4 Turbo</span>）</div>
+  <div style="position:absolute; left:1029px; top:424px; white-space:nowrap; font-size:13px; font-weight:700; color:#2E7B4F;">SWE-agent</div>
+  <div style="position:absolute; left:906px; top:452px; width:462px; height:0px; border-top:1.5px dashed #2E7B4F;"></div>
+  <div style="position:absolute; left:1040px; top:460px; white-space:nowrap; font-size:13px; color:#2E7B4F;">只換介面：11.00 → 18.00</div>
+
+  <div style="position:absolute; left:60px; top:500px; width:1480px; font-size:13px; color:#6B7380; line-height:1.6;">全集沒有 Shell-only 的結果；前一個最佳是 RAG 加 Claude 3 Opus 的 3.79%，引言寫成 3.8%。<br>Lite 上同一個 <span style="white-space:nowrap">GPT-4 Turbo</span> 從 Shell-only 的 11.00% 到 <span style="white-space:nowrap">SWE-agent</span> 的 18.00%，差別只在介面；換成 Claude 3 Opus，<span style="white-space:nowrap">SWE-agent</span> 在全集是 10.46%、Lite 是 13.00%。</div>
+
+  <div style="position:absolute; left:60px; top:574px; width:470px; height:214px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">貴 8 到 13 倍</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">Lite 上每題平均 1.67 美元，RAG 是 0.13 美元，<br>換來 6.7 倍的解題率（18.00 對 2.67）；<br>Claude 3 Opus 那組約 8.7 倍的成本、3 倍的解題率。</div>
+    <div style="font-size:13px; color:#8A93A0;">成本只算解出的題目；倍數是整理者核對的。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:574px; width:470px; height:214px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">HumanEvalFix 87.7%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">Python、JS、Java 是 87.7、89.7、87.9，<br>三種語言都是表 2 的最高分；設定檔和<br><span style="white-space:nowrap">SWE-bench</span> 一樣，只換成該語言的示範。</div>
+    <div style="font-size:13px; color:#8A93A0;">第 5 節正文寫 88.3%，表 2 裡沒有這個數。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:574px; width:470px; height:214px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">跑 6 次：平均 17.94%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">每次在 17.33% 到 18.67% 之間；<br>6 次裡解出過一次就算，是 32.67%。<br>平均穩定，個別題目每次卻可能差很多。</div>
+    <div style="font-size:13px; color:#8A93A0;">表 10；pass@6 比 pass@1 多約 14.7 個百分點（整理者算的）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：點的位置照表 1 的數字，量尺 0 到 20%；「6.7 倍」「8 到 13 倍」是作者的說法，整理者拿表 1 核對過（18.00 ÷ 2.67，1.67 ÷ 0.13 與 2.18 ÷ 0.25）。</div>
+</div></div>
+</section>
+<section class="page" id="p09">
+  <div class="label"><span class="n">09 / 13</span><span>介面消融的 12 格</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">照人設計的搜尋，比不給搜尋還差</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 3：Lite 300 題、<span style="white-space:nowrap">GPT-4 Turbo</span>，每一組只換一個元件；預設設定是 18.0%，其他格標出和預設的差距</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:1480px; height:46px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">換掉的元件</div>
+    <div style="display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">預設（18.0%）</div>
+    <div style="grid-column:span 2; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">換掉之後</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:196px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div><div style="font-size:18px; font-weight:700; color:#1C2431;">編輯器</div><div style="font-size:13px; color:#8A93A0;">改檔的方式</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="padding:10px 20px; border-radius:8px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; gap:14px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">edit 加 linting</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:22px; font-weight:600; color:#2E7B4F;">18.0</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="padding:10px 20px; border-radius:8px; background-color:#F7F8FA; border:1px solid #D5DAE1; display:flex; align-items:center; gap:14px;"><div style="font-size:15px; color:#2B3340;">edit 不加 linting</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:22px; font-weight:600; color:#2B3340;">15.0</div><div style="font-size:13px; font-weight:700; color:#C8501F;">↓3.0</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="padding:10px 20px; border-radius:8px; background-color:#F7F8FA; border:1px solid #D5DAE1; display:flex; align-items:center; gap:14px;"><div style="font-size:15px; color:#2B3340;">沒有 edit</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:22px; font-weight:600; color:#2B3340;">10.3</div><div style="font-size:13px; font-weight:700; color:#C8501F;">↓7.7</div></div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:292px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div><div style="font-size:18px; font-weight:700; color:#1C2431;">搜尋</div><div style="font-size:13px; color:#8A93A0;">結果怎麼呈現</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="padding:10px 20px; border-radius:8px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; gap:14px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">摘要式</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:22px; font-weight:600; color:#2E7B4F;">18.0</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="padding:10px 20px; border-radius:8px; background-color:#FCF1EA; border:1.5px solid #E6B49A; display:flex; align-items:center; gap:14px;"><div style="font-size:15px; font-weight:700; color:#C8501F;">逐筆式</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:22px; font-weight:600; color:#C8501F;">12.0</div><div style="font-size:13px; font-weight:700; color:#C8501F;">↓6.0</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="padding:10px 20px; border-radius:8px; background-color:#F7F8FA; border:1px solid #D5DAE1; display:flex; align-items:center; gap:14px;"><div style="font-size:15px; color:#2B3340;">不給搜尋工具</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:22px; font-weight:600; color:#2B3340;">15.7</div><div style="font-size:13px; font-weight:700; color:#C8501F;">↓2.3</div></div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:388px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div><div style="font-size:18px; font-weight:700; color:#1C2431;">檢視器</div><div style="font-size:13px; color:#8A93A0;">一次顯示幾行</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="padding:10px 20px; border-radius:8px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; gap:14px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">100 行</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:22px; font-weight:600; color:#2E7B4F;">18.0</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="padding:10px 20px; border-radius:8px; background-color:#F7F8FA; border:1px solid #D5DAE1; display:flex; align-items:center; gap:14px;"><div style="font-size:15px; color:#2B3340;">30 行</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:22px; font-weight:600; color:#2B3340;">14.3</div><div style="font-size:13px; font-weight:700; color:#C8501F;">↓3.7</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="padding:10px 20px; border-radius:8px; background-color:#F7F8FA; border:1px solid #D5DAE1; display:flex; align-items:center; gap:14px;"><div style="font-size:15px; color:#2B3340;">整個檔案</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:22px; font-weight:600; color:#2B3340;">12.7</div><div style="font-size:13px; font-weight:700; color:#C8501F;">↓5.3</div></div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:484px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center;"><div><div style="font-size:18px; font-weight:700; color:#1C2431;">上下文</div><div style="font-size:13px; color:#8A93A0;">歷史留多少</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="padding:10px 20px; border-radius:8px; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:flex; align-items:center; gap:14px;"><div style="font-size:15px; font-weight:700; color:#2E7B4F;">最近 5 個觀察</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:22px; font-weight:600; color:#2E7B4F;">18.0</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="padding:10px 20px; border-radius:8px; background-color:#F7F8FA; border:1px solid #D5DAE1; display:flex; align-items:center; gap:14px;"><div style="font-size:15px; color:#2B3340;">完整歷史</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:22px; font-weight:600; color:#2B3340;">15.0</div><div style="font-size:13px; font-weight:700; color:#C8501F;">↓3.0</div></div></div>
+    <div style="display:flex; align-items:center; justify-content:center;"><div style="padding:10px 20px; border-radius:8px; background-color:#F7F8FA; border:1px solid #D5DAE1; display:flex; align-items:center; gap:14px;"><div style="font-size:15px; color:#2B3340;">沒有示範</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:22px; font-weight:600; color:#2B3340;">16.3</div><div style="font-size:13px; font-weight:700; color:#C8501F;">↓1.7</div></div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:590px; width:1480px; font-size:13px; color:#8A93A0;">綠底是預設，四組都是同一個 18.0%；橘底是整理者標的一格：照 Vim、VSCode 的習慣逐筆看的搜尋，比完全不給搜尋工具的 15.7% 還低。</div>
+
+  <div style="position:absolute; left:60px; top:626px; width:470px; height:182px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">逐筆看，看到預算用完</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">逐筆式一次只顯示一筆，agent 會一直按 next，<br>把每一筆都看過，耗光預算或 context。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">摘要式一次列出全部，太多就請它縮小範圍（圖 5）。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:626px; width:470px; height:182px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">一步改檔最關鍵</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">沒有 edit，只能重導向覆寫或用 sed，<br>又沒有回饋：10.3%，是全表最低。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">只拿掉 linting，也掉到 15.0%（圖 6）。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:626px; width:470px; height:182px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">太少太多都不好</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">視窗 30 行 14.3%、整個檔案 12.7%；<br>完整歷史 15.0%、拿掉示範 16.3%。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者：內容太少或太多，都會拉低表現。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：數字照表 3，Lite 300 題、<span style="white-space:nowrap">GPT-4 Turbo</span>；每一組只換一個元件，其他維持預設。格子的配色與每一列下面的說明是整理者加的。</div>
+</div></div>
+</section>
+<section class="page" id="p10">
+  <div class="label"><span class="n">10 / 13</span><span>一條軌跡的形狀</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">前幾輪找問題，之後改完就跑</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 7、表 8：<span style="white-space:nowrap">GPT-4 Turbo</span> 在全集解出的 286 條軌跡，每一輪用了哪些指令；上面兩列是整理者依正文畫的階段，下面是沿著輪次的五個時點</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.1em; color:#8A93A0;">RESOLVED TRAJECTORIES · FULL SET</div>
+  <div style="position:absolute; left:60px; top:198px; font-size:13px; font-weight:700; color:#6B7380;">在做什麼</div>
+  <div style="position:absolute; left:60px; top:244px; font-size:13px; font-weight:700; color:#6B7380;">怎麼結束</div>
+  <div style="position:absolute; left:174px; top:190px; width:102px; height:36px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#1C2431;">重現或定位</div>
+  <div style="position:absolute; left:310px; top:190px; width:884px; height:36px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">改完就跑：edit 與 python 輪流出現，第 5 到 31 輪最常見的指令都是 edit</div>
+  <div style="position:absolute; left:480px; top:236px; width:340px; height:36px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#FFFFFF;">交卷集中：第 10 到 20 輪</div>
+  <div style="position:absolute; left:1160px; top:236px; width:340px; height:36px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#C8501F;">exit_cost：4 美元用完</div>
+
+  <div style="position:absolute; left:170px; top:282px; width:8px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">1</div>
+  <div style="position:absolute; left:472px; top:282px; width:16px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">10</div>
+  <div style="position:absolute; left:812px; top:282px; width:16px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">20</div>
+  <div style="position:absolute; left:1152px; top:282px; width:16px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">30</div>
+  <div style="position:absolute; left:1492px; top:282px; width:16px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">40</div>
+  <div style="position:absolute; left:60px; top:302px; font-size:13px; color:#8A93A0;">輪次</div>
+
+  <div style="position:absolute; left:128px; top:350px; width:160px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#1C2431;">TURN 1–3</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center;">先重現：create、<br>edit、python</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">表 8：156 次</div>
+  </div>
+  <div style="position:absolute; left:298px; top:350px; width:160px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#1C2431;">TURN 5+</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center;">edit 與 python<br>輪流出現</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">穿插搜尋與捲動</div>
+  </div>
+  <div style="position:absolute; left:468px; top:350px; width:160px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#1C2431;">TURN 12</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center;">解出的軌跡<br>中位數 12 輪</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">75% 在 18 輪內</div>
+  </div>
+  <div style="position:absolute; left:740px; top:350px; width:160px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#1C2431;">TURN 20</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center;">原本的解法<br>走不通了</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">agent 仍在原地改</div>
+  </div>
+  <div style="position:absolute; left:1250px; top:350px; width:160px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#C8501F;">TURN 30–40</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center;">exit_cost<br>集中出現</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">對應 4 美元的上限</div>
+  </div>
+  <div style="position:absolute; left:940px; top:356px; width:280px; font-size:13px; color:#6B7380; line-height:1.6;">圖 7 的長條沒有印數字；<br>時點的數字取自表 8 與附錄 B.3 的正文。</div>
+
+  <div style="position:absolute; left:60px; top:506px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F;">中位數 12 輪就交卷</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;"><span style="white-space:nowrap">GPT-4 Turbo</span> 在全集解出的軌跡，<br>平均 14.71 輪，75% 在 18 輪內完成；<br>Claude 3 Opus 在 Lite 是中位數 13 輪。</div>
+    <div style="font-size:13px; color:#8A93A0;">附錄 B.3.1、圖 14。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:506px; width:470px; height:200px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#C8501F;">解不出的，拖到預算用完</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">解出的：成本中位數 1.21 美元、12 步；<br>沒解出的：平均 2.52 美元、21 步。<br>解出的 93.0% 在用完預算前交卷，全部只有 69.0%。</div>
+    <div style="font-size:13px; color:#8A93A0;">原文一邊用中位數、一邊用平均，照錄。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:506px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">後面的輪次用不上</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">前 10 到 20 輪的做法走不通時，<br>agent 很少換方向，多半繼續在原地修改；<br>作者推測調高預算，不太會有幫助。</div>
+    <div style="font-size:13px; color:#8A93A0;">附錄 B.3.2 與第 5.2 節。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩列區段的起訖是整理者依第 5.2 節與附錄 B.3 的文字畫的；正文提到的「表 15」論文裡沒有，這裡用的是圖 15 與正文的數字。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M140 316H1500" stroke="#D5DAE1" stroke-width="2"></path>
+    <circle cx="208" cy="316" r="9" fill="#9AA3AE" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="378" cy="316" r="9" fill="#2E7B4F" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="548" cy="316" r="9" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="820" cy="316" r="9" fill="#9AA3AE" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="1330" cy="316" r="9" fill="#C8501F" stroke="#FFFFFF" stroke-width="3"></circle>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p11">
+  <div class="label"><span class="n">11 / 13</span><span>失敗的組成</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">解不出的題，一半是修法本身不對</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 8：Lite 上 <span style="white-space:nowrap">GPT-4 Turbo</span> 沒解出的 248 條軌跡，由 GPT-4o 依表 9 的類別分類，和作者人工標的 15 條有 87% 一致；下面兩條是編輯改成功的機會</div>
+
+  <div style="position:absolute; left:60px; top:140px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#C8501F;"></div>修法不對</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#FCF1EA; border:1px solid #E6B49A; box-sizing:border-box;"></div>改壞救不回、編輯沒成功</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div>其他類別</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#EEF6F0; border:1px solid #B4D5C0; box-sizing:border-box;"></div>最終改成功</div>
+    <div style="color:#8A93A0;">條長照百分比等比例</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:206px; width:116px; display:flex; flex-direction:column; gap:1px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">沒解出的</div><div style="font-size:15px; font-weight:700; color:#1C2431;">248 條</div><div style="font-size:12px; color:#8A93A0;">圖 8 的八類</div></div>
+  <div style="position:absolute; left:180px; top:180px; white-space:nowrap; font-size:12px; font-weight:700; color:#C8501F;">修法不對：52.0%（39.9＋12.1）</div>
+  <div style="position:absolute; left:869px; top:180px; white-space:nowrap; font-size:12px; font-weight:700; color:#C8501F;">改壞救不回</div>
+  <div style="position:absolute; left:1178px; top:180px; white-space:nowrap; font-size:12px; font-weight:700; color:#6B7380;">其餘五類：24.5%</div>
+  <div style="position:absolute; left:180px; top:202px; width:527px; height:56px; box-sizing:border-box; background-color:#C8501F; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; white-space:nowrap; font-size:14px; font-weight:700; color:#FFFFFF;">錯誤的實作 39.9</div>
+  <div style="position:absolute; left:707px; top:202px; width:160px; height:56px; box-sizing:border-box; background-color:#E6B49A; border-left:1.5px solid #FFFFFF; display:flex; align-items:center; justify-content:center; white-space:nowrap; font-size:14px; font-weight:700; color:#1C2431;">過度特定 12.1</div>
+  <div style="position:absolute; left:867px; top:202px; width:309px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; display:flex; align-items:center; justify-content:center; white-space:nowrap; font-size:14px; font-weight:700; color:#C8501F;">改壞救不回 23.4</div>
+  <div style="position:absolute; left:1176px; top:202px; width:170px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; display:flex; align-items:center; justify-content:center; white-space:nowrap; font-size:13px; font-weight:700; color:#4B5866;">找不到位置 12.9</div>
+  <div style="position:absolute; left:1346px; top:202px; width:32px; height:56px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-left:none;"></div>
+  <div style="position:absolute; left:1378px; top:202px; width:63px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-left:none;"></div>
+  <div style="position:absolute; left:1441px; top:202px; width:32px; height:56px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #D5DAE1; border-left:none;"></div>
+  <div style="position:absolute; left:1473px; top:202px; width:27px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-left:none; border-radius:0px 6px 6px 0px;"></div>
+  <div style="position:absolute; left:180px; top:268px; width:1320px; text-align:right; font-size:13px; color:#8A93A0;">最右邊四格太窄沒標字，依序是：找不到相關檔案 2.4、太早放棄 4.8、沒能重現 2.4、預算用完 2.0</div>
+
+  <div style="position:absolute; left:60px; top:318px; width:116px; display:flex; flex-direction:column; gap:1px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">任何一次</div><div style="font-size:15px; font-weight:700; color:#1C2431;">嘗試編輯</div></div>
+  <div style="position:absolute; left:180px; top:318px; width:1195px; height:44px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; white-space:nowrap; font-size:14px; font-weight:700; color:#2E7B4F;">最終改成功 90.5%</div>
+  <div style="position:absolute; left:1375px; top:318px; width:125px; height:44px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-left:none; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; white-space:nowrap; font-size:13px; font-weight:700; color:#C8501F;">9.5</div>
+  <div style="position:absolute; left:60px; top:380px; width:116px; display:flex; flex-direction:column; gap:1px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">已經失敗</div><div style="font-size:15px; font-weight:700; color:#1C2431;">一次之後</div></div>
+  <div style="position:absolute; left:180px; top:380px; width:755px; height:44px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px 0px 0px 6px; display:flex; align-items:center; justify-content:center; white-space:nowrap; font-size:14px; font-weight:700; color:#2E7B4F;">最終改成功 57.2%</div>
+  <div style="position:absolute; left:935px; top:380px; width:565px; height:44px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-left:none; border-radius:0px 6px 6px 0px; display:flex; align-items:center; justify-content:center; white-space:nowrap; font-size:14px; font-weight:700; color:#C8501F;">再也沒恢復 42.8%</div>
+  <div style="position:absolute; left:180px; top:432px; font-size:13px; color:#8A93A0;">圖 20 沒有印數字，90.5% 與 57.2% 取自正文；9.5% 是整理者算的。連續失敗越多次，恢復的機會越低。</div>
+
+  <div style="position:absolute; left:60px; top:470px; width:1480px; height:56px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">編輯常失敗</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">全集 2,294 題裡，1,185 條軌跡（51.7%）至少有一次失敗的編輯；每條的中位數是 3 次，最多 33 次（附錄 B.3.3）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:556px; width:470px; height:212px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">修法不對：52.0%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">錯誤的實作 39.9%、過度特定 12.1%：<br>改在合理的地方，功能卻沒處理好 issue，<br>或只解了特例。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者：解法常常沒解到問題，或不夠一般。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:556px; width:470px; height:212px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">改壞救不回：23.4%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">陷入編輯迴圈，一再改壞；<br>全部題目裡，810 次恢復對 555 次沒恢復，<br>沒恢復的平均已連續失敗 5.59 次。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">恢復：連續失敗之後，緊接一次成功的編輯。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:556px; width:470px; height:212px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">預算用完只有 2.0%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">「方向對、只是時間不夠」的很少；<br>找不到修改的位置，反而有 12.9%。<br>其餘五類合計 24.5%，作者寫「不到 25%」。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">加總是整理者算的，八類合計 99.9。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：長條照圖 8 印出的百分比重畫；類別名稱圖 8 與表 9 略有不同，表 9 的「其他」不在圖上。分組與下面兩條的配置是整理者的畫法。</div>
+</div></div>
+</section>
+<section class="page" id="p12">
+  <div class="label"><span class="n">12 / 13</span><span>解出與沒解出的兩條軌跡</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">解出的先定位再改，沒解出的一路往下捲</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">附錄 D（正文沒有引用）：Lite 上 <span style="white-space:nowrap">GPT-4 Turbo</span> 的兩條軌跡，左邊解出、右邊沒解出；一列一步，指令照原軌跡，說明是精簡改寫</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.08em; color:#8A93A0;">psf/requests-2317</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#2E7B4F;">✓ 解出：先定位，再改，再重現確認</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.08em; color:#8A93A0;">sympy/sympy-21614</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#C8501F;">✗ 沒解出：找到定義之後，一路往下捲</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:440px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:218px; width:700px; height:38px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; padding:0px 16px; font-size:14px; font-weight:700; color:#1C2431;">issue：bytes 的 method 被轉成字面字串 "b'GET'"，請求回 404</div>
+  <div style="position:absolute; left:60px; top:266px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">find</div><div style="font-size:14px; color:#2B3340;">find_file "sessions.py" → 2 個，build 目錄那個是建置產物</div></div>
+  <div style="position:absolute; left:60px; top:304px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">open</div><div style="font-size:14px; color:#2B3340;">open requests/sessions.py（671 行）</div></div>
+  <div style="position:absolute; left:60px; top:342px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">search</div><div style="font-size:14px; color:#2B3340;">search_file "builtin_str" → 第 16 行與第 428 行</div></div>
+  <div style="position:absolute; left:60px; top:380px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">goto</div><div style="font-size:14px; color:#2B3340;">goto 428 → 看到 method = builtin_str(method)</div></div>
+  <div style="position:absolute; left:60px; top:418px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">edit</div><div style="font-size:14px; color:#1C2431;">edit 428:428 → bytes 先解碼成 ASCII，再轉成字串</div></div>
+  <div style="position:absolute; left:60px; top:456px; width:700px; height:32px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">verify</div><div style="font-size:14px; color:#1C2431;">create 重現腳本 → edit 寫進去 → python → 回應 200</div></div>
+  <div style="position:absolute; left:60px; top:494px; width:700px; height:32px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:rgba(255,255,255,0.6);">submit</div><div style="font-size:14px; color:#FFFFFF;">rm 重現腳本 → submit　✓ 通過這一題的單元測試</div></div>
+  <div style="position:absolute; left:60px; top:540px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">10 個動作：定位 4 步、修改 1 步、寫重現並執行 3 步、收尾 2 步（整理者數的）。</div>
+
+  <div style="position:absolute; left:840px; top:218px; width:700px; height:38px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; padding:0px 16px; font-size:14px; font-weight:700; color:#1C2431;">issue：印出 Derivative 的 kind 屬性，得到 UndefinedKind</div>
+  <div style="position:absolute; left:840px; top:266px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">repro</div><div style="font-size:14px; color:#2B3340;">create、edit、python → 重現出 UndefinedKind</div></div>
+  <div style="position:absolute; left:840px; top:304px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">find</div><div style="font-size:14px; color:#2B3340;">find_file "derivative.py" → 找不到</div></div>
+  <div style="position:absolute; left:840px; top:342px; width:700px; height:32px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">search</div><div style="font-size:14px; color:#1C2431;">search_dir "Derivative" → 超過 182 個檔案，請縮小範圍</div></div>
+  <div style="position:absolute; left:840px; top:380px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">open</div><div style="font-size:14px; color:#2B3340;">找 core.py、function.py → open function.py（3,389 行）</div></div>
+  <div style="position:absolute; left:840px; top:418px; width:700px; height:32px; box-sizing:border-box; background-color:#F7F8FA; border:1px solid #E5E9EE; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#8A93A0;">search</div><div style="font-size:14px; color:#2B3340;">search_file "class Derivative" → 第 1053 行，goto 1053</div></div>
+  <div style="position:absolute; left:840px; top:456px; width:700px; height:32px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">scroll</div><div style="font-size:14px; color:#1C2431;">scroll_down 連續 21 次，一頁一頁往下捲</div></div>
+  <div style="position:absolute; left:840px; top:494px; width:700px; height:32px; box-sizing:border-box; background-color:#C8501F; border-radius:6px; display:flex; align-items:center; gap:12px; padding:0px 14px;"><div style="flex-shrink:0; width:64px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:rgba(255,255,255,0.7);">exit</div><div style="font-size:14px; color:#FFFFFF;">exit_cost：成本用完，沒有交出任何修改　✗</div></div>
+  <div style="position:absolute; left:840px; top:540px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">33 個動作：前 11 步重現、找定義並跳過去，之後 21 次 scroll_down，最後成本用完（整理者數的）。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F;">解出了，但沒用現成的函式</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">修改通過這一題的單元測試；標準答案用的是<br>utils.py 裡的 to_native_string，行為和它相同。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">作者：這樣的修改，在正式環境裡可能比較難維護、也比較不可攜。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:180px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#C8501F;">預算花在一頁一頁往下捲</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">作者說應該一開始就搜 class Derivative；標準答案<br>是在 Derivative 上覆寫繼承來的 kind 屬性。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">另一題沒解出的 django：改了幾次之後，沒有測試就交卷。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩條軌跡依附錄 D 的圖 33、35 精簡改寫，指令照原軌跡，部分步驟併成一列；另外兩個案例（pylint 解出、django 沒解出）寫在正文。</div>
+</div></div>
+</section>
+<section class="page" id="p13">
+  <div class="label"><span class="n">13 / 13</span><span>三條原則與五個方向</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">替 LM 設計介面，和替人設計一樣值得</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 7 節與附錄 E.3：模型固定時，介面是可以設計、也可以量的變數；上排三條原則是整理者從全文歸納的，下排是作者點名的方向</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:336px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="display:flex; align-items:baseline; gap:12px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">01</div><div style="font-size:13px; color:#8A93A0;">把 LM 當成新的使用者</div></div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">給人用的介面，<br>不一定適合 LM</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">shell 的指令選項多、輸出長、改錯不回報；<br>LM 看不懂圖形介面，讀進的每一段都有成本。<br>先想清楚它的需求與能力，再決定給它什麼。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 直接給一個 Linux shell<br>✓ 少量好懂的指令，加上精簡的回饋</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:336px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="display:flex; align-items:baseline; gap:12px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">02</div><div style="font-size:13px; color:#8A93A0;">每個介面選擇都去量</div></div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">用消融量出<br>每個元件的價值</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">表 3 逐一換掉搜尋、編輯、視窗與歷史，<br>每一格都低於預設，逐筆式搜尋還比不給差；<br>直覺上好用的設計，要跑過才知道。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 照人的習慣設計工具<br>✓ 在開發集上逐項比較</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:336px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="display:flex; align-items:baseline; gap:12px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">03</div><div style="font-size:13px; color:#8A93A0;">從失敗長出護欄</div></div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">看失敗的軌跡，<br>把錯誤擋在前面</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">linter 退回改壞的編輯、搜尋最多 50 筆、<br>instance 模板裡的提示，<br>都是看軌跡找出失敗模式之後加上的。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">代價：linter 有時會限制修改的順序。<br>失敗的組成見第 11 卡；提示的寫法見附錄 C。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:562px; font-size:20px; font-weight:700; color:#1C2431;">作者點名的五個方向（不排順序）</div>
+  <div style="position:absolute; left:60px; top:604px; width:260px; height:88px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">加更多工具</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">瀏覽網頁、靜態分析、<br>用 fuzzing 產生測試</div>
+  </div>
+  <div style="position:absolute; left:360px; top:604px; width:260px; height:88px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">自動設計 ACI</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">讓系統自己檢視、<br>迭代自己的設計</div>
+  </div>
+  <div style="position:absolute; left:660px; top:604px; width:260px; height:88px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">搬到其他領域</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">網購的搜尋工具、<br>公司內部的知識庫</div>
+  </div>
+  <div style="position:absolute; left:960px; top:604px; width:260px; height:88px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">用好後面的輪次</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">改模型、改 ACI，<br>或兩者一起改</div>
+  </div>
+  <div style="position:absolute; left:1260px; top:604px; width:260px; height:88px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">提示不再手寫</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">自動找出失敗模式，<br>寫成自然語言的指示</div>
+  </div>
+  <div style="position:absolute; left:60px; top:712px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">前三個方向出自附錄 E.3，第四個出自附錄 B.3.1，第五個出自附錄 C；作者沒有排先後，所以不畫箭頭。倫理聲明（附錄 E.1）把執行模型寫的程式列為第一個風險，推論與評估都在用完即丟的 Docker 容器裡跑。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三條原則是整理者從第 2、5 節與附錄 A、C 歸納的；論文的結果是 2024 年的模型（<span style="white-space:nowrap">GPT-4 Turbo</span>、Claude 3 Opus）。</div>
+</div></div>
+</section>
+  <div class="foot">整理自 arXiv · John Yang、Carlos E. Jimenez、Alexander Wettig、Kilian Lieret、Shunyu Yao、Karthik Narasimhan、Ofir Press（Princeton University），2024-05-06：<a href="https://arxiv.org/abs/2405.15793">https://arxiv.org/abs/2405.15793</a>。這些圖卡是學習用的重新整理，不是原文的逐句翻譯；觀點與著作權屬於原作者。<a href="index.html">回到圖卡＋教材版</a> · <a href="../../">回首頁</a></div>
+</div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fit() {
+    var frames = document.querySelectorAll('.frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('load', fit);
+  fit();
+})();
+</script>
+</body>
+</html>
