@@ -109,6 +109,42 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "contextualized-privacy-defense",
+      "path": "articles/contextualized-privacy-defense/index.html",
+      "title": "情境化的隱私防禦：讓一個小模型在每一步提醒 LLM agent 什麼能分享，並從失敗裡訓練它",
+      "summary": "Tsinghua、Georgia Tech、Microsoft 與 Stanford 的作者比較了 LLM agent 的三種隱私防禦：在 system prompt 加一段固定提示、送出前由守門模型審查，以及他們提出的 CDI：在工具結果回來之後，由一個小的指引模型寫出這一步該分享什麼、不該分享什麼。在三個 agent 互動的模擬裡，未訓練的防禦遇到策略性攻擊都大幅失守；作者把洩漏的軌跡截斷成強化學習環境，用 GRPO 訓練指引模型，CDI 在沒看過的情境達到 94.2% 的隱私保護率與 80.6% 的有用程度。這份整理逐章重述模擬、防禦、攻擊、訓練方法與實驗，並對照表格核對論文的說法，每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "arXiv · Yule Wen、Yanzhe Zhang、Jianxun Lian、Xiaoyuan Yi、Xing Xie、Diyi Yang（Tsinghua University、Georgia Tech、Microsoft、Stanford University）",
+        "url": "https://arxiv.org/abs/2603.02983",
+        "date": "2026-03-03"
+      },
+      "date": "2026-09-29",
+      "tags": [
+        "agent-privacy",
+        "contextual-integrity",
+        "agent-safety",
+        "reinforcement-learning",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 8,
+        "kind": "選讀",
+        "section": "Safety",
+        "lecture": "Agent Safety & Guardrails",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/contextualized-privacy-defense/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "agentic-deanonymizers",
       "path": "articles/agentic-deanonymizers/index.html",
       "title": "Agentic LLM 是強大的去匿名化工具：能上網的 LLM 把 Anthropic Interviewer 資料集的訪談連回論文與作者",
