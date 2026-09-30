@@ -251,6 +251,41 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "cs329z-unit-04",
+      "path": "articles/cs329z-unit-04/index.html",
+      "title": "CS 329Z 單元 4 對照：MCP 規格和其他單元的讀物，在工具的寫法、錯誤與沙箱上怎麼接",
+      "summary": "CS 329Z 第 3 週「Tool Use & Function Calling」那一講只配了一篇必讀：MCP 規格的 2025-06-18 修訂版。本頁把課程列的六個講題對到規格的章節，規格沒談的去其他單元已上站的讀物裡找；再整理三個接點：工具的定義怎麼寫、錯誤回到哪裡、工具在哪裡執行與誰批准；最後列出七篇在原文裡提到 MCP 的讀物各拿它做什麼。判斷題不附答案，判斷留給讀者。",
+      "source": {
+        "name": "CS 329Z · Engineering AI Agents（Stanford，Fall 2026）",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "date": "2026-09-30",
+      "tags": [
+        "cs329z",
+        "unit-synthesis",
+        "tool-use",
+        "mcp",
+        "agent-sandbox"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 3,
+        "kind": "單元對照",
+        "section": "Building Blocks",
+        "lecture": "Tool Use & Function Calling",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/cs329z-unit-04/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "swe-bench-github-issues",
       "path": "articles/swe-bench-github-issues/index.html",
       "title": "SWE-bench：拿真實的 GitHub issue 出題，考語言模型能不能在整個 repo 裡寫出修好問題的 patch",
