@@ -216,6 +216,41 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "cs329z-unit-07",
+      "path": "articles/cs329z-unit-07/index.html",
+      "title": "CS 329Z 單元 7 對照：記憶由誰管、存成什麼，MemGPT、Generative Agents、Mem0 與 Letta 各給了什麼證據",
+      "summary": "CS 329Z 第 4 週「Agent Memory Architectures」那一講的四篇讀物並排：MemGPT 讓模型用函式呼叫管理多層記憶，Generative Agents 讓代理帶著記憶流、反思與計畫過兩天，Mem0 每一對訊息就抽出事實再比對寫回，Letta 的部落格說記憶就是決定哪些 token 在視窗裡。本頁整理四篇在三個問題上各拿出什麼證據、原文之間怎麼互相引用，以及同一件事各篇怎麼稱呼。判斷題不附答案，判斷留給讀者。",
+      "source": {
+        "name": "CS 329Z · Engineering AI Agents（Stanford，Fall 2026）",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "date": "2026-09-30",
+      "tags": [
+        "cs329z",
+        "unit-synthesis",
+        "agent-memory",
+        "context-management",
+        "long-term-memory"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 4,
+        "kind": "單元對照",
+        "section": "Memory & Multi-Agent Systems",
+        "lecture": "Agent Memory Architectures",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/cs329z-unit-07/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "swe-bench-github-issues",
       "path": "articles/swe-bench-github-issues/index.html",
       "title": "SWE-bench：拿真實的 GitHub issue 出題，考語言模型能不能在整個 repo 裡寫出修好問題的 patch",
