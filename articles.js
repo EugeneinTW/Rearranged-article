@@ -286,6 +286,41 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "cs329z-unit-01",
+      "path": "articles/cs329z-unit-01/index.html",
+      "title": "CS 329Z 單元 1 對照：換模型還是改系統，Zaharia 等人、Ng 與 Si 等人各給了什麼證據",
+      "summary": "CS 329Z 第 1 週「Introduction — What Are Agentic Systems?」那一講的三篇讀物並排：BAIR 的 Zaharia 等人主張最好的結果越來越常來自複合系統，Ng 的五封信把 agent 工作流分成四種設計模式，Si 等人讓研究點子真的跑實驗、再比較兩種從結果學習的方法。本頁整理三篇在三個問題上各拿出什麼證據、原文之間有沒有互相引用，以及同一件事各篇怎麼稱呼。判斷題不附答案，判斷留給讀者。",
+      "source": {
+        "name": "CS 329Z · Engineering AI Agents（Stanford，Fall 2026）",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "date": "2026-09-30",
+      "tags": [
+        "cs329z",
+        "unit-synthesis",
+        "compound-ai",
+        "agentic-workflows",
+        "execution-feedback"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 1,
+        "kind": "單元對照",
+        "section": "Foundations & Landscape",
+        "lecture": "Introduction — What Are Agentic Systems?",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/cs329z-unit-01/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "swe-bench-github-issues",
       "path": "articles/swe-bench-github-issues/index.html",
       "title": "SWE-bench：拿真實的 GitHub issue 出題，考語言模型能不能在整個 repo 裡寫出修好問題的 patch",
