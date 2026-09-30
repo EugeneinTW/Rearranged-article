@@ -1,6 +1,42 @@
 window.ARTICLES = {
   "articles": [
     {
+      "slug": "osworld-computer-use",
+      "path": "articles/osworld-computer-use/index.html",
+      "title": "OSWorld：把多模態 agent 放進真的電腦，用 369 題開放式任務考它能不能操作電腦",
+      "summary": "香港大學等團隊的 OSWorld 把 agent 放進真的電腦：每一題在虛擬機裡從做到一半的狀態開始，agent 看截圖或無障礙樹、寫 pyautogui 程式操作滑鼠與鍵盤，結束後由那一題專屬的評估腳本檢查電腦最後的狀態。369 題橫跨試算表、文件、簡報、瀏覽器、郵件、影音、程式編輯、影像處理與跨 app 的工作流，人類做對 72.36%，寫作當時最好的模型只有 12.24%，主要卡在 GUI 定位與操作知識。這份整理逐章重述環境怎麼搭、題目怎麼做、四種觀察設定的結果與分析，每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "arXiv · Tianbao Xie、Danyang Zhang、Jixuan Chen、Xiaochuan Li、Siheng Zhao、Ruisheng Cao、Toh Jing Hua、Zhoujun Cheng、Dongchan Shin、Fangyu Lei、Yitao Liu、Yiheng Xu、Shuyan Zhou、Silvio Savarese、Caiming Xiong、Victor Zhong、Tao Yu（The University of Hong Kong、CMU、Salesforce Research、University of Waterloo）",
+        "url": "https://arxiv.org/abs/2404.07972",
+        "date": "2024-04-11"
+      },
+      "date": "2026-09-30",
+      "tags": [
+        "osworld",
+        "computer-use-agents",
+        "multimodal-agents",
+        "benchmarks",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 11,
+        "kind": "選讀",
+        "section": "Open Problems & Final Demos",
+        "lecture": "Frontiers & Open Problems",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/osworld-computer-use/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "openclaw-personal-agent",
       "path": "articles/openclaw-personal-agent/index.html",
       "title": "OpenClaw 讀法：會主動找你的個人 agent，預設先安靜",
