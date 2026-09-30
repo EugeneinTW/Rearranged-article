@@ -356,6 +356,41 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "cs329z-unit-02",
+      "path": "articles/cs329z-unit-02/index.html",
+      "title": "CS 329Z 單元 2 對照：流程寫死多少、context 給多少，Anthropic 相隔九個月的兩篇工程文章各怎麼說",
+      "summary": "CS 329Z 第 2 週「LLMs for Builders」那一講的兩篇讀物並排：〈Building Effective Agents〉把系統分成工作流與 agent、建議先找最簡單的解，九個月後的〈Effective Context Engineering for AI Agents〉回頭引用它、改用更簡單的 agent 定義，並把重點移到每一步該給模型看哪些 token。本頁整理兩篇在流程、工具、分工、長任務四件事上各怎麼說、原文之間怎麼引用、講題裡哪些兩篇都沒有談。判斷題不附答案，判斷留給讀者。",
+      "source": {
+        "name": "CS 329Z · Engineering AI Agents（Stanford，Fall 2026）",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "date": "2026-09-30",
+      "tags": [
+        "cs329z",
+        "unit-synthesis",
+        "agents",
+        "context-engineering",
+        "tool-design"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 2,
+        "kind": "單元對照",
+        "section": "Foundations & Landscape",
+        "lecture": "LLMs for Builders",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/cs329z-unit-02/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "cs329z-unit-01",
       "path": "articles/cs329z-unit-01/index.html",
       "title": "CS 329Z 單元 1 對照：換模型還是改系統，Zaharia 等人、Ng 與 Si 等人各給了什麼證據",
