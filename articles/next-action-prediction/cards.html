@@ -1,0 +1,937 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LongNAP（Shaikh et al. 2026） · 圖解卡</title>
+<meta name="description" content="Stanford 等校團隊在 2026 年把「主動的 AI 要先猜到你下一步」寫成一個任務：給一串人與電腦的互動（截圖、點擊、按鍵），預測這個人接下來的動作。他們做了被動標註的管線 NAPsack，把 20 位使用者一個月的手機螢幕紀錄標成約 36 萬個動作；再訓練 LongNAP：先寫推理去查自己過去的推理，再寫推理預測接下來 8 個動作，獎勵由評審對照使用者實際做了什麼來打。這份整理逐章重述任務、資料、模型、評分方式、結果與消融，也交代作者怎麼處理隱私與對齊，每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="next-action-prediction, user-modeling, proactive-agents, human-computer-interaction, cs329z">
+<meta name="source" content="https://arxiv.org/abs/2603.05923">
+<meta name="date" content="2026-09-30">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+:root { color-scheme: light; --bg: #F4F5F7; --line: #E5E9EE; --ink: #1C2431; --mute: #8A93A0; --orange: #C8501F; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: #C8501F; } a:hover { color: #9E3E16; }
+a:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.wrap { max-width: 1600px; margin: 0 auto; padding-block: 24px 48px; padding-inline: 16px; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; padding: 6px 4px 18px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; letter-spacing: 0.12em; color: var(--mute); }
+.head nav { display: flex; flex-wrap: wrap; gap: 6px 14px; letter-spacing: 0.04em; }
+.head nav a { color: var(--mute); text-decoration: none; font-weight: 600; }
+.head nav a:hover { color: var(--orange); }
+.page { margin-bottom: 36px; scroll-margin-top: 16px; }
+.label { display: flex; align-items: baseline; gap: 14px; padding: 0 4px 8px; font-size: 13px; color: var(--mute); }
+.label .n { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-weight: 600; font-size: 12px; letter-spacing: 0.1em; color: var(--orange); }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--line); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; }
+.foot { padding: 12px 4px 0; font-size: 12px; color: var(--mute); line-height: 1.7; }
+@media print {
+  @page { size: 1600px 900px; margin: 0; }
+  body { background: #FFFFFF; }
+  .wrap { max-width: none; padding: 0; }
+  .head, .label, .foot { display: none; }
+  .page { margin: 0; page-break-after: always; }
+  .frame { border: none; border-radius: 0; height: auto !important; }
+  .frame > div { transform: none !important; }
+}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><span>LongNAP（Shaikh et al. 2026） · 圖解卡 · 13 張 · 連續閱讀版</span><nav class="site" aria-label="導覽"><a href="../../">首頁</a><a href="index.html">圖卡＋教材版</a></nav><nav aria-label="跳頁"><a href="#p01" title="封面">01</a><a href="#p02" title="輸入 16 個事件，預測 8 個">02</a><a href="#p03" title="NAPsack 的標註管線">03</a><a href="#p04" title="20 人一個月的手機資料">04</a><a href="#p05" title="先推理檢索，再推理預測">05</a><a href="#p06" title="等出來的獎勵">06</a><a href="#p07" title="評審的 0 到 1 分">07</a><a href="#p08" title="主結果：兩種考法">08</a><a href="#p09" title="信心與 pass@k">09</a><a href="#p10" title="三個消融與推理的樣子">10</a><a href="#p11" title="離線訓練與線上學習">11</a><a href="#p12" title="隱私的三條退路">12</a><a href="#p13" title="三條原則與五個方向">13</a></nav></div>
+<section class="page" id="p01">
+  <div class="label"><span class="n">01 / 13</span><span>封面</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:48px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;"><span style="letter-spacing:0.14em">NEXT ACTION PREDICTION</span> &#183; 圖解卡 &#183; 16:9 &#183; 13 張</div>
+  <div style="position:absolute; left:60px; top:110px; width:840px; font-size:58px; font-weight:700; color:#1C2431; line-height:1.3; letter-spacing:0.01em;">看你做了什麼，<br>猜你下一步。</div>
+  <div style="position:absolute; left:60px; top:292px; width:820px; font-size:19px; color:#6B7380; line-height:1.7;">整理自 arXiv 論文〈Learning Next Action Predictors from <span style="white-space:nowrap">Human-Computer</span> Interaction〉<br>（2026-03-06，v1），Omar Shaikh 等 11 人，Stanford University、Hasso Plattner Institute、<br>New York University。十二張卡講一件事：<br>把一個人一個月的手機螢幕標成動作，模型先推理去翻自己的舊推理，<br>再預測接下來 8 個動作；獎勵是等使用者做完，由評審對照打出來的。</div>
+  <div style="position:absolute; left:60px; top:500px; display:flex; align-items:center; gap:34px;">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#C8501F;"></div>
+      <div style="font-size:15px; color:#2B3340;">限制／代價／風險</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#2E7B4F;"></div>
+      <div style="font-size:15px; color:#2B3340;">LongNAP 的設計／較好的結果</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#1F2A3A;"></div>
+      <div style="font-size:15px; color:#2B3340;">使用者、模型／終點</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:14px; height:14px; border-radius:3px; background-color:#EEF1F5; border:1px solid #D5DAE1; box-sizing:border-box;"></div>
+      <div style="font-size:15px; color:#2B3340;">中性節點</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; top:548px; width:820px; font-size:13px; color:#8A93A0; line-height:1.7;">整組共用同一套語意色：橘是限制、代價與隱私風險，綠是 LongNAP 的設計與較好的結果，深藍是使用者、模型與流程的終點。<br>數字依 arXiv v1；參與者只用論文的代號 u1 到 u20，例子裡的人名與帳號都換成泛稱。</div>
+
+  <div style="position:absolute; left:960px; top:110px; width:580px; box-sizing:border-box; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 34px; display:flex; flex-direction:column;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">本組 &#183; 13 張</div>
+    <div style="margin-top:10px; display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">01</div><div style="font-size:16px; color:#1C2431;">封面</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">02</div><div style="font-size:16px; color:#1C2431;">輸入 16 個事件，預測 8 個</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">03</div><div style="font-size:16px; color:#1C2431;">NAPsack 的標註管線</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">04</div><div style="font-size:16px; color:#1C2431;">20 人一個月的手機資料</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">05</div><div style="font-size:16px; color:#1C2431;">先推理檢索，再推理預測</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">06</div><div style="font-size:16px; color:#1C2431;">等出來的獎勵</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">07</div><div style="font-size:16px; color:#1C2431;">評審的 0 到 1 分</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">08</div><div style="font-size:16px; color:#1C2431;">主結果：兩種考法</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">09</div><div style="font-size:16px; color:#1C2431;">信心與 pass@k</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">10</div><div style="font-size:16px; color:#1C2431;">三個消融與推理的樣子</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">11</div><div style="font-size:16px; color:#1C2431;">離線訓練與線上學習</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px; border-bottom:1px solid #E5E9EE;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#C8501F;">12</div><div style="font-size:16px; color:#1C2431;">隱私的三條退路</div></div>
+      <div style="display:flex; align-items:baseline; gap:18px; padding:8px 0px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:14px; color:#2E7B4F;">13</div><div style="font-size:16px; color:#1C2431;">三條原則與五個方向</div></div>
+    </div>
+  </div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">來源：arxiv.org/abs/2603.05923 —— 本組為學習用重述，數字依 arXiv v1，prompt 為教學用精簡版。</div>
+</div></div>
+</section>
+<section class="page" id="p02">
+  <div class="label"><span class="n">02 / 13</span><span>輸入 16 個事件，預測 8 個</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">看最近 16 個事件，預測接下來 8 個</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 2 節：事件流裡每個事件是一句動作加一張選用的畫面；在查詢時間 t 取最近 k 個，預測接下來 h 個。k、h 由使用者設定，實驗用 16 與 8</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:440px; height:370px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:10px;"></div>
+  <div style="position:absolute; left:80px; top:164px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;"><span style="letter-spacing:0.12em">EVENT STREAM</span> &#183; 一個人的時間軸</div>
+  <div style="position:absolute; left:80px; top:192px; width:400px; height:40px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">更早的事件：只能從記憶取回</div>
+  <div style="position:absolute; left:80px; top:242px; width:400px; height:58px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; padding:0px 14px; display:flex; align-items:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">最近 16 個事件</div><div style="font-size:12.5px; color:#6B7380;">動作描述，加上最後 2 個事件的截圖</div></div></div>
+  <div style="position:absolute; left:80px; top:310px; width:400px; height:40px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px; padding:0px 14px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#FFFFFF;">查詢時間 t：現在</div>
+  <div style="position:absolute; left:80px; top:360px; width:400px; height:58px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px dashed #9AA3AE; border-radius:6px; padding:0px 14px; display:flex; align-items:center;"><div><div style="font-size:14px; font-weight:700; color:#1C2431;">接下來 8 個事件</div><div style="font-size:12.5px; color:#6B7380;">預測時看不到，之後才會發生</div></div></div>
+  <div style="position:absolute; left:80px; top:434px; width:400px; font-size:13px; color:#6B7380; line-height:1.55;">事件依時間排成一條，沒有固定的欄位；<br>模型只看得到 t 以前，查記憶也一樣。</div>
+
+  <div style="position:absolute; left:505px; top:248px; width:66px; text-align:center; font-size:12.5px; color:#8A93A0;">展開</div>
+
+  <div style="position:absolute; left:580px; top:150px; width:500px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:17px; font-weight:700; color:#FFFFFF;"><span>展開一個事件：e<sub>t</sub>＝(a<sub>t</sub>, I<sub>t</sub>)</span></div>
+  <div style="position:absolute; left:580px; top:198px; width:500px; height:322px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:14px 22px; display:flex; flex-direction:column; justify-content:center; gap:16px;">
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">1</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">動作 a<sub>t</sub></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">ACTION</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">一句自然語言，粒度是能交給電腦操作 agent 的任務</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">2</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">畫面 I<sub>t</sub></div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">IMAGE</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">選用的截圖；實驗只保留最後 2 個事件的圖</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">3</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">時間</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">TIME</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">事件依時間排序，例如 07:00、07:01、07:02</div></div>
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:14px;">
+      <div style="width:30px; height:30px; flex-shrink:0; border-radius:50%; background-color:#4B5866; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">4</div>
+      <div style="display:flex; flex-direction:column; gap:3px;"><div style="display:flex; align-items:baseline; gap:10px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">輸入事件</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">I/O</div></div><div style="font-size:13.5px; color:#6B7380; line-height:1.5;">NAPsack 可以附上點擊、按鍵；手機資料沒有</div></div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:1140px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">WRITERS · READERS</div>
+  <div style="position:absolute; left:1140px; top:178px; width:400px; height:76px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#FFFFFF;">NAPsack 寫入</div><div style="font-size:12.5px; color:rgba(255,255,255,0.75);">VLM 從截圖與輸入事件寫出動作描述</div></div>
+  <div style="position:absolute; left:1140px; top:280px; width:400px; height:76px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#2E7B4F;">LongNAP 讀取、預測</div><div style="font-size:12.5px; color:#6B7380;">讀最近 16 個，寫出接下來 8 個的預測</div></div>
+  <div style="position:absolute; left:1140px; top:382px; width:400px; height:76px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 20px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">評審讀取</div><div style="font-size:12.5px; color:#6B7380;">拿真實的 8 個比對預測，給 0 到 1 分</div></div>
+  <div style="position:absolute; left:1140px; top:474px; width:400px; font-size:13px; color:#6B7380; line-height:1.55;">寫入的只有 NAPsack；<br>LongNAP 與評審讀的是同一條事件流的不同段。</div>
+
+  <div style="position:absolute; left:60px; top:570px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">鬧鐘的例子</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">07:00、07:01、07:02 連按三次貪睡，<br>每次附一張截圖；模型可能預測：<br>再按一次貪睡、關掉鬧鐘、打開手機。</div>
+    <div style="font-size:13px; color:#8A93A0;">第 2 節用它說明怎麼從分布抽出未來的軌跡。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:570px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">事件流沒有結構</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">就是任意的自然語言加上圖片，<br>沒有固定的欄位或動作清單；<br>所以要靠評審比語意，不能逐字對答案。</div>
+    <div style="font-size:13px; color:#8A93A0;">評審怎麼打分，見第 7 卡。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:570px; width:470px; height:200px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">兩個挑戰</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">怎麼替很多人大規模收集、標註動作？<br>有了資料之後，又怎麼訓練模型預測？<br>資料見第 3、4 卡，模型見第 5、6 卡。</div>
+    <div style="font-size:13px; color:#8A93A0;">論文第 3、4 節各回答一個。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左邊的時間軸與右邊的讀寫者是整理者的畫法；第四個欄位（輸入事件）取自第 3.1 節對一筆資料的定義，不在第 2 節的式子裡。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ad-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+      <marker id="an-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M482 271H576" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1138 216H1084" stroke="#1F2A3A" stroke-width="2" marker-end="url(#ad-c02)"></path>
+    <path d="M1082 318H1136" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c02)"></path>
+    <path d="M1082 420H1136" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p03">
+  <div class="label"><span class="n">03 / 13</span><span>NAPsack 的標註管線</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">NAPsack 只在你動手時存畫面</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.1 節與附錄 A：同類的輸入事件先合成一段 burst，只存它前後的截圖；依時間合併、每 60 格切一段，再交給 VLM 寫成動作描述</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　錄畫面與輸入</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">30 FPS 截圖，加上點擊、移動、<br>捲動、按鍵這些輸入事件</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　合成 burst</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">同類事件間隔在門檻內就併在一起<br>（點擊 0.2 秒，其餘 0.5 秒）</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　只留前後畫面</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">burst 前、後 75 毫秒各存一張</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">壓縮</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　合併後切段</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">依時間排成一條，每 60 格一段</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">切段</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　VLM 寫動作</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">few-shot 的 prompt；可以附上<br>後面的輸入事件（IO）</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:300px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">一筆資料</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">一張截圖＋一句動作描述（例如「點了側邊欄的下載資料夾」）＋這張截圖之後、下一張之前錄到的輸入事件。改 prompt 可以標出更高層的動作，但要更長的紀錄。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:420px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:444px; font-size:20px; font-weight:700; color:#1C2431;">表 2：一次加一步（一位作者三段 10 分鐘的電腦紀錄，45 組序列）</div>
+
+  <div style="position:absolute; left:60px; top:486px; width:470px; height:240px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">切段：0.48 → 0.57</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">整段 10 分鐘一次交給 VLM，細節會忘；<br>先切成 60 格一段，評審分數上升，<br>人評勝率從 19.2% 到 45.4%。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者說 context 越長，VLM 越容易忘掉細節；<br>人評這一步的進步達到顯著。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:486px; width:470px; height:240px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">壓縮：295 MB → 76 MB</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">只存互動前後的畫面，分數相當（0.60），<br>人評 45.4% 到 49.6%，差異不顯著；<br>整理者算，檔案少了約 74.2%。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">正文寫約少 70%，表 2 的標題寫少 75%；<br>檔案大小是把選出的畫面接成一支 mp4 算的。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:486px; width:470px; height:240px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">加上輸入事件：0.70</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">評審分數從 0.60 升到 0.70，<br>人評勝率從 49.6% 升到 85.8%；<br>抓得到一行指令、切視窗這種短操作。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">只看畫面的版本，會漏掉以鍵盤為主的互動；<br>手機資料沒有輸入事件，這一步用不上。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：這組驗證用的是有輸入事件的電腦紀錄；第 4 卡的手機資料沒有輸入事件，只能用截圖之間的差異壓縮。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M1345 262L1345 296" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p04">
+  <div class="label"><span class="n">04 / 13</span><span>20 人一個月的手機資料</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">1.7 億張截圖裡，挑出 20 人的一個月</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.3 節：從 Screenomics 挑一個月內每天至少用手機一小時的 20 位成人，去掉重複的截圖，再交給不含輸入事件的 NAPsack 標註</div>
+
+  <div style="position:absolute; left:636px; top:130px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#4B5866;">2021-03-16 到 04-12</div>
+  <div style="position:absolute; left:924px; top:130px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">沒有輸入事件，改看影像差異</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:120px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">Step 1　Screenomics</div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#1C2431; line-height:1.2;">1.7<span style="font-family:'Noto Sans TC', sans-serif; font-size:22px;"> 億</span></div>
+    <div style="margin-top:4px; font-size:12.5px; color:#6B7380;">張縮時截圖，257 位成人的手機</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:120px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">Step 2　挑人</div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#1C2431; line-height:1.2;">20</div>
+    <div style="margin-top:4px; font-size:12.5px; color:#6B7380;">位：一個月內每天至少用一小時</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:120px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">Step 3　時間窗</div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#1C2431; line-height:1.2;">190<span style="font-family:'Noto Sans TC', sans-serif; font-size:22px;"> 萬</span></div>
+    <div style="margin-top:4px; font-size:12.5px; color:#6B7380;">張截圖，<span style="white-space:nowrap">1,837 小時</span>螢幕開啟時間</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:120px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">Step 4　去掉重複</div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#2E7B4F; line-height:1.2;">≤ 5／256</div>
+    <div style="margin-top:4px; font-size:12.5px; color:#6B7380;">位元不同：差異雜湊幾乎相同就刪</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:120px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:15px; font-weight:700; color:#FFFFFF;">Step 5　NAPsack 標註</div>
+    <div style="margin-top:4px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:30px; font-weight:600; color:#FFFFFF; line-height:1.2;">359,219</div>
+    <div style="margin-top:4px; font-size:12.5px; color:rgba(255,255,255,0.75);">個動作，平均每個約 15 秒</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:310px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">倫理</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">收集與標註先經 Stanford 的 IRB 核准；所有建模都在第一作者機構核准處理個人資料的安全伺服器上完成。招募的細節屬於 Screenomics 原本的研究，這篇沒有另外說明。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:420px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:444px; font-size:20px; font-weight:700; color:#1C2431;">20 個人、28 天的樣子（只寫總體數字）</div>
+
+  <div style="position:absolute; left:60px; top:486px; width:470px; height:236px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">20 人是誰（附錄 A.5）</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">19 人有人口資料：女性 14、男性 5，<br>分布在美國各地，22 到 70 歲，<br>平均 44 歲、中位數 39 歲。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">另 1 人沒有人口資料；學歷從高中到研究所都有；<br>本卡只寫總體數字。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:486px; width:470px; height:236px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">每天 4 小時 32 分</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">28 天平均的每日螢幕時間，<br>最少 2 小時 17 分，最多 6 小時 52 分；<br>內容有遊戲、購物、銀行、傳訊、社群。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">第 5.1 節再把這 4 週切成訓練、驗證、測試；<br>平均每個動作涵蓋約 15 秒。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:486px; width:470px; height:236px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">標籤是模型寫的</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">動作描述由 VLM 從截圖推出來，<br>可能有雜訊，和人標的不完全一致；<br>這些錯誤可能在訓練時帶進去。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">作者在限制一節再談（第 13 卡）；<br>評估時當答案的，也是這批標籤。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：摘要與引言寫超過 360K 個動作、約 1,800 小時，第 3.3 節寫 359,219 個與 1,837 小時，本卡用後者；只寫總體數字，不轉述任何個人的內容。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 212L343 220L331 228Z" fill="#9AA3AE"></path>
+    <path d="M619 212L631 220L619 228Z" fill="#9AA3AE"></path>
+    <path d="M907 212L919 220L907 228Z" fill="#9AA3AE"></path>
+    <path d="M1195 212L1207 220L1195 228Z" fill="#9AA3AE"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p05">
+  <div class="label"><span class="n">05 / 13</span><span>先推理檢索，再推理預測</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">先用推理查記憶，再用查到的推理去猜</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4.1 節、圖 4：策略是 <span style="white-space:nowrap">Qwen-2.5-VL-7B</span>；記憶的每一筆是一組觀察配一段推理，用 BM25 查，只查得到 t 以前的條目</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　最近 16 個事件</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">動作描述，加上最後<br>2 個事件的截圖</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　推理以檢索</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">推測處境與習慣，寫成查詢</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">階段一</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　BM25 查記憶</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">只取時間戳不晚於 t 的條目，<br>拿回舊推理與舊觀察</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　推理以預測</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">用取回的舊推理修正想法</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">階段二</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　預測 8 個動作</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">例如看實驗儀表板、<br>找合作者分工</div>
+  </div>
+
+  <div style="position:absolute; left:1212px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 6　挑獎勵最高的</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">每個階段抽 4 條，組成 4 條<br>rollout，留獎勵最高的推理</div>
+  </div>
+  <div style="position:absolute; left:924px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 7　存回記憶</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">觀察＋推理＋時間，<br>記憶多了一筆</div>
+  </div>
+  <div style="position:absolute; left:60px; top:306px; width:640px; font-size:14px; color:#6B7380; line-height:1.65;">圖 4 的例子：讀到一份論文審查意見<br>→ 階段一寫下「看完回饋可能會改稿」<br>→ 查回「寫論文常拖延」「偏好用團隊聊天軟體協作」「會把工作分給合作者」<br>→ 階段二改成「會先找合作者分工、確認哪些實驗跑完」，圖上印的獎勵是 0.94</div>
+  <div style="position:absolute; left:786px; top:318px; font-size:13px; font-weight:700; color:#2E7B4F;">下一次查得到</div>
+
+  <div style="position:absolute; left:60px; top:480px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:504px; font-size:20px; font-weight:700; color:#1C2431;">為什麼要先檢索：另外兩條路都走不通</div>
+
+  <div style="position:absolute; left:60px; top:546px; width:470px; height:244px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">只靠權重：新資訊用不上</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">看到行事曆下午 2 點有會，就該立刻<br>影響預測，不必等下一輪梯度更新；<br>很多細節只出現一次，不會重複。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">引言也說，寫進權重的模式難以彈性轉移，<br>更新權重也比 in-context learning 要更多資料。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:546px; width:470px; height:244px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">全塞進 context：塞不下</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">context 的長度有上限，<br>不分輕重全部放進去，<br>雜訊還會拉低表現。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">所以只取回相關的舊推理與舊觀察；<br>取回的條目，時間戳都不晚於 t。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:546px; width:470px; height:244px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 30px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">記憶存的是最好的推理</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.7;">每一筆是觀察配上一段推理；<br>只存獎勵最高的那一段，<br>記憶累積的是模型最好的推理。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">評估時記憶怎麼更新，論文沒有細說；<br>訓練時每個 epoch 結束會清空（第 6 卡）。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：七步的排法是整理者依第 4.1 節與圖 4 畫的；圖 4 的例子改寫成泛稱，0.94 是圖上印的獎勵。獎勵怎麼來見第 6 卡。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M1207 342L1195 350L1207 358Z" fill="#9AA3AE"></path>
+    <path d="M1478 210C1530 210 1530 350 1480 350" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M924 350H769V262" stroke="#2E7B4F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#an-c05)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p06">
+  <div class="label"><span class="n">06 / 13</span><span>等出來的獎勵</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">獎勵是等出來的：看使用者接下來做了什麼</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4.2 節：生成裡有語言推理、呼叫檢索器這些離散步驟，所以用 policy gradient（GRPO）端到端訓練；獎勵由第 3.2 節驗證過的評審給</div>
+
+  <div style="position:absolute; left:100px; top:170px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;"><span style="letter-spacing:0.1em">ONE TRAINING STEP</span> &#183; 在時間 t 的一次更新</div>
+  <div style="position:absolute; left:180px; top:240px; width:460px; height:60px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#4B5866;">過去 16 個動作：預測時看得到</div>
+  <div style="position:absolute; left:644px; top:240px; width:456px; height:60px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#2E7B4F;">接下來 8 個動作：預測時看不到</div>
+  <div style="position:absolute; left:1104px; top:240px; width:396px; height:60px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#FFFFFF;">之後：打分與更新</div>
+  <div style="position:absolute; left:180px; top:344px; width:330px; font-size:13px; color:#6B7380; line-height:1.65;">過去 16 個動作裡，只有最後 2 個附截圖；<br>更早的內容要靠第 5 卡的檢索從記憶取回。<br>訓練時照時間順序一步一步往後走。</div>
+
+  <div style="position:absolute; left:542px; top:342px; width:200px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#1C2431;">BEAT 1 · t</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center; line-height:1.55;">推理、檢索、預測，<br>一次抽 4 條 rollout</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">第 5 卡的前五步</div>
+  </div>
+  <div style="position:absolute; left:772px; top:342px; width:200px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#2E7B4F;">BEAT 2</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center; line-height:1.55;">真實的 8 個動作發生，<br>成為這一題的答案</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">離線訓練時資料裡已有</div>
+  </div>
+  <div style="position:absolute; left:1100px; top:342px; width:200px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#1C2431;">BEAT 3</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center; line-height:1.55;">評審一次看 4 條，<br>各給 0 到 1 分</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">整組一起比，比較分得開</div>
+  </div>
+  <div style="position:absolute; left:1320px; top:342px; width:200px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:15px; color:#1C2431;">BEAT 4</div>
+    <div style="font-size:14px; color:#2B3340; text-align:center; line-height:1.55;">GRPO 更新 LoRA，<br>最好的推理存回記憶</div>
+    <div style="font-size:13px; color:#8A93A0; text-align:center;">組內的相對分數定方向</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:540px; width:470px; height:212px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">照時間順序訓練</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">從資料中間開始預測很難，<br>所以依時間順序走過資料，<br>每個 epoch 結束時清空記憶。</div>
+    <div style="font-size:13px; color:#8A93A0;">這樣推理與觀察才會在記憶裡隨時間累積。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:540px; width:470px; height:212px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">取回的內容不算梯度</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">取回的 token 來自環境，訓練時遮掉；<br>檢索器也做 dropout：丟掉、重排、<br>完全不給，各佔 10% 的時候。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說這能穩定訓練，避免清空記憶時崩掉。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:540px; width:470px; height:212px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">表 8 與附錄 B.1 的設定</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">每組 4 條、LoRA rank 8 只加在 MLP、<br>學習率 3e-5、10 個 epoch、8 張 B200；<br>BM25 加上以天計的時間衰減。</div>
+    <div style="font-size:13px; color:#8A93A0;">衰減係數 λ＝0.5；先取前 10 個，再用 MMR 選 5 個。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：四拍的畫法是整理者的；獎勵與評估用同一個評審（Gemini 3.0 Flash），作者在限制一節提醒，訓練得更久時可能被 reward hacking。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M100 320H1500" stroke="#D5DAE1" stroke-width="2"></path>
+    <circle cx="642" cy="320" r="9" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="872" cy="320" r="9" fill="#2E7B4F" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="1200" cy="320" r="9" fill="#9AA3AE" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="1420" cy="320" r="9" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="3"></circle>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p07">
+  <div class="label"><span class="n">07 / 13</span><span>評審的 0 到 1 分</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">0.5 分：做了同一件事，細節不一樣</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 3.2、5.2 節：Gemini 3.0 Flash 整體比對預測與真實的 8 個動作，給 0（不符）到 1（完全符合）；pass@k 把 0.5 當成「大致猜中」的門檻</div>
+
+  <div style="position:absolute; left:60px; top:150px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>表 1：同一條真實軌跡的三個預測</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>第 5.2 節的兩組例子</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>第 8 卡的平均分數（同一人）</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:0px; height:16px; border-left:1.5px dashed #C8501F;"></div>pass@k 的門檻</div>
+  </div>
+
+  <div style="position:absolute; left:840px; top:196px; width:0px; height:282px; border-left:1.5px dashed #C8501F;"></div>
+
+  <div style="position:absolute; left:60px; top:240px; font-size:14px; font-weight:700; color:#1C2431;">表 1</div>
+  <div style="position:absolute; left:180px; top:250px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:369px; top:241px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:288px; top:206px; width:180px; text-align:center; white-space:nowrap; font-size:13px; color:#2B3340; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.15</span> 只有一個動作對上</div>
+  <div style="position:absolute; left:857px; top:241px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:746px; top:206px; width:240px; text-align:center; white-space:nowrap; font-size:13px; color:#2B3340; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.52</span> 前五個對得上，後三個不同</div>
+  <div style="position:absolute; left:1121px; top:241px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1040px; top:206px; width:180px; text-align:center; white-space:nowrap; font-size:13px; color:#2B3340; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.72</span> 三處細節不同</div>
+  <div style="position:absolute; left:1491px; top:241px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:1330px; top:206px; width:210px; text-align:right; white-space:nowrap; font-size:13px; color:#2B3340; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">1.0</span> 就是真實軌跡本身</div>
+
+  <div style="position:absolute; left:60px; top:299px; font-size:14px; font-weight:700; color:#1C2431;">相似度</div>
+  <div style="position:absolute; left:180px; top:290px; width:1320px; height:40px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:301px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0</div>
+  <div style="position:absolute; left:428px; top:301px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0.2</div>
+  <div style="position:absolute; left:692px; top:301px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0.4</div>
+  <div style="position:absolute; left:956px; top:301px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0.6</div>
+  <div style="position:absolute; left:1220px; top:301px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0.8</div>
+  <div style="position:absolute; left:1462px; top:301px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">1.0</div>
+
+  <div style="position:absolute; left:60px; top:362px; font-size:14px; font-weight:700; color:#1C2431;">第 5.2 節</div>
+  <div style="position:absolute; left:180px; top:372px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:171px; top:363px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:171px; top:390px; white-space:nowrap; font-size:13px; color:#2B3340; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.0</span> 看音樂影片對上分析實驗，意圖沒有重疊</div>
+  <div style="position:absolute; left:963px; top:363px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:862px; top:390px; width:220px; text-align:center; white-space:nowrap; font-size:13px; color:#2B3340; background-color:#FFFFFF;"><span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.6</span> 都在看實驗，點的圖不同</div>
+
+  <div style="position:absolute; left:60px; top:428px; font-size:14px; font-weight:700; color:#1C2431;">第 8 卡平均</div>
+  <div style="position:absolute; left:180px; top:438px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:450px; top:431px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:417px; top:450px; width:80px; text-align:center; white-space:nowrap; font-size:12.5px; color:#6B7380; background-color:#FFFFFF;">SFT <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.21</span></div>
+  <div style="position:absolute; left:529px; top:431px; width:14px; height:14px; border-radius:50%; background-color:#9AA3AE;"></div>
+  <div style="position:absolute; left:496px; top:410px; width:80px; text-align:center; white-space:nowrap; font-size:12.5px; color:#6B7380; background-color:#FFFFFF;">Gemini <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.27</span></div>
+  <div style="position:absolute; left:675px; top:431px; width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:632px; top:450px; width:100px; text-align:center; white-space:nowrap; font-size:12.5px; font-weight:700; color:#2E7B4F; background-color:#FFFFFF;">LongNAP <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.38</span></div>
+  <div style="position:absolute; left:850px; top:456px; white-space:nowrap; font-size:13px; font-weight:700; color:#C8501F; background-color:#FFFFFF;">0.5：pass@k 算「大致猜中」的門檻</div>
+
+  <div style="position:absolute; left:60px; top:520px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">平均分數都在門檻以下：它是相似度的平均，不是正確率。想知道有多少預測大致猜中，要看第 9 卡的 pass@k。</div>
+
+  <div style="position:absolute; left:60px; top:590px; width:470px; height:206px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">評審看整條軌跡</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">一次比 8 個動作的意圖與順序，<br>不逐字比對；作者說定性上，<br>比嵌入或詞彙重疊的指標有用。</div>
+    <div style="font-size:13px; color:#8A93A0;">評審 prompt 的連結在附錄 A.6。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:590px; width:470px; height:206px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">人評站在同一邊</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">兩位作者做了 300 組成對比較，<br>LongNAP 的勝率 79.0% 最高；<br>NAPsack 的 240 組人評也同一方向。</div>
+    <div style="font-size:13px; color:#8A93A0;">各方法的勝率見第 8 卡。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:590px; width:470px; height:206px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">兩種考法、三種基線</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">跨時間：每人一個模型，考第四週；<br>跨使用者：10 人訓練，考沒見過的 5 人；<br>基線：<span style="white-space:nowrap">zero-shot</span>、<span style="white-space:nowrap">few-shot</span> RAG、SFT。</div>
+    <div style="font-size:13px; color:#8A93A0;">閉源用 Gemini 3.0 Flash，開源用 <span style="white-space:nowrap">Qwen-2.5-VL-7B</span>。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：例子依表 1 與第 5.2 節改寫成泛稱，位置照分數畫；0.15、0.52、0.72 比的是同一條真實軌跡，0.6 與 0.0 是另外兩組。</div>
+</div></div>
+</section>
+<section class="page" id="p08">
+  <div class="label"><span class="n">08 / 13</span><span>主結果：兩種考法</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">越是本人的資料，LongNAP 贏得越多</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 3、表 5 的平均列：評審分數（0 到 1）。上列每人訓練一個模型、考自己的第四週；下列 10 人訓練一個模型、考沒見過的 5 人</div>
+
+  <div style="position:absolute; left:60px; top:146px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#6B7380;"></div>Gemini 3.0 Flash 的兩種 prompt</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>Qwen 的兩種 prompt</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#1F2A3A;"></div>Qwen 的 SFT</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:50%; background-color:#2E7B4F;"></div>LongNAP（Qwen 底座）</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:214px; font-size:18px; font-weight:700; color:#1C2431;">同一人</div>
+  <div style="position:absolute; left:60px; top:242px; font-size:12.5px; color:#8A93A0;">表 3 · 20 人</div>
+  <div style="position:absolute; left:180px; top:268px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:232px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:196px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+
+  <div style="position:absolute; left:523px; top:259px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:548px; top:258px; white-space:nowrap; font-size:13px; color:#2B3340; background-color:#FFFFFF;">Qwen <span style="white-space:nowrap">zero-shot</span> <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.18</span></div>
+  <div style="position:absolute; left:611px; top:223px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:636px; top:222px; white-space:nowrap; font-size:13px; color:#2B3340; background-color:#FFFFFF;">Qwen <span style="white-space:nowrap">few-shot</span> <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.20</span></div>
+  <div style="position:absolute; left:655px; top:187px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:680px; top:186px; white-space:nowrap; font-size:13px; color:#2B3340; background-color:#FFFFFF;">SFT <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.21</span></div>
+  <div style="position:absolute; left:875px; top:259px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:900px; top:258px; white-space:nowrap; font-size:13px; color:#2B3340; background-color:#FFFFFF;">Gemini <span style="white-space:nowrap">zero-shot</span> <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.26</span></div>
+  <div style="position:absolute; left:919px; top:223px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:944px; top:222px; white-space:nowrap; font-size:13px; color:#2B3340; background-color:#FFFFFF;">Gemini <span style="white-space:nowrap">few-shot</span> RAG <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.27</span></div>
+  <div style="position:absolute; left:1403px; top:259px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:1340px; top:228px; width:144px; text-align:center; white-space:nowrap; font-size:13px; font-weight:700; color:#2E7B4F; background-color:#FFFFFF;">LongNAP <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.38</span></div>
+
+  <div style="position:absolute; left:180px; top:300px; width:1320px; height:40px; box-sizing:border-box; background-color:#1F2A3A; border-radius:6px;"></div>
+  <div style="position:absolute; left:186px; top:311px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0.10</div>
+  <div style="position:absolute; left:384px; top:311px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0.15</div>
+  <div style="position:absolute; left:604px; top:311px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0.20</div>
+  <div style="position:absolute; left:824px; top:311px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0.25</div>
+  <div style="position:absolute; left:1044px; top:311px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0.30</div>
+  <div style="position:absolute; left:1264px; top:311px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0.35</div>
+  <div style="position:absolute; left:1462px; top:311px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#FFFFFF;">0.40</div>
+  <div style="position:absolute; left:1340px; top:344px; width:160px; text-align:right; font-size:12px; color:#8A93A0;">評審分數的平均</div>
+
+  <div style="position:absolute; left:60px; top:386px; font-size:18px; font-weight:700; color:#1C2431;">新使用者</div>
+  <div style="position:absolute; left:60px; top:414px; font-size:12.5px; color:#8A93A0;">表 5 · 5 人</div>
+  <div style="position:absolute; left:180px; top:400px; width:1320px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:180px; top:440px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:480px; width:1320px; height:0px; border-top:1px dashed #EEF1F5;"></div>
+
+  <div style="position:absolute; left:435px; top:391px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:460px; top:390px; white-space:nowrap; font-size:13px; color:#2B3340; background-color:#FFFFFF;">Qwen <span style="white-space:nowrap">zero-shot</span> <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.16</span></div>
+  <div style="position:absolute; left:479px; top:431px; width:18px; height:18px; border-radius:50%; background-color:#FFFFFF; border:2.5px solid #1F2A3A; box-sizing:border-box;"></div>
+  <div style="position:absolute; left:504px; top:430px; white-space:nowrap; font-size:13px; color:#2B3340; background-color:#FFFFFF;">Qwen <span style="white-space:nowrap">few-shot</span> <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.17</span></div>
+  <div style="position:absolute; left:479px; top:471px; width:18px; height:18px; border-radius:50%; background-color:#1F2A3A;"></div>
+  <div style="position:absolute; left:504px; top:470px; white-space:nowrap; font-size:13px; color:#2B3340; background-color:#FFFFFF;">SFT <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.17</span></div>
+  <div style="position:absolute; left:699px; top:391px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:724px; top:390px; white-space:nowrap; font-size:13px; color:#2B3340; background-color:#FFFFFF;">Gemini <span style="white-space:nowrap">zero-shot</span> <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.22</span></div>
+  <div style="position:absolute; left:743px; top:431px; width:18px; height:18px; border-radius:50%; background-color:#6B7380;"></div>
+  <div style="position:absolute; left:768px; top:430px; white-space:nowrap; font-size:13px; color:#2B3340; background-color:#FFFFFF;">Gemini <span style="white-space:nowrap">few-shot</span> RAG <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.23</span></div>
+  <div style="position:absolute; left:875px; top:471px; width:18px; height:18px; border-radius:50%; background-color:#2E7B4F;"></div>
+  <div style="position:absolute; left:900px; top:470px; white-space:nowrap; font-size:13px; font-weight:700; color:#2E7B4F; background-color:#FFFFFF;">LongNAP <span style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600;">0.26</span></div>
+
+  <div style="position:absolute; left:60px; top:526px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">兩列用同一條量尺。同一人時 LongNAP 和最強基線差 0.11，換成新使用者只差 0.03（整理者算的）；表 5 的 u12、u14 兩人，粗體落在 Gemini <span style="white-space:nowrap">few-shot</span> RAG。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">同一人：0.38 對 0.27</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">比最強的基線高 0.11，表 3 標題寫高 39.4%；<br>比同一個底座的 SFT（0.21）高，<br>正文寫高 79%。</div>
+    <div style="font-size:13px; color:#8A93A0;">LongNAP 在 20 人身上都最高，每人 0.30 到 0.46。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">新使用者：0.26 對 0.23</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">一個模型考沒見過的 5 人，<br>表 5 標題寫高 13.0%；<br>作者猜每人一份權重對這個任務特別有效。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說增加訓練的人數也許能縮小差距。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">人評勝率 79.0%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">兩位作者做了 300 組成對比較；<br>SFT 29.5%、Qwen <span style="white-space:nowrap">few-shot</span> RAG 45.0%，<br>Gemini <span style="white-space:nowrap">few-shot</span> RAG 58.5%。</div>
+    <div style="font-size:13px; color:#8A93A0;">表 4；信賴區間在 ±6.6 到 ±7.7 之間。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：分數是評審給的相似度平均，不是正確率；正文的百分比和用表上兩位小數算的略有出入，圖 2 把 LongNAP 印成 0.37，見第 7 章。</div>
+</div></div>
+</section>
+<section class="page" id="p09">
+  <div class="label"><span class="n">09 / 13</span><span>信心與 pass@k</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">越有把握的預測，越常猜中</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">圖 10：同一個輸入抽 20 個預測，彼此越像就算越有信心；依每人自己的信心百分位分成十組，看各組的 pass@1（評審分數過 0.5）</div>
+
+  <div style="position:absolute; left:60px; top:150px; display:flex; gap:26px; align-items:center; font-size:13px; color:#6B7380;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#9AA3AE;"></div>各組的 pass@1</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; border-radius:3px; background-color:#2E7B4F;"></div>最有把握的一成</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:22px; height:0px; border-top:1.5px dashed #1F2A3A;"></div>全部的 pass@1（17.1%）</div>
+  </div>
+
+  <div style="position:absolute; left:180px; top:280px; width:820px; height:0px; border-top:1px solid #EEF1F5;"></div>
+  <div style="position:absolute; left:180px; top:390px; width:820px; height:0px; border-top:1px solid #EEF1F5;"></div>
+  <div style="position:absolute; left:120px; top:271px; width:50px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">20%</div>
+  <div style="position:absolute; left:120px; top:381px; width:50px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">10%</div>
+  <div style="position:absolute; left:120px; top:491px; width:50px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">0%</div>
+
+  <div style="position:absolute; left:200px; top:387px; width:56px; height:113px; background-color:#9AA3AE; border-radius:3px 3px 0px 0px;"></div>
+  <div style="position:absolute; left:280px; top:370px; width:56px; height:130px; background-color:#9AA3AE; border-radius:3px 3px 0px 0px;"></div>
+  <div style="position:absolute; left:360px; top:381px; width:56px; height:119px; background-color:#9AA3AE; border-radius:3px 3px 0px 0px;"></div>
+  <div style="position:absolute; left:440px; top:340px; width:56px; height:160px; background-color:#9AA3AE; border-radius:3px 3px 0px 0px;"></div>
+  <div style="position:absolute; left:520px; top:321px; width:56px; height:179px; background-color:#9AA3AE; border-radius:3px 3px 0px 0px;"></div>
+  <div style="position:absolute; left:600px; top:327px; width:56px; height:173px; background-color:#9AA3AE; border-radius:3px 3px 0px 0px;"></div>
+  <div style="position:absolute; left:680px; top:301px; width:56px; height:199px; background-color:#9AA3AE; border-radius:3px 3px 0px 0px;"></div>
+  <div style="position:absolute; left:760px; top:266px; width:56px; height:234px; background-color:#9AA3AE; border-radius:3px 3px 0px 0px;"></div>
+  <div style="position:absolute; left:840px; top:268px; width:56px; height:232px; background-color:#9AA3AE; border-radius:3px 3px 0px 0px;"></div>
+  <div style="position:absolute; left:920px; top:215px; width:56px; height:285px; background-color:#2E7B4F; border-radius:3px 3px 0px 0px;"></div>
+
+  <div style="position:absolute; left:180px; top:312px; width:820px; height:0px; border-top:1.5px dashed #1F2A3A;"></div>
+
+  <div style="position:absolute; left:190px; top:364px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">10.3%</div>
+  <div style="position:absolute; left:270px; top:347px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">11.8%</div>
+  <div style="position:absolute; left:350px; top:358px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">10.8%</div>
+  <div style="position:absolute; left:430px; top:317px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340; background-color:#FFFFFF;">14.5%</div>
+  <div style="position:absolute; left:510px; top:291px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340; background-color:#FFFFFF;">16.3%</div>
+  <div style="position:absolute; left:590px; top:292px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340; background-color:#FFFFFF;">15.7%</div>
+  <div style="position:absolute; left:670px; top:278px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">18.1%</div>
+  <div style="position:absolute; left:750px; top:243px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">21.3%</div>
+  <div style="position:absolute; left:830px; top:245px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2B3340;">21.1%</div>
+  <div style="position:absolute; left:910px; top:192px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">25.9%</div>
+
+  <div style="position:absolute; left:180px; top:500px; width:820px; height:0px; border-top:1.5px solid #9AA3AE;"></div>
+  <div style="position:absolute; left:190px; top:508px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; color:#6B7380;">0–10</div>
+  <div style="position:absolute; left:270px; top:508px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; color:#6B7380;">10–20</div>
+  <div style="position:absolute; left:350px; top:508px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; color:#6B7380;">20–30</div>
+  <div style="position:absolute; left:430px; top:508px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; color:#6B7380;">30–40</div>
+  <div style="position:absolute; left:510px; top:508px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; color:#6B7380;">40–50</div>
+  <div style="position:absolute; left:590px; top:508px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; color:#6B7380;">50–60</div>
+  <div style="position:absolute; left:670px; top:508px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; color:#6B7380;">60–70</div>
+  <div style="position:absolute; left:750px; top:508px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; color:#6B7380;">70–80</div>
+  <div style="position:absolute; left:830px; top:508px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; color:#6B7380;">80–90</div>
+  <div style="position:absolute; left:910px; top:508px; width:76px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; color:#2E7B4F;">90–100</div>
+  <div style="position:absolute; left:180px; top:532px; width:820px; font-size:13px; color:#8A93A0;">信心百分位（每人各自排序，%）：左邊最沒把握，右邊最有把握</div>
+
+  <div style="position:absolute; left:1080px; top:170px; width:460px; height:314px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 24px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-size:17px; font-weight:700; color:#1C2431;">怎麼讀這張圖</div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#1F2A3A; margin-top:2px;">01</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">每一組是某個人自己的十分之一，<br>依 20 個抽樣預測彼此有多像排序。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#2E7B4F; margin-top:2px;">02</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">最沒把握的一成猜中 10.3%，<br>最有把握的一成 25.9%，全部是 17.1%。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#C8501F; margin-top:2px;">03</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">不是每一組都比前一組高：<br>20–30% 那組 10.8%，50–60% 那組 15.7%。</div></div>
+    <div style="display:flex; gap:12px; align-items:flex-start;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-weight:600; font-size:13px; color:#6B7380; margin-top:2px;">04</div><div style="font-size:14px; color:#2B3340; line-height:1.6;">這一講問的「何時該出手」，<br>這張圖給了一個訊號（整理者的讀法）。</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">pass@1 是 17.1%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">每一題只抽一個預測，<br>看評審分數過 0.5 的比例；<br>整理者換算，大約每六次猜中一次。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說，下一步的可能有成千上萬種。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">抽 20 次：36.3%</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">抽 20 個預測，任一個過門檻就算猜中；<br>圖 9 從 pass@1 一路畫到 pass@20，<br>中間幾個 k 的點沒有印數字。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者用 pass@k 看 LongNAP 的上限。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">信心怎麼量</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">20 個預測用句子嵌入變成向量，<br>算到中心點的平均平方距離；<br>越小越一致，就讀成越有信心。</div>
+    <div style="font-size:13px; color:#8A93A0;">每人換成自己的百分位，抵掉各人鬆緊不同。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：長條依圖 10 重畫，數字是圖上印的；這裡的信心是抽樣彼此的一致程度，不是模型自己報的機率。摘要把 25.9% 寫成 26%。</div>
+</div></div>
+</section>
+<section class="page" id="p10">
+  <div class="label"><span class="n">10 / 13</span><span>三個消融與推理的樣子</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">推理、檢索、時間順序，拿掉哪個都掉分</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">表 6：在跨使用者實驗的 5 位測試者身上（u2、u6、u12、u14、u16），每人一個模型，各拿掉一個零件重新訓練，看評審分數的平均</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:410px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:18px; font-weight:700; color:#FFFFFF;">LongNAP 的三個零件</div>
+  <div style="position:absolute; left:60px; top:198px; width:410px; height:252px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:20px 24px; display:flex; flex-direction:column; gap:10px;">
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:16px; color:#2B3340;">推理：兩個階段都先寫推理</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:16px; color:#2B3340;">檢索器：用 BM25 查自己的記憶</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:16px; color:#2B3340;">照時間順序訓練，記憶一路累積</div></div>
+    <div style="margin-top:8px; font-size:17px; font-weight:700; color:#2E7B4F;">五人平均 0.38</div>
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12.5px; color:#6B7380; line-height:1.6;">u2 0.34 · u6 0.37 · u12 0.40<br>u14 0.36 · u16 0.41</div>
+    <div style="font-size:13px; color:#8A93A0;">↑ 和表 3 裡這 5 人的單人模型分數一樣</div>
+  </div>
+
+  <div style="position:absolute; left:580px; top:120px; font-size:20px; font-weight:700; color:#1C2431;">三道檢查：各拿掉一個零件</div>
+  <div style="position:absolute; left:580px; top:158px; width:960px; height:98px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:18px 24px; display:flex; align-items:flex-start; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#C8501F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">1</div>
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:20px; font-weight:700; color:#1C2431;">拿掉推理 → 0.30</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#C8501F;">−0.07 &#183; 19.2%</div></div>
+      <div style="font-size:14px; color:#6B7380;">不寫推理，直接拿目前的觀察當查詢，只取回過去的觀察；五個人各掉 0.06 到 0.09</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:270px; width:960px; height:98px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:18px 24px; display:flex; align-items:flex-start; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#C8501F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">2</div>
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:20px; font-weight:700; color:#1C2431;">拿掉檢索器 → 0.32</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#C8501F;">−0.06 &#183; 15.2%</div></div>
+      <div style="font-size:14px; color:#6B7380;">跳過推理以檢索，看不到過去的推理與觀察；u12 只掉 0.01，u16 反而多 0.01</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:382px; width:960px; height:98px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:18px 24px; display:flex; align-items:flex-start; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#C8501F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">3</div>
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:20px; font-weight:700; color:#1C2431;">打亂訓練順序 → 0.34</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#C8501F;">−0.04 &#183; 9.3%</div></div>
+      <div style="font-size:14px; color:#6B7380;">推理不再照使用者的時間順序累積；u12、u16 兩人幾乎不變</div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:530px; width:480px; height:140px; box-sizing:border-box; background-color:#1F2A3A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:20px; font-weight:700; color:#FFFFFF;">判定：三個都有用，推理最大</div>
+    <div style="font-size:14px; color:rgba(255,255,255,0.78); line-height:1.65;">平均各掉 0.07、0.06、0.04。圖 6 也顯示，<br>取回的內容散布在好幾天前，不只最近。</div>
+  </div>
+  <div style="position:absolute; left:580px; top:530px; width:960px; height:140px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">推理長什麼樣（第 7.2 節、圖 8）</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">檢索用的推理越訓練越短，變得像搜尋關鍵字，平均 10.11 個 token；<br>預測用的推理在描述使用者的習慣與偏好，平均 85.34 個 token，而且因人而異。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:690px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:706px; font-size:20px; font-weight:700; color:#1C2431;">推理因人而異（圖 7）</div>
+  <div style="position:absolute; left:60px; top:742px; font-size:16px; color:#2B3340;">① 幾乎只用手機做線上問卷的 u7，推理彼此很像，分散程度 r<sub>avg</sub> 只有 4.94。</div>
+  <div style="position:absolute; left:60px; top:772px; font-size:16px; color:#2B3340;">② 白天找房子、晚上在幾個社群 app 之間切換的 u8，推理分成好幾群，r<sub>avg</sub> 是 16.26。</div>
+  <div style="position:absolute; left:60px; top:802px; font-size:16px; color:#2B3340;">③ 推理提升了預測力，但推理本身是否忠實、正確，作者留給未來的研究。</div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：整理者直接平均表 6 五人的值，拿掉檢索器約 0.33、打亂順序約 0.35，和平均欄的 0.32、0.34 不同，論文沒有說明算法。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M472 320L576 320" stroke="#9AA3AE" stroke-width="2" marker-end="url(#ag-c10)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p11">
+  <div class="label"><span class="n">11 / 13</span><span>離線訓練與線上學習</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">同一套流程，離線跑十輪或線上邊收邊學</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 4.2、8 節：論文的實驗先把一個月的資料收齊再訓練；powerNAP 讓 NAPsack 與 LongNAP 非同步地在背景跑，記憶永不清空</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">OFFLINE</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">論文的實驗：先收齊，再訓練</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">ONLINE · POWERNAP</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">powerNAP：邊標註，邊訓練</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:430px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:190px; top:222px; width:380px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">NAPsack 標完一整個月的資料</div>
+  <div style="position:absolute; left:190px; top:300px; width:380px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">存起來，切成訓練、驗證、測試</div>
+  <div style="position:absolute; left:190px; top:378px; width:380px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">LongNAP 依時間順序跑一個 epoch</div>
+  <div style="position:absolute; left:190px; top:456px; width:380px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">epoch 結束，清空記憶</div>
+  <div style="position:absolute; left:626px; top:434px; font-size:13px; font-weight:700; color:#6B7380;">重複 10 次</div>
+  <div style="position:absolute; left:60px; top:530px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">收集與訓練是先後兩個程序；每個 epoch 開頭記憶都是空的，靠時間順序重新累積。</div>
+
+  <div style="position:absolute; left:970px; top:222px; width:380px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">NAPsack 持續標註新的互動</div>
+  <div style="position:absolute; left:970px; top:300px; width:380px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">排進佇列</div>
+  <div style="position:absolute; left:970px; top:378px; width:380px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">LongNAP 取出來只訓練一遍，用完就丟</div>
+  <div style="position:absolute; left:970px; top:456px; width:380px; height:56px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2E7B4F;">記憶永不清空，推理一直累積</div>
+  <div style="position:absolute; left:1418px; top:356px; font-size:13px; font-weight:700; color:#2E7B4F;">一直重複</div>
+  <div style="position:absolute; left:840px; top:530px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">兩個程序非同步：標註一直跑，訓練在背景或夜裡跑；作者以 demo 公開。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:200px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">為什麼要線上</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">一個人的行為分布一直在變，<br>做的事與表現出的模式都會跟著改；<br>LongNAP 應該隨新的互動調整。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者說訓練可以在背景持續跑，或在夜裡跑。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:200px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">SleepWalk：照預測去做</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">LongNAP 本身不是電腦操作 agent；<br>SleepWalk 讓現成的電腦操作 agent<br>去執行 LongNAP 預測的動作。</div>
+    <div style="font-size:13px; color:#8A93A0;">作者引用 Anthropic 2024 年推出的電腦操作功能。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:200px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">兩個都只是 demo</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">作者公開程式，讓使用者用自己的資料試；<br>論文沒有報告它們的成效，<br>也沒說 SleepWalk 什麼時候動手。</div>
+    <div style="font-size:13px; color:#8A93A0;">能不能照預測去做，見第 12、13 卡。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩欄的對照是整理者依第 4.2、8 節排的；原文沒有比較兩種跑法的好壞，所以這張不用 ✗／✓。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c11" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c11" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M380 278V298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+    <path d="M380 356V376" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+    <path d="M380 434V454" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+    <path d="M570 484C618 484 618 406 572 406" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c11)"></path>
+    <path d="M1160 278V298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+    <path d="M1160 356V376" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c11)"></path>
+    <path d="M1160 434V454" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c11)"></path>
+    <path d="M1350 484C1410 484 1410 250 1352 250" stroke="#2E7B4F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#an-c11)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p12">
+  <div class="label"><span class="n">12 / 13</span><span>隱私的三條退路</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">本地跑不動時，還有三條退路</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 10 節：這類模型一定會碰到私密與敏感的資料。作者的第一個方向是去中心化；本地模型還做不到時，另外列了三種做法</div>
+
+  <div style="position:absolute; left:360px; top:150px; width:240px; height:64px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#2E7B4F;">去中心化</div><div style="font-size:12px; color:#6B7380;">推論與訓練都在裝置上</div></div></div>
+  <div style="position:absolute; left:490px; top:234px; font-size:13px; font-weight:700; color:#2E7B4F;">是</div>
+
+  <div style="position:absolute; left:60px; top:286px; width:220px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">LongNAP 看整段螢幕</div>
+  <div style="position:absolute; left:360px; top:276px; width:240px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:17px; font-weight:700; color:#1C2431; line-height:1.35;"><div>模型能在使用者的<br>裝置上跑嗎？</div></div>
+  <div style="position:absolute; left:616px; top:292px; font-size:13px; font-weight:700; color:#C8501F;">否</div>
+  <div style="position:absolute; left:660px; top:286px; width:200px; height:64px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:15px; font-weight:700; color:#C8501F;">本地模型還有困難</div><div style="font-size:12px; color:#6B7380;">改走右邊三條退路</div></div></div>
+
+  <div style="position:absolute; left:960px; top:150px; width:580px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:14px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">小的本地模型先遮掉</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">先在本地把私密資訊遮掉（redact），再把請求交給大模型</div>
+  </div>
+  <div style="position:absolute; left:960px; top:270px; width:580px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:14px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">依情境才分享</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">依使用者的個人脈絡，只把該分享的私密資料交給大模型</div>
+  </div>
+  <div style="position:absolute; left:960px; top:390px; width:580px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:14px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">讓請求彼此脫鉤</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">用類似 VPN 的系統，讓一個個模型請求彼此連不起來</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:506px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A;">這篇的做法</div>
+    <div style="font-size:15px; color:#2B3340;">IRB 核准；在核准處理個資與健康資料的伺服器上建模；標註走 Google 的受審查私有管線；訓練只用開放模型，機器由研究團隊管理</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:584px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:600px; font-size:20px; font-weight:700; color:#1C2431;">第 10 節的三個重點</div>
+  <div style="position:absolute; left:60px; top:642px; width:470px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#2E7B4F;">架構本身限縮了暴露</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">學會取回，讓推理軌跡留在本地；<br>也可以整個模型在本地建，<br>或讓學推理的階段不在特定使用者上微調。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">後兩種要付出一些效能代價。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:642px; width:470px; height:180px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#C8501F;">一般人很難做到</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">這些防護對個別使用者很難做到；<br>資料好收、主動 AI 又有好處，<br>使用者很可能對 LongNAP 揭露更多。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">作者引用「隱私悖論」的研究，說集中部署很難。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:642px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">去中心化靠模型變便宜</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">作者猜模型會越來越便宜、越快；<br>FlashAttention、量化、合成資料專門化，<br>已經省下大量運算或記憶體。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">第二條退路引了情境完整性、PrivacyLens 與 GUM。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：「能不能在本地跑」這個分叉是整理者依第 10 節的順序畫的；三條退路原文只列出，沒有比較優劣。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c12" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c12" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+      <marker id="ao-c12" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+    </defs>
+    <path d="M280 318L358 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c12)"></path>
+    <path d="M480 276V216" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c12)"></path>
+    <path d="M600 318L658 318" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c12)"></path>
+    <path d="M860 318H900" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M900 318V198H958" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c12)"></path>
+    <path d="M900 318H958" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c12)"></path>
+    <path d="M900 318V438H958" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c12)"></path>
+  </svg>
+</div></div>
+</section>
+<section class="page" id="p13">
+  <div class="label"><span class="n">13 / 13</span><span>三條原則與五個方向</span></div>
+  <div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">預測使用者已經可行，下一步是對齊</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">第 10、11 節：作者說從完整的行為脈絡預測需求已經可行；但訓練目標是「使用者會做什麼」，也只在 20 人、一個月的螢幕上驗證過</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.08em; color:#8A93A0;">01 · PASSIVE LABELS</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">標註可以被動取得，<br>不必請使用者自己標</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">錄下本來就會發生的互動，<br>事後用 VLM 寫成動作描述；<br>切段、壓縮、加上輸入事件都有幫助，<br>20 人一個月標出 359,219 個動作。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 請使用者逐段標註自己做的事<br>✓ 觀察本來就會做的事，事後再標</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.08em; color:#8A93A0;">02 · REASONING MEMORY</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">記憶存的是推理，<br>查得回來就用得上</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">LongNAP 查回的主要是自己寫過的推理；<br>拿掉推理或檢索都會掉分，<br>拿掉推理掉得最多（0.38 到 0.30）；<br>同一人時平均 0.38，基線最高 0.27。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 只靠權重記住使用者<br>✓ 先推理去檢索，再推理去預測</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.08em; color:#8A93A0;">03 · ALIGNMENT</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">猜得到會做什麼，<br>不等於該幫他做</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">訓練目標是使用者接下來可能做的事；<br>習慣拖延的人，<br>不會想要一個幫他拖延的模型；<br>作者建議借用引出價值觀的方法。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">作者把它比作社群媒體的同溫層、<br>聊天型語言模型的諂媚。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; font-size:20px; font-weight:700; color:#1C2431;">作者點名的五個方向（不排順序）</div>
+  <div style="position:absolute; left:60px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">01</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">超出螢幕的脈絡</div>
+  </div>
+  <div style="position:absolute; left:360px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">02</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">別種獎勵，防鑽漏洞</div>
+  </div>
+  <div style="position:absolute; left:660px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">03</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">檢索與推理交錯、加工具</div>
+  </div>
+  <div style="position:absolute; left:960px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">04</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">更多人、更久、每人一份 LoRA</div>
+  </div>
+  <div style="position:absolute; left:1260px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">05</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">訓練到收斂</div>
+  </div>
+  <div style="position:absolute; left:60px; top:722px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">五個方向取自第 10 節：螢幕只是一般脈絡的狹窄代理；評審當獎勵，訓練久了可能被 reward hacking；鷹架可以在一次生成裡交錯檢索與推理，再加上網頁搜尋；<br>只在少數使用者上驗證，每人一份權重在實務上有挑戰；因為預算沒有訓練到收斂，圖 5 的驗證分數還在上升，作者猜論文的數字可能是下限。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">硬規則：三條原則是整理者依全文歸納的，不是論文的條列；五個方向取自第 10 節，原文沒有排順序。</div>
+</div></div>
+</section>
+  <div class="foot">整理自 arXiv · Omar Shaikh、Valentin Teutschbein、Kanishk Gandhi、Yikun Chi、Nick Haber、Thomas Robinson、Nilam Ram、Byron Reeves、Sherry Yang、Michael S. Bernstein、Diyi Yang（Stanford University、Hasso Plattner Institute、New York University），2026-03-06：<a href="https://arxiv.org/abs/2603.05923">https://arxiv.org/abs/2603.05923</a>。這些圖卡是學習用的重新整理，不是原文的逐句翻譯；觀點與著作權屬於原作者。<a href="index.html">回到圖卡＋教材版</a> · <a href="../../">回首頁</a></div>
+</div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fit() {
+    var frames = document.querySelectorAll('.frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('load', fit);
+  fit();
+})();
+</script>
+</body>
+</html>
