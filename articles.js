@@ -286,6 +286,41 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "cs329z-unit-03",
+      "path": "articles/cs329z-unit-03/index.html",
+      "title": "CS 329Z 單元 3 對照：生成前的檢索該怎麼設計，RAG 與 ColBERT 各給了什麼證據",
+      "summary": "CS 329Z 第 2 週「Retrieval-Augmented Generation (RAG)」那一講的兩篇讀物並排：RAG 把檢索器和生成器接在一起微調，ColBERT 讓每個詞保留一個向量，把 BERT 等級的排序做到能即時檢索。本頁整理兩篇在三個問題上各拿出什麼證據（一段幾個向量、要不要重排、誰決定再查）、原文之間與其他單元怎麼引用它們，以及同一件事各篇怎麼稱呼。判斷題不附答案，判斷留給讀者。",
+      "source": {
+        "name": "CS 329Z · Engineering AI Agents（Stanford，Fall 2026）",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "date": "2026-09-30",
+      "tags": [
+        "cs329z",
+        "unit-synthesis",
+        "rag",
+        "retrieval",
+        "late-interaction"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 2,
+        "kind": "單元對照",
+        "section": "Building Blocks",
+        "lecture": "Retrieval-Augmented Generation (RAG)",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/cs329z-unit-03/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "cs329z-unit-01",
       "path": "articles/cs329z-unit-01/index.html",
       "title": "CS 329Z 單元 1 對照：換模型還是改系統，Zaharia 等人、Ng 與 Si 等人各給了什麼證據",
