@@ -181,6 +181,41 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "cs329z-unit-08",
+      "path": "articles/cs329z-unit-08/index.html",
+      "title": "CS 329Z 單元 8 對照：多加一個代理值不值得，AutoGen、DyLAN、Neubig 與 MAST 各給了什麼證據",
+      "summary": "CS 329Z 第 5 週「Multi-Agent Systems」那一講的四篇讀物並排：AutoGen 與 DyLAN 提出多代理的做法並量到好處，Neubig 替單一代理說話，MAST 在七個開源系統裡歸納出 14 種失敗。本頁整理四篇在三個問題上各拿出什麼證據、原文之間怎麼互相引用，以及同一件事各篇怎麼稱呼。判斷題不附答案，判斷留給讀者。",
+      "source": {
+        "name": "CS 329Z · Engineering AI Agents（Stanford，Fall 2026）",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "date": "2026-09-30",
+      "tags": [
+        "cs329z",
+        "unit-synthesis",
+        "multi-agent",
+        "single-agent",
+        "agent-reliability"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 5,
+        "kind": "單元對照",
+        "section": "Memory & Multi-Agent Systems",
+        "lecture": "Multi-Agent Systems",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/cs329z-unit-08/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "swe-bench-github-issues",
       "path": "articles/swe-bench-github-issues/index.html",
       "title": "SWE-bench：拿真實的 GitHub issue 出題，考語言模型能不能在整個 repo 裡寫出修好問題的 patch",
