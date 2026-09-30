@@ -1,6 +1,42 @@
 window.ARTICLES = {
   "articles": [
     {
+      "slug": "openclaw-personal-agent",
+      "path": "articles/openclaw-personal-agent/index.html",
+      "title": "OpenClaw 讀法：會主動找你的個人 agent，預設先安靜",
+      "summary": "開源的主動個人 agent OpenClaw 的讀法頁：跑在自己的裝置上、從聊天 app 找得到它。本頁依 README 與文件站 16 頁，照建一個主動 agent 的順序重排：Gateway 架構、agent loop、分層記憶與使用者模型、心跳什麼時候跑又什麼時候開口、排程與 webhook、配對、信任邊界與沙箱、skills 與 ClawHub 稽核。每章一張圖解卡加詳細說明，可切換「只看圖卡」。",
+      "source": {
+        "name": "GitHub · openclaw/openclaw（Peter Steinberger 與社群）",
+        "url": "https://github.com/openclaw/openclaw",
+        "date": "2025-11-24"
+      },
+      "date": "2026-09-30",
+      "tags": [
+        "proactive-agents",
+        "personal-agents",
+        "agent-memory",
+        "agent-security",
+        "cs329z"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 11,
+        "kind": "選讀",
+        "section": "Coding Agents & Proactive Agents",
+        "lecture": "Proactive Agents",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/openclaw-personal-agent/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "swe-bench-github-issues",
       "path": "articles/swe-bench-github-issues/index.html",
       "title": "SWE-bench：拿真實的 GitHub issue 出題，考語言模型能不能在整個 repo 裡寫出修好問題的 patch",

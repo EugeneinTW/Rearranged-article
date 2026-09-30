@@ -1,0 +1,2169 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenClaw 讀法</title>
+<meta name="description" content="開源的主動個人 agent OpenClaw 的讀法頁：跑在自己的裝置上、從聊天 app 找得到它。本頁依 README 與文件站 16 頁，照建一個主動 agent 的順序重排：Gateway 架構、agent loop、分層記憶與使用者模型、心跳什麼時候跑又什麼時候開口、排程與 webhook、配對、信任邊界與沙箱、skills 與 ClawHub 稽核。每章一張圖解卡加詳細說明，可切換「只看圖卡」。">
+<meta name="keywords" content="proactive-agents, personal-agents, agent-memory, agent-security, cs329z">
+<meta name="source" content="https://github.com/openclaw/openclaw">
+<meta name="date" content="2026-09-30">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Theme: tech-modern 變體「測試報告語意色」
+   藍 = 主色 / 綠 = pass / 琥珀 = 注意 / 紅 = fail
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --paper: #ffffff;
+  --paper-soft: #f3f5f8;
+  --paper-shadow: #dde2e8;
+  --ink: #121821;
+  --ink-soft: #3b4450;
+  --ink-mute: #6b7481;
+  --primary: #1e56a8;
+  --primary-deep: #143a72;
+  --primary-bg: #e6eef9;
+  --accent: #157a52;
+  --accent-deep: #0d5236;
+  --accent-bg: #e1f3e9;
+  --warm: #b8620e;
+  --warm-deep: #7d4108;
+  --warm-bg: #fbeddc;
+  --danger: #b83228;
+  --danger-bg: #f9e3e0;
+  --stone: #5a6370;
+  --stone-bg: #eceff3;
+  --code-bg: #0f1720;
+  --code-ink: #e6edf3;
+  --code-mute: #8b98a8;
+  --code-blue: #7cc4ff;
+  --code-green: #7ee2b8;
+  --code-amber: #ffc46b;
+
+  --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-cjk: 'Noto Sans TC', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --content-width: 780px;
+  --wide-width: 1100px;
+  --gutter: 24px;
+}
+
+/* ---------- reset & 排版 ---------- */
+* { box-sizing: border-box; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+body {
+  margin: 0; padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-cjk);
+  font-size: 18px;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: var(--content-width); margin: 0 auto; padding: 0 var(--gutter); }
+.wide { max-width: var(--wide-width); margin: 0 auto; padding: 0 var(--gutter); }
+section { padding-block: 64px; }
+section + section { border-top: 1px solid var(--paper-shadow); }
+
+h1, h2, h3, h4 { font-family: var(--font-cjk); font-weight: 700; text-wrap: balance; }
+h1 { font-size: 56px; line-height: 1.14; margin: 0 0 24px; font-weight: 800; }
+h2 { font-size: 36px; line-height: 1.25; margin: 0 0 18px; letter-spacing: -0.01em; }
+h2 .seg { display: inline-block; }
+h3 { font-size: 25px; line-height: 1.35; margin: 44px 0 14px; }
+h4 { font-size: 20px; line-height: 1.4; margin: 26px 0 10px; }
+p { margin: 0 0 18px; }
+ul, ol { padding-left: 26px; margin: 0 0 18px; }
+li { margin-bottom: 8px; }
+em { font-style: normal; color: var(--primary-deep); font-weight: 600; }
+strong { font-weight: 700; }
+a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+code {
+  font-family: var(--font-mono); font-size: 0.86em;
+  background: var(--stone-bg); color: var(--primary-deep);
+  padding: 2px 6px; border-radius: 4px;
+}
+.mono { font-family: var(--font-mono); }
+
+/* ---------- Hero ---------- */
+.hero {
+  padding-block: 84px 60px;
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-soft) 100%);
+  border-bottom: 2px solid var(--primary-deep);
+  position: relative;
+}
+.hero::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: linear-gradient(90deg,
+    var(--primary) 0%, var(--primary) 25%,
+    var(--accent) 25%, var(--accent) 50%,
+    var(--warm) 50%, var(--warm) 75%,
+    var(--danger) 75%, var(--danger) 100%);
+}
+.hero-meta {
+  display: flex; flex-wrap: wrap; gap: 10px 22px;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  margin-bottom: 32px;
+}
+.hero-meta span::before { content: "—"; margin-right: 10px; color: var(--paper-shadow); }
+.hero-meta span:first-child::before { content: ""; margin: 0; }
+.hero h1 { font-size: 60px; font-weight: 800; word-break: keep-all; }
+.hero h1 .accent {
+  display: block; margin-top: 12px;
+  font-size: 0.55em; font-weight: 600; line-height: 1.3;
+  color: var(--primary-deep);
+}
+.hero .lede { font-size: 22px; max-width: 720px; }
+.hero-keystat {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 28px; margin: 44px 0 0; padding-top: 34px;
+  border-top: 1px dashed var(--paper-shadow);
+}
+.hero-keystat dt {
+  font-family: var(--font-sans);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--ink-mute); margin-bottom: 6px;
+}
+.hero-keystat dd {
+  margin: 0; font-family: var(--font-mono);
+  font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1;
+}
+.hero-keystat dd small { font-family: var(--font-cjk); font-size: 14px; color: var(--ink-mute); font-weight: 400; margin-left: 6px; }
+
+/* ---------- Chapter / lede / eyebrow ---------- */
+.chapter {
+  font-family: var(--font-mono);
+  font-size: 12.5px; color: var(--primary);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 0 0 10px;
+}
+.chapter::before { content: "§ "; color: var(--paper-shadow); margin-right: 4px; }
+.lede {
+  font-size: 22px; line-height: 1.6; color: var(--ink-soft);
+  margin: 0 0 28px; font-weight: 400;
+}
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--primary); margin: 0 0 14px;
+}
+
+/* ---------- Pull quote ---------- */
+.pullquote {
+  margin: 48px -16px; padding: 32px 40px;
+  font-family: var(--font-cjk);
+  font-size: 27px; line-height: 1.5; font-weight: 600;
+  color: var(--primary-deep);
+  border-left: 5px solid var(--primary);
+  background: linear-gradient(90deg, var(--primary-bg) 0%, transparent 100%);
+}
+.pullquote.bronze {
+  color: var(--accent-deep); border-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-bg) 0%, transparent 100%);
+}
+.pullquote.terra {
+  color: var(--warm-deep); border-color: var(--warm);
+  background: linear-gradient(90deg, var(--warm-bg) 0%, transparent 100%);
+}
+.pullquote cite {
+  display: block; margin-top: 16px; font-style: normal; font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  letter-spacing: 0.06em;
+}
+.pullquote cite::before { content: "— "; }
+
+/* ---------- English quote ---------- */
+.quote-en {
+  margin: 28px 0;
+  font-family: var(--font-sans); font-style: italic;
+  font-size: 21px; line-height: 1.5; color: var(--ink);
+  padding-left: 20px; border-left: 3px solid var(--accent);
+}
+.quote-en .zh {
+  display: block; margin-top: 10px;
+  font-family: var(--font-cjk); font-style: normal;
+  font-size: 15px; color: var(--ink-soft); line-height: 1.6;
+}
+
+/* ---------- Story ---------- */
+.story {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 14px;
+  padding: 38px 44px; margin: 48px 0;
+  position: relative;
+}
+.story::before {
+  content: "❝"; position: absolute; top: -6px; left: 24px;
+  font-size: 72px; color: var(--warm); line-height: 1;
+  font-family: var(--font-sans);
+}
+.story .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.18em;
+  color: var(--warm); margin-bottom: 10px; padding-left: 42px;
+}
+.story h4 { margin: 0 0 16px; font-size: 22px; color: var(--warm-deep); }
+.story p { margin-bottom: 14px; font-size: 17px; line-height: 1.7; }
+.story p:last-child { margin-bottom: 0; }
+
+/* ---------- Explain ---------- */
+.explain {
+  background: var(--primary-bg);
+  border-left: 4px solid var(--primary);
+  border-radius: 4px;
+  padding: 26px 30px; margin: 36px 0;
+  font-family: var(--font-cjk); position: relative;
+}
+.explain.bronze { background: var(--accent-bg); border-color: var(--accent); }
+.explain.terra { background: var(--warm-bg); border-color: var(--warm); }
+.explain.stone { background: var(--stone-bg); border-color: var(--stone); }
+.explain .label {
+  position: absolute; top: -12px; left: 16px;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.15em; padding: 4px 12px;
+  border-radius: 3px; text-transform: uppercase;
+}
+.explain.bronze .label { background: var(--accent); }
+.explain.terra .label { background: var(--warm); }
+.explain.stone .label { background: var(--stone); }
+.explain h4 { margin: 4px 0 12px; font-size: 19px; color: var(--primary-deep); }
+.explain.bronze h4 { color: var(--accent-deep); }
+.explain.terra h4 { color: var(--warm-deep); }
+.explain.stone h4 { color: var(--ink); }
+.explain p { font-size: 16.5px; }
+.explain p:last-child { margin-bottom: 0; }
+.explain ul, .explain ol { margin: 8px 0 0; padding-left: 22px; }
+.explain li { margin-bottom: 6px; font-size: 16px; }
+.explain code { background: rgba(255,255,255,0.75); }
+
+/* ---------- Stat grid ---------- */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.stat-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 28px 24px; text-align: center;
+  border-top: 4px solid var(--primary);
+}
+.stat-card.bronze { border-color: var(--accent); }
+.stat-card.terra { border-color: var(--warm); }
+.stat-card.danger { border-color: var(--danger); }
+.stat-card .big {
+  font-family: var(--font-mono);
+  font-size: 46px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1; margin-bottom: 10px;
+}
+.stat-card.bronze .big { color: var(--accent-deep); }
+.stat-card.terra .big { color: var(--warm-deep); }
+.stat-card.danger .big { color: var(--danger); }
+.stat-card .big small { font-family: var(--font-cjk); font-size: 16px; opacity: 0.75; margin-left: 4px; font-weight: 500; }
+.stat-card .label {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.stat-card .note { margin-top: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.55; }
+
+/* ---------- Compare table ---------- */
+.table-scroll { overflow-x: auto; margin: 36px 0; }
+.compare {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-cjk); font-size: 15.5px;
+  background: var(--paper-soft);
+  border-radius: 10px; overflow: hidden;
+  min-width: 560px;
+}
+.compare th, .compare td {
+  padding: 15px 18px; text-align: left;
+  border-bottom: 1px solid var(--paper-shadow);
+  vertical-align: top; line-height: 1.6;
+}
+.compare th {
+  background: var(--primary-deep); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+}
+.compare tr:last-child td { border-bottom: none; }
+.compare td:first-child { font-weight: 700; color: var(--primary-deep); width: 24%; }
+.compare .id { font-family: var(--font-mono); font-size: 13px; display: block; color: var(--ink-mute); font-weight: 500; margin-bottom: 2px; }
+.compare .yes { color: var(--accent-deep); font-weight: 700; }
+.compare .no { color: var(--danger); font-weight: 700; }
+
+/* ---------- Value cards ---------- */
+.values {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.value-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 26px 24px;
+  border-top: 5px solid var(--primary);
+}
+.value-card:nth-child(2) { border-top-color: var(--accent); }
+.value-card:nth-child(3) { border-top-color: var(--warm); }
+.value-card:nth-child(4) { border-top-color: var(--primary-deep); }
+.value-card:nth-child(5) { border-top-color: var(--stone); }
+.value-card .num {
+  font-family: var(--font-mono);
+  font-size: 38px; font-weight: 700;
+  color: var(--primary); line-height: 1; margin-bottom: 12px;
+}
+.value-card:nth-child(2) .num { color: var(--accent); }
+.value-card:nth-child(3) .num { color: var(--warm); }
+.value-card:nth-child(4) .num { color: var(--primary-deep); }
+.value-card:nth-child(5) .num { color: var(--stone); }
+.value-card .tag {
+  display: inline-block; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--primary); margin-bottom: 10px;
+}
+.value-card:nth-child(2) .tag { color: var(--accent); }
+.value-card:nth-child(3) .tag { color: var(--warm); }
+.value-card:nth-child(4) .tag { color: var(--primary-deep); }
+.value-card h4 { margin: 0 0 10px; font-size: 19px; line-height: 1.4; }
+.value-card p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin: 0; }
+
+/* ---------- 擴充檢查卡（附成本標籤） ---------- */
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px; margin: 40px 0;
+}
+.card {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 12px;
+  padding: 24px 24px 22px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.card .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card h4 { margin: 0; font-size: 18.5px; line-height: 1.4; }
+.card p { margin: 0; font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); }
+.card .signal { font-family: var(--font-mono); font-size: 12.5px; color: var(--primary-deep); background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 6px; padding: 6px 10px; margin-top: 4px; overflow-x: auto; white-space: nowrap; }
+.pill {
+  flex: none; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px;
+}
+.pill.fast { background: var(--accent-bg); color: var(--accent-deep); }
+.pill.mid { background: var(--warm-bg); color: var(--warm-deep); }
+.pill.slow { background: var(--danger-bg); color: var(--danger); }
+
+/* ---------- Thought ---------- */
+.thought {
+  background: var(--accent-bg);
+  border-left: 4px solid var(--accent);
+  padding: 26px 30px; margin: 40px 0;
+  border-radius: 4px; position: relative;
+}
+.thought .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--accent-deep); margin-bottom: 10px;
+}
+.thought h4 { font-size: 19px; margin: 0 0 14px; color: var(--accent-deep); line-height: 1.45; }
+.thought p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin-bottom: 8px; }
+.thought .hint {
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px dashed rgba(13, 82, 54, 0.3);
+  font-size: 14px; color: var(--accent-deep);
+}
+.thought .hint::before { content: "建議方向："; font-weight: 700; }
+
+/* ---------- Code block ---------- */
+.codeblock { margin: 30px 0; }
+.codeblock .file {
+  display: inline-block; font-family: var(--font-mono);
+  font-size: 12px; color: var(--ink-mute);
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow); border-bottom: none;
+  border-radius: 8px 8px 0 0; padding: 7px 14px;
+}
+pre.code {
+  margin: 0; background: var(--code-bg); color: var(--code-ink);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65;
+  padding: 22px 24px; border-radius: 0 10px 10px 10px;
+  overflow-x: auto; tab-size: 2; white-space: pre;
+}
+pre.code.solo { border-radius: 10px; }
+pre.code .c { color: var(--code-mute); }
+pre.code .k { color: var(--code-blue); }
+pre.code .s { color: var(--code-green); }
+pre.code .a { color: var(--code-amber); font-weight: 700; }
+
+/* ---------- Flow（eval 迴圈圖） ---------- */
+.flow { display: flex; align-items: stretch; margin: 40px 0; }
+.flow-step {
+  flex: 1 1 0; min-width: 0;
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow);
+  border-radius: 10px; padding: 18px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.flow-step .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--primary); letter-spacing: 0.1em; }
+.flow-step strong { font-size: 17px; line-height: 1.3; }
+.flow-step span.d { font-size: 14px; line-height: 1.55; color: var(--ink-soft); }
+.flow-step.score { border-color: var(--accent); background: var(--accent-bg); }
+.flow-step.score .k { color: var(--accent-deep); }
+.flow-arrow { flex: none; width: 30px; position: relative; }
+.flow-arrow::before {
+  content: ""; position: absolute; top: 50%; left: 2px; right: 2px; height: 2px;
+  background: var(--primary); transform: translateY(-50%);
+}
+.flow-arrow::after {
+  content: ""; position: absolute; top: 50%; right: 4px; width: 9px; height: 9px;
+  border-top: 2px solid var(--primary); border-right: 2px solid var(--primary);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+/* ---------- Cascade（編號步驟） ---------- */
+.cascade { display: flex; flex-direction: column; gap: 14px; margin: 32px 0; }
+.cascade-step {
+  display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px;
+}
+.cascade-step .n {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-mono); font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.cascade-step .t { font-size: 16.5px; line-height: 1.65; }
+.cascade-step .t strong { display: block; margin-bottom: 2px; }
+
+/* ---------- Checklist ---------- */
+.checklist { list-style: none; padding: 0; margin: 32px 0; display: flex; flex-direction: column; gap: 12px; }
+.checklist li {
+  display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px; margin: 0;
+  font-size: 16.5px; line-height: 1.65;
+}
+.checklist .box {
+  width: 24px; height: 24px; margin-top: 3px;
+  border: 2px solid var(--accent); border-radius: 6px; background: var(--paper);
+}
+.checklist strong { display: block; }
+.checklist small { display: block; color: var(--ink-soft); font-size: 15px; }
+
+/* ---------- Glossary ---------- */
+.glossary { background: var(--primary-deep); color: var(--paper); padding-block: 64px; }
+.glossary h2 { color: var(--paper); margin-top: 0; }
+.glossary .eyebrow { color: var(--accent-bg); }
+.glossary .lede { color: var(--paper); opacity: 0.8; }
+.glossary-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 26px; margin: 42px 0 0;
+}
+.term { border-top: 2px solid var(--accent); padding-top: 16px; }
+.term:nth-child(3n+2) { border-color: var(--warm); }
+.term:nth-child(3n+3) { border-color: var(--paper); }
+.term dt {
+  font-family: var(--font-mono);
+  font-size: 14px; font-weight: 700;
+  color: var(--accent-bg); letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+.term .zh-name { font-family: var(--font-cjk); font-size: 16px; font-weight: 600; color: var(--paper); margin-bottom: 8px; display: block; }
+.term dd { margin: 0; font-family: var(--font-cjk); font-size: 14.5px; line-height: 1.65; color: rgba(255, 255, 255, 0.8); }
+
+/* ---------- TOC ---------- */
+.toc {
+  position: fixed; right: 24px; top: 50%; transform: translateY(-50%); z-index: 10;
+  font-family: var(--font-sans); font-size: 12px;
+  background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 10px;
+  padding: 18px 20px; max-width: 236px;
+  box-shadow: 0 4px 18px rgba(18, 24, 33, 0.08);
+}
+.toc h5 { margin: 0 0 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-mute); }
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc -1; }
+.toc li { margin-bottom: 6px; counter-increment: toc; font-size: 12px; line-height: 1.45; display: flex; gap: 8px; }
+.toc li::before { content: counter(toc, decimal-leading-zero); font-family: var(--font-mono); color: var(--ink-mute); font-size: 10.5px; padding-top: 2px; }
+.toc a { color: var(--ink-soft); text-decoration: none; }
+.toc a:hover { color: var(--primary); }
+@media (max-width: 1340px) { .toc { display: none; } }
+
+/* ---------- Footer ---------- */
+footer {
+  padding-block: 48px 64px;
+  background: var(--paper-soft);
+  text-align: center;
+  font-family: var(--font-cjk);
+  font-size: 13.5px; color: var(--ink-mute);
+}
+footer p { margin: 0 0 8px; }
+footer .credit { font-family: var(--font-sans); }
+footer .disclaimer { margin-top: 14px; font-size: 12px; opacity: 0.75; max-width: 640px; margin-inline: auto; }
+
+/* ---------- 響應式 ---------- */
+@media (max-width: 768px) {
+  body { font-size: 17px; }
+  .hero { padding-block: 56px 42px; }
+  .hero h1 { font-size: 36px; }
+  .hero .lede { font-size: 18px; }
+  h2 { font-size: 27px; }
+  h3 { font-size: 22px; }
+  section { padding-block: 46px; }
+  .lede { font-size: 19px; }
+  .pullquote { font-size: 21px; margin: 34px 0; padding: 24px; }
+  .story { padding: 30px 24px; }
+  .stat-card .big { font-size: 36px; }
+  .flow { flex-direction: column; }
+  .flow-arrow { width: auto; height: 30px; }
+  .flow-arrow::before { top: 2px; bottom: 2px; left: 50%; right: auto; width: 2px; height: auto; transform: translateX(-50%); }
+  .flow-arrow::after { top: auto; bottom: 4px; left: 50%; right: auto; transform: translateX(-50%) rotate(135deg); }
+  .compare td:first-child { width: auto; }
+}
+
+/* ---------- 列印 ---------- */
+@media print {
+  .toc { display: none; }
+  body { font-size: 12pt; }
+  .hero, .glossary {
+    color: var(--ink) !important; background: white !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .glossary h2, .glossary .term dt, .glossary .lede, .glossary .term .zh-name { color: var(--ink) !important; }
+  .glossary .term dd { color: var(--ink-soft) !important; }
+  pre.code { background: #f3f5f8 !important; color: #121821 !important; border: 1px solid #ccd; white-space: pre-wrap; }
+  pre.code .c, pre.code .k, pre.code .s, pre.code .a { color: inherit !important; }
+  section { page-break-inside: avoid; }
+}
+
+/* ---------- 整合版：模式列、圖卡帶、燈箱 ---------- */
+.modebar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; padding: 10px var(--gutter); background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--paper-shadow); font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.modebar .brand { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.modebar .left { display: flex; align-items: center; gap: 14px; }
+.modebar .homelink { font-size: 12px; font-weight: 600; color: var(--ink-mute); text-decoration: none; }
+.modebar .homelink:hover { color: var(--primary); text-decoration: underline; }
+.modebar .switch { display: flex; gap: 6px; }
+.modebar button { font: inherit; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.modebar button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+.modebar button:focus-visible, .cardlabel .zoom:focus-visible, .lightbox .close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.modebar .canvaslink { font-size: 12px; color: var(--ink-mute); }
+.cardband { max-width: 1600px; margin: 4px auto 40px; padding: 0 var(--gutter); }
+.cardlabel { display: flex; align-items: baseline; gap: 14px; padding: 0 2px 8px; font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.cardlabel .n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--warm); }
+.cardlabel .zoom { margin-left: auto; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--paper-shadow); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; font-size: 16px; color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(18, 24, 33, 0.86); display: none; align-items: center; justify-content: center; padding: 24px; }
+.lightbox.open { display: flex; }
+.lightbox .frame { border: none; border-radius: 8px; max-width: none; width: auto; flex: none; }
+.lightbox .close { position: absolute; top: 14px; right: 18px; font: inherit; font-family: var(--font-sans); font-size: 13px; color: #FFFFFF; background: transparent; border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.faq { margin: 36px 0 8px; padding: 0; }
+.faq > div { padding: 18px 0; border-top: 1px solid var(--paper-shadow); }
+.faq > div:last-child { border-bottom: 1px solid var(--paper-shadow); }
+.faq dt { margin: 0 0 6px; font-weight: 700; font-size: 17px; color: var(--ink); }
+.faq dt::before { content: "問"; display: inline-block; margin-right: 10px; padding: 1px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; color: #FFFFFF; background: var(--primary); vertical-align: 2px; }
+.faq dd { margin: 0; font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+body.mode-cards section .prose { display: none; }
+body.mode-cards section.nocard { display: none; }
+body.mode-cards section { padding-block: 44px; }
+body.mode-cards .toc li.nocard { display: none; }
+@media (max-width: 768px) { .cardband { margin-bottom: 32px; } .modebar { font-size: 12px; } }
+@media print {
+  .modebar, .lightbox, .cardlabel .zoom { display: none !important; }
+  body.mode-cards section .prose { display: block !important; }
+  body.mode-cards section.nocard { display: block !important; }
+  section { page-break-inside: auto; }
+  .cardband, .story, .explain, .thought, .stat-grid, .values, .cards, .table-scroll { page-break-inside: avoid; }
+  .frame { height: auto !important; border: none; border-radius: 0; }
+  .frame > div { transform: none !important; zoom: 0.44; }
+}
+
+</style>
+</head>
+<body>
+<div class="modebar">
+  <div class="left"><a class="homelink" href="../../">← 首頁</a><span class="brand">OpenClaw · 圖卡 + 教材</span></div>
+  <div class="switch" role="group" aria-label="閱讀模式">
+    <button type="button" data-mode="full" aria-pressed="true">圖卡＋詳解</button>
+    <button type="button" data-mode="cards" aria-pressed="false">只看圖卡</button>
+  </div>
+  <a class="canvaslink" href="cards.html">圖卡連續閱讀版</a>
+</div>
+<nav class="toc" aria-label="目錄">
+  <h5>目錄</h5>
+  <ol>
+    <li class="nocard"><a href="#prologue">主動但先安靜</a></li>
+    <li class="nocard"><a href="#versions">版本與分區</a></li>
+    <li><a href="#architecture">Gateway 架構</a></li>
+    <li><a href="#agent-loop">agent loop</a></li>
+    <li><a href="#memory">記憶的寫入</a></li>
+    <li><a href="#user-model">使用者模型與意圖</a></li>
+    <li><a href="#heartbeat-when">心跳何時跑</a></li>
+    <li><a href="#heartbeat-speak">心跳何時開口</a></li>
+    <li><a href="#triggers">其他觸發來源</a></li>
+    <li><a href="#pairing">配對與存取</a></li>
+    <li><a href="#trust">信任邊界</a></li>
+    <li><a href="#sandbox">沙箱</a></li>
+    <li><a href="#skills">skills 與稽核</a></li>
+    <li><a href="#reading">讀法與動手做</a></li>
+    <li class="nocard"><a href="#glossary">名詞速查</a></li>
+  </ol>
+</nav>
+<header class="hero">
+  <div class="container">
+    <div class="hero-meta">
+      <span>GitHub · openclaw/openclaw · repo 建立於 2025-11-24</span>
+      <span>開源專案的讀法頁</span>
+      <span>作者 Peter Steinberger 與社群（MIT，© OpenClaw Foundation）</span>
+      <span>README 與文件依 2026-09-30 抓到的版本，專案之後還會改</span>
+    </div>
+    <p class="eyebrow">OPENCLAW DOCS · 圖卡＋教材整合版</p>
+    <h1><span style="white-space:nowrap">OpenClaw 讀法：</span> 會主動找你的助理， 預設先安靜<span class="accent"><span style="white-space:nowrap">Gateway、agent loop 與記憶，</span> <span style="white-space:nowrap">心跳、排程、配對與沙箱，</span> <span style="white-space:nowrap">照建一個主動 agent 的順序重排</span></span></h1>
+    <p class="lede">OpenClaw 是跑在你自己電腦上的開源 AI 助理，從你已經在用的聊天 app 就找得到它。它不只等你傳訊息：Gateway 會定時喚醒它跑一輪（心跳），也會照排程或外部的 webhook 自己開工。這一頁讀 README 與文件站的 16 頁，照建一個主動 agent 的順序重排：先看 Gateway 與 agent loop，再看記憶與使用者模型，接著是這一講的重點，它什麼時候跑、什麼時候開口，最後是誰能找上它、工具在哪裡跑、外來的 skill 怎麼驗。每章開頭先放一張圖解卡講重點，往下是詳細作法；想速讀就切到「只看圖卡」。</p>
+    <dl class="hero-keystat">
+      <div><dt>心跳預設間隔</dt><dd>30<small>分鐘</small></dd></div>
+      <div><dt>記憶的分層</dt><dd>5<small>層</small></dd></div>
+      <div><dt>DM 存取政策</dt><dd>4<small>種</small></dd></div>
+      <div><dt>沙箱模式</dt><dd>3<small>種</small></dd></div>
+    </dl>
+  </div>
+</header>
+
+
+<section id="prologue" data-toc="主動但先安靜" class="nocard">
+  <div class="container">
+    <p class="chapter">Prologue · 整理者的引言</p>
+    <h2><span class="seg">它會自己開一輪，</span><span class="seg">但預設先安靜</span></h2>
+    <p class="lede">OpenClaw 是跑在自己裝置上、從聊天 app 找得到的開源個人 agent。它會定時醒來跑一輪，但文件把預設設計成沒事就不出聲；這正是這一講要問的：agent 什麼時候該主動，什麼時候該等。</p>
+
+    <p>這是 Stanford CS 329Z 第 11 週的選讀，屬於 Coding Agents &amp; Proactive Agents 分區的〈Proactive Agents〉那一講。那一講的題目是：從被動到主動；General User Models（GUM）；Next Action Prediction；開源的主動個人 agent；隱私與信任的影響；以及 agent 何時該主動、何時該等（mixed initiative）。同一講的必讀是 Shaikh 等人的〈Creating General User Models from Computer Use〉，另一篇選讀是 Shaikh 等人的〈Learning Next Action Predictors from <span style="white-space:nowrap">Human-Computer</span> Interaction〉。課程書單把這一篇列為 Steinberger 的〈OpenClaw: <span style="white-space:nowrap">Open-source</span> proactive AI agent〉（2025），連到的是 GitHub 上的 repo。</p>
+    <p>README 說 OpenClaw 是跑在你自己電腦上的開源 AI 助理，在你已經在用的聊天管道裡等你：Discord、iMessage、Slack、Teams、Telegram、WhatsApp，另外還有二十多種，也有 macOS、iOS、Android、Windows、Linux 的原生 app。同一個 Gateway 可以在筆電上當個人助理，也可以當整個團隊共用的部署，README 說差別只在設定。它也說狀態、記憶與憑證都留在你的硬體上，模型和 agent harness（Claude、Codex、本機模型）是可以替換的 plugin。專案由獨立的非營利組織 OpenClaw Foundation 管理，README 說它沒有付費方案、沒有託管服務、也沒有代幣，捐助者不擁有也不主導專案。</p>
+    <p>這一頁讀了 README 與文件站的 16 頁。文件站 docs.openclaw.ai 的目錄檔列了約 1,350 頁（整理者數的），本頁只讀和這一講有關的幾區：架構與 agent loop（3 頁）、記憶（2 頁）、主動（心跳、排程、排程的運作方式，3 頁）、誰能找上 agent（配對、存取控制，2 頁）、信任與安全（安全、沙箱，2 頁）、擴充（skills、ClawHub 稽核，2 頁）。另外加讀了兩頁：沙箱索引頁的範例用到三種模式卻沒有解釋，於是讀了定義它們的那一頁；排程頁只是索引，於是讀了 webhook 那一頁。設定參數、CLI 參考、疑難排解、各聊天平台的設定、plugins、模型供應商都沒讀，提到時只說細節在哪一頁。</p>
+    <p>順序是整理者重排的。文件站按主題分區（concepts、gateway、automation、channels、tools、clawhub 等），本頁照建一個主動 agent 需要的順序：先看邊界（Gateway 架構），再看一輪怎麼跑（agent loop），然後是狀態放在哪（記憶、使用者模型、意圖），接著是這一講的重點：什麼時候跑、什麼時候開口、還有哪些東西會開一輪，最後是誰能找上它、工具在哪裡跑、外來的 skill 怎麼驗。</p>
+    <p>這是持續在改的專案，README 與文件幾乎每天都在更新。本頁依 2026 年 9 月 30 日抓到的版本整理，之後的內容可能不同；本頁不去比對舊版。這些也都是專案自己寫的文件：文件對 OpenClaw 功能與設計的說法，本頁一律寫成「文件說」「README 說」；指令、設定鍵與元件名照原文保留，例如 Gateway、channels、nodes、heartbeat、automations（CLI 裡也叫 cron）、skills、ClawHub、pairing。數字只用文件寫出的；文件站的頁數與各區頁數是整理者依目錄檔數的。</p>
+    <p>有幾章談安全，處理方式是：寫信任模型、預設值與防護的設計，不寫可以拿來攻擊別人部署的步驟；網路暴露的風險只寫到文件自己的概念層級。記憶架構頁舉了一個網頁想把危險指令塞進記憶的例子，本頁只講它在哪裡被擋下，不寫那串指令。</p>
+    <p>下表是整理者把講題和文件對了一下的結果。文件本身沒有用 mixed initiative、General User Model、Next Action Prediction 這些詞，表裡的對應是整理者的讀法。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>講題</th><th>文件裡對應的東西</th><th><span style="white-space:nowrap">本頁</span></th></tr></thead>
+        <tbody>
+          <tr><td>從被動到主動</td><td>除了你傳來的訊息，心跳的 tick、排程工作、webhook、背景指令跑完，都會讓 Gateway 開一輪 agent</td><td><span style="white-space:nowrap">第 6 到 8 章</span></td></tr>
+          <tr><td>General User Models</td><td>USER.md 這一層使用者模型：<br>寫成指令、帶觀察日期、偏好改了就地取代</td><td><span style="white-space:nowrap">第 5 章</span></td></tr>
+          <tr><td>Next Action Prediction</td><td>文件沒有預測模型；最接近的是 agent 從對話<br>認出重複的請求、提議排成排程，<br>而文件明說沒有重複偵測引擎</td><td><span style="white-space:nowrap">第 8 章</span></td></tr>
+          <tr><td>開源的主動個人 agent</td><td>這個專案本身：跑在自己裝置上、<br>從聊天 app 找得到、定時醒來看有沒有事</td><td><span style="white-space:nowrap">第 2、3 章</span></td></tr>
+          <tr><td>隱私與信任</td><td>狀態留在自己的硬體、陌生人先配對、外來內容不可信、沙箱、一個 Gateway 一個信任邊界</td><td><span style="white-space:nowrap">第 9 到 12 章</span></td></tr>
+          <tr><td>何時主動、何時等</td><td>預設 prompt 沒事回 NO_REPLY、忙碌時延後、<br>警示只送主人、升級成排程要你確認一句話、<br>意圖有冷卻與次數上限</td><td><span style="white-space:nowrap">第 5 到 8 章</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="explain">
+      <span class="label">給初學者</span>
+      <h4>先把幾個名詞對齊</h4>
+      <ul>
+        <li><strong>Gateway</strong>：長駐在你電腦上的程序，所有聊天連線、session、工具與事件都經過它。</li>
+        <li><strong>Channel（聊天頻道）</strong>：一個聊天平台的連線，例如 Telegram、WhatsApp、Slack。</li>
+        <li><strong>Session</strong>：一段對話的上下文。每個 agent 有一個 main session，群組與頻道各有自己的 session。</li>
+        <li><strong>Heartbeat（心跳）</strong>：Gateway 定時在 main session 跑的一輪 agent，看看有沒有需要你注意的事。</li>
+        <li><strong>Automations（排程工作）</strong>：Gateway 內建的排程器，照時間喚醒 agent；CLI 也叫 cron。</li>
+        <li><strong>Workspace</strong>：agent 唯一的工作目錄，記憶與設定檔都是裡面的 Markdown 檔。</li>
+      </ul>
+    </div>
+
+    <div class="pullquote">
+      主動的 agent 難的不是會醒來，是醒來之後知道什麼時候不該開口。
+      <cite>序章核心觀念</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="versions" data-toc="版本與分區" class="nocard">
+  <div class="container">
+    <p class="chapter">Chapter 01 · README, docs index, migration notes</p>
+    <h2><span class="seg">先記下抓取日期：</span><span class="seg">文件每天都在改</span></h2>
+    <p class="lede">OpenClaw 沒有像協定規格那樣可以指定的版本號。本頁讀的是 2026 年 9 月 30 日 main 分支的 README 與當天的文件站；幾頁文件自己記下了搬遷與改名，讀的時候要知道哪些名字是舊的。</p>
+
+    <p>本頁讀的文件頁都沒有標日期或版本號。README 的安裝段要求 Node 24.16 以上或 26.1 以上（建議 26），用 <code>npm install -g openclaw@latest</code> 安裝；文件站另有 releases 分區（34 頁，整理者數的），本頁沒有讀。所以這一章不寫「這一版改了什麼」，只列文件頁上自己寫明的搬遷：看到舊名字時，知道它去了哪裡。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>舊的做法</th><th>現在（文件的說法）</th><th><span style="white-space:nowrap">哪一頁</span></th></tr></thead>
+        <tbody>
+          <tr><td><code>HEARTBEAT.md</code></td><td>心跳的檢查清單改存在狀態資料庫的 monitor scratch；<br><code>openclaw doctor --fix</code> 匯入並封存舊檔；<br>runtime 不再讀 HEARTBEAT.md</td><td><span style="white-space:nowrap">心跳頁</span></td></tr>
+          <tr><td>scratch 的 <code>tasks:</code></td><td>每一條轉成獨立的排程工作，<br>保留原本的間隔與上次執行時間</td><td><span style="white-space:nowrap">心跳頁</span></td></tr>
+          <tr><td><code>HEARTBEAT_OK</code></td><td>舊的自訂 prompt 還能用；新的回應合約是 NO_REPLY 與 <code>heartbeat_respond</code></td><td><span style="white-space:nowrap">心跳頁</span></td></tr>
+          <tr><td><code>openclaw cron</code></td><td>指令改叫 <code>openclaw automations</code>，<code>cron</code> 留作別名</td><td><span style="white-space:nowrap">排程頁</span></td></tr>
+          <tr><td>JSON 狀態檔</td><td>workspace 的設定狀態、配對與裝置紀錄都搬進共用的 SQLite 狀態資料庫；doctor 匯入後移除來源</td><td><span style="white-space:nowrap">agent 頁、<br>配對頁</span></td></tr>
+          <tr><td><code>metadata.clawdbot</code></td><td>skill 的中繼資料改成 <code>metadata.openclaw</code>；<br>沒有新的時，舊的仍然接受</td><td><span style="white-space:nowrap">skills 頁</span></td></tr>
+          <tr><td>單頁的說明</td><td>安全、沙箱、排程原本各是一頁，<br>現在拆成子頁，舊的錨點都還連得到</td><td><span style="white-space:nowrap">安全頁、<br>沙箱頁</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>下表是本頁讀的來源放在文件站的哪一區，以及對到本頁的哪一章。各區頁數是整理者依目錄檔數的。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>分區</th><th>本頁讀的頁</th><th><span style="white-space:nowrap">本頁</span></th></tr></thead>
+        <tbody>
+          <tr><td>GitHub repo</td><td>README（文末的捐助者與貢獻者名單不算）</td><td><span style="white-space:nowrap">序章、第 2、10 章</span></td></tr>
+          <tr><td>concepts<br>（78 頁）</td><td>architecture、agent、<span style="white-space:nowrap">agent-loop</span>、memory、<span style="white-space:nowrap">memory-architecture</span></td><td><span style="white-space:nowrap">第 2 到 5 章</span></td></tr>
+          <tr><td>gateway<br>（160 頁）</td><td>heartbeat；security 與其中的 <span style="white-space:nowrap">access-control</span>；sandboxing 與加讀的 <span style="white-space:nowrap">modes-scope-and-backend</span></td><td><span style="white-space:nowrap">第 6、7、9 到 11 章</span></td></tr>
+          <tr><td>automation<br>（18 頁）</td><td><span style="white-space:nowrap">cron-jobs</span>、<span style="white-space:nowrap">how-it-works</span>、加讀的 webhooks</td><td><span style="white-space:nowrap">第 8 章</span></td></tr>
+          <tr><td>channels<br>（109 頁）</td><td>pairing</td><td><span style="white-space:nowrap">第 9 章</span></td></tr>
+          <tr><td>tools<br>（117 頁）</td><td>skills</td><td><span style="white-space:nowrap">第 12 章</span></td></tr>
+          <tr><td>clawhub<br>（20 頁）</td><td><span style="white-space:nowrap">security-audits</span></td><td><span style="white-space:nowrap">第 12 章</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>文件站最大的分區是 plugins（334 頁），其次是 gateway、tools、channels、cli（101 頁）。本頁沒整理的部分，細節去這幾處查：完整的設定鍵在 gateway 分區的 configuration 頁與 reference 分區；每個指令在 cli 分區；排程不觸發或送不出去，在排程的 troubleshooting 子頁；各聊天平台怎麼接，在 channels 分區。</p>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>同一個詞，在不同頁指不同的東西</h4>
+      <p>架構頁說 Gateway「維持 provider 的連線」，指的是聊天平台的連線（例如透過 Baileys 連 WhatsApp）；README 與 memory 頁說的 provider 是模型或 embedding 的供應商。hooks 也有三種：內部 hooks 是 <code>HOOK.md</code> 腳本，plugin hooks 是 agent 與工具生命週期裡的處理器，HTTP webhooks 是外部服務打進來的請求；agent loop 頁特別說 webhooks 和前兩者是分開的。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="architecture" data-toc="Gateway 架構">
+  <div class="container head">
+    <p class="chapter">Chapter 02 · Gateway architecture</p>
+    <h2><span class="seg">一台主機一個 Gateway，</span><span class="seg">所有連線都接到它</span></h2>
+    <p class="lede">README 說 Gateway 是本機的控制中心，管 sessions、工具、事件與聊天平台的連線。架構頁說它是一個長駐的程序：聊天平台的連線都歸它，控制端與裝置都用 WebSocket 連上來，預設只綁在 127.0.0.1:18789。</p>
+    
+  </div>
+  <div class="cardband" id="card-02"><div class="cardlabel"><span class="n">圖卡 02 / 13</span><span class="t">Gateway 與四種連線</span><button type="button" class="zoom" data-card="02">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">一台主機一個 Gateway，所有連線都接到它</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">README：Gateway 是 sessions、工具、事件與聊天連線的本機控制中心。架構頁：它是長駐的 daemon，client 與 node 都用 WebSocket 連上，預設綁 127.0.0.1:18789</div>
+
+  <div style="position:absolute; left:160px; top:150px; width:440px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">Channels 聊天頻道</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">WhatsApp、Telegram、Slack、Discord、Signal、iMessage；<br>平台連線都歸 Gateway 維持</div></div>
+  <div style="position:absolute; left:1000px; top:150px; width:440px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">Clients 控制端</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">Control UI、CLI、TUI、macOS app；<br>每個 client 一條 WebSocket，送請求、訂閱事件</div></div>
+
+  <div style="position:absolute; left:456px; top:262px; width:100px; text-align:right; font-size:12.5px; color:#8A93A0;">回覆</div>
+  <div style="position:absolute; left:604px; top:262px; font-size:12.5px; color:#8A93A0;">訊息進來</div>
+  <div style="position:absolute; left:896px; top:262px; width:100px; text-align:right; font-size:12.5px; color:#8A93A0;">事件</div>
+  <div style="position:absolute; left:1044px; top:262px; font-size:12.5px; color:#8A93A0;">請求</div>
+
+  <div style="position:absolute; left:60px; top:306px; width:250px; font-size:12.5px; color:#6B7380; line-height:1.55;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.12em; color:#8A93A0;">WIRE</div>JSON 文字 frame；第一個 frame<br>不是 connect 就直接斷線</div>
+  <div style="position:absolute; left:560px; top:300px; width:480px; height:90px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:20px; font-weight:700; color:#FFFFFF;">Gateway（daemon）</div><div style="margin-top:4px; font-size:12.5px; color:rgba(255,255,255,0.75);">一台主機只有一個；sessions、工具、事件、<br>排程與聊天連線都經過它</div></div></div>
+  <div style="position:absolute; left:1290px; top:306px; width:250px; font-size:12.5px; color:#6B7380; line-height:1.55;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.12em; color:#8A93A0;">EVENTS</div>事件不重播；漏了<br>由 client 自己重新整理</div>
+
+  <div style="position:absolute; left:456px; top:406px; width:100px; text-align:right; font-size:12.5px; color:#8A93A0;">指令</div>
+  <div style="position:absolute; left:604px; top:406px; font-size:12.5px; color:#8A93A0;">結果</div>
+  <div style="position:absolute; left:896px; top:406px; width:100px; text-align:right; font-size:12.5px; color:#8A93A0;">prompt</div>
+  <div style="position:absolute; left:1044px; top:406px; font-size:12.5px; color:#8A93A0;">回覆</div>
+
+  <div style="position:absolute; left:160px; top:444px; width:440px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">Nodes 裝置</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">macOS、iOS、Android、無頭裝置，宣告 role: node；<br>提供 camera.*、screen.record、location.get</div></div>
+  <div style="position:absolute; left:1000px; top:444px; width:440px; height:96px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">模型供應商</div><div style="font-size:13px; color:#6B7380; line-height:1.5;">雲端或本機的模型；README 說模型與 harness<br>（Claude、Codex、本機模型）都是可換的 plugin</div></div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:160px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#1C2431;">一台主機，一個 Gateway</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">它也是唯一開 WhatsApp session 的地方；<br>聊天、控制端、裝置都連到同一個程序。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">README：個人或團隊部署，差別只在設定。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:160px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#2E7B4F;">新裝置都要配對</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">每條連線帶裝置身分、簽 challenge nonce；<br>同主機 loopback 可自動核准，區網不行。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">Gateway 的認證對本機與遠端一律適用。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:160px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:21px; font-weight:700; color:#C8501F;">離開 loopback，先讀安全頁</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">遠端存取建議 Tailscale 或 VPN，其次 SSH；<br>README 要你先讀安全指南與 exposure runbook。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">經過通道，仍走同一套握手與 token。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：四框排在同一個 Gateway 周圍是整理者的畫法；模型供應商那一格取自 README，架構頁說的 provider 指的是聊天平台的連線。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c02" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M566 298L566 248" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M594 248L594 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1006 298L1006 248" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1034 248L1034 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M566 392L566 442" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M594 442L594 392" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1006 392L1006 442" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+    <path d="M1034 442L1034 392" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c02)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>架構頁把連上 Gateway 的東西分成幾種。Gateway 本身是 daemon：維持各聊天平台的連線（透過 Baileys 連 WhatsApp、透過 grammY 連 Telegram，還有 Slack、Discord、Signal、iMessage、WebChat）、提供有型別的 WebSocket API（請求、回覆、伺服器推送的事件）、用 JSON Schema 驗證每個進來的 frame、發出 agent、chat、presence、health、heartbeat、cron 這些事件。控制端（macOS app、CLI、網頁的 Control UI、自動化）各開一條 WebSocket，送 health、status、send、agent 這類請求並訂閱事件。Nodes 是 macOS、iOS、Android 或無頭的裝置，連到同一個 WebSocket 伺服器，但在 connect 時宣告 <code>role: node</code> 與自己提供的指令，例如 <code>camera.*</code>、<code>screen.record</code>、<code>location.get</code>。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>連線</th><th>怎麼連上</th><th>做什麼</th></tr></thead>
+        <tbody>
+          <tr><td>Channels</td><td>Gateway 自己維持</td><td><span style="white-space:nowrap">訊息進來、回覆出去；<br>WhatsApp 的 session 只能由它開</span></td></tr>
+          <tr><td>Clients</td><td>每個 client 一條 WebSocket</td><td><span style="white-space:nowrap">Control UI、CLI、TUI、macOS app；<br>送請求、訂閱事件</span></td></tr>
+          <tr><td>Nodes</td><td>同一個 WebSocket，<br><span style="white-space:nowrap"><code>role: node</code></span></td><td><span style="white-space:nowrap">裝置的能力：相機、錄螢幕、定位；<br>macOS app 另有 Canvas 面板</span></td></tr>
+          <tr><td>模型供應商</td><td>README 說是可替換的 plugin</td><td><span style="white-space:nowrap">雲端或本機的模型；<br>Claude、Codex 這類 harness 也能換</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>架構頁寫了三條不變式：每台主機只有一個 Gateway，它也是唯一開 WhatsApp session 的地方；握手是強制的，第一個 frame 不是 JSON 或不是 connect，就直接斷線；事件不會重播，client 發現漏了要自己重新整理。協定本身由 TypeBox 的 schema 定義，JSON Schema 與 Swift 的型別都由它產生。</p>
+
+    <div class="codeblock">
+      <span class="file">Gateway 的 WebSocket 協定 · 教學用精簡版</span>
+<pre class="code"><span class="c">// 第一個 frame 一定是 connect（帶裝置身分與認證）</span>
+{ type: "req", id: 1, method: <span class="s">"connect"</span>, params: { auth: { token: "…" } } }
+
+<span class="c">// 之後：請求對回覆；有副作用的方法（send、agent）要帶 idempotency key</span>
+{ type: "req", id: 2, method: <span class="s">"agent"</span>, params: { … } }
+{ type: "res", id: 2, ok: true, payload: { runId: "…", status: "accepted" } }
+
+<span class="c">// 伺服器推送的事件：不會重播，漏了要自己重新整理</span>
+{ type: "event", event: <span class="s">"agent"</span>, payload: { … } }</pre>
+    </div>
+
+    <p>每個 WebSocket client，不論是控制端還是 node，connect 時都要帶裝置身分，並簽署 Gateway 給的 <code>connect.challenge</code> nonce。新的裝置 ID 要經過配對核准，Gateway 再發一個 device token 給之後的連線用。同一台主機走 loopback 的直接連線可以自動核准，讓本機的體驗順一點；tailnet 與區網的連線，即使是同一台主機，也還是要明確核准。Gateway 的認證（<code>gateway.auth.*</code>）對本機與遠端的連線一律適用。第 9 章會回到配對。</p>
+    <p>遠端存取，架構頁建議 Tailscale 或 VPN，其次是 SSH 通道；經過通道一樣走同一套握手與 token，遠端時 WebSocket 可以開 TLS 與選用的憑證釘選。網路暴露的設定本頁不展開，文件把它放在安全分區的 network exposure 與 exposure runbook 兩頁。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>心跳與排程掛在 Gateway 的排程器上</h4>
+      <p>架構頁最後一節講計時的工作：Gateway 核心有一個 GatewayScheduler，維護工作與 cron 的喚醒都登記在它上面，一個主機計時器驅動下一次喚醒。需要持久的工作，由各自的擁有者把截止時間存下來、在啟動時重建排程；電腦睡眠後醒來，錯過的 tick 會合併成一次。第 6 到 8 章的心跳與排程，都是掛在這個排程器上。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="agent-loop" data-toc="agent loop">
+  <div class="container head">
+    <p class="chapter">Chapter 03 · Agent runtime, Agent loop</p>
+    <h2><span class="seg">一則訊息變成一次 run，</span><span class="seg">同一個 session 依序跑</span></h2>
+    <p class="lede">文件說 agent loop 是每個 session 依序執行的一次 run：收件、組 context、模型推論、執行工具、串流、寫入。每個 agent 有自己的 workspace，那是工具與 context 唯一的工作目錄。</p>
+    
+  </div>
+  <div class="cardband" id="card-03"><div class="cardlabel"><span class="n">圖卡 03 / 13</span><span class="t">一則訊息變成一次 run</span><button type="button" class="zoom" data-card="03">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">一則訊息變成一次 run，同一個 session 依序跑</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">agent loop 頁：run 是每個 session 依序執行的一次處理，收件、組 context、模型推論、執行工具、串流、寫入；每個 agent 有自己的 workspace，是工具唯一的工作目錄</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　收件</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">agent RPC 驗參數、解析 session，<br>立刻回 runId，不等跑完</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　排隊</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">同一個 session 一條 lane；<br>新訊息預設 steer 進這一輪</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　準備</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">workspace、skills 快照、<br>bootstrap 檔都備好</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　組 prompt</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">基礎 prompt、skills、bootstrap<br>加上這一輪的覆寫</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 5　推論與工具</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">模型呼叫工具、讀結果、再推論</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#2E7B4F;">同一個 run 裡來回</div>
+  </div>
+
+  <div style="position:absolute; left:1212px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 6　整形回覆</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">NO_REPLY 濾掉；重複確認刪掉</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">要不要回，主機決定</div>
+  </div>
+  <div style="position:absolute; left:924px; top:300px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 7　寫入</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">transcript 進 SQLite；寫入權<br>比對不符的過期 run 寫不進去</div>
+  </div>
+  <div style="position:absolute; left:60px; top:306px; width:820px; font-size:14px; color:#6B7380; line-height:1.6;">一次 run 從收件跑到寫入。runtime 的事件接成三條串流：tool、assistant、lifecycle<br>（start、finishing、end、error）；agent.wait 等的就是這個 runId 的結果。<br>心跳、排程、webhook 開的也是這樣的一輪（第 08 卡）。</div>
+  <div style="position:absolute; left:1250px; top:460px; font-size:13px; color:#8A93A0;">同一條 lane 的下一則</div>
+
+  <div style="position:absolute; left:60px; top:486px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:506px; font-size:20px; font-weight:700; color:#1C2431;">三條讓它可以預期的規則</div>
+
+  <div style="position:absolute; left:60px; top:548px; width:470px; height:208px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">同一個 session，一次一個 run</div>
+    <div style="font-size:15.5px; color:#2B3340; line-height:1.7;">run 依 session key 排進 lane，可再經過全域 lane；<br>每次寫 transcript 都比對寫入權，被取代的 run<br>不會把過期內容寫回去。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">另一個 Gateway 也不能同時佔用同一個狀態目錄。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:548px; width:470px; height:208px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">該回的，一定要回</div>
+    <div style="font-size:15.5px; color:#2B3340; line-height:1.7;">直接的請求、被接受的群組請求預設要回答；<br>模型寫出 NO_REPLY 只是空輸出，<br>不是可以不回的許可。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">跑完工具沒寫答案，可以再跑一次不帶工具的收尾。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:548px; width:470px; height:208px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">逾時：<span style="white-space:nowrap">48 小時</span>與 <span style="white-space:nowrap">30 秒</span></div>
+    <div style="font-size:15.5px; color:#2B3340; line-height:1.7;">整次執行預設 <span style="white-space:nowrap">48 小時</span>，到期中止，有進度也不重設；<br>agent.wait 預設 <span style="white-space:nowrap">30 秒</span>，時間到只停止等待，<br>run 照樣在跑。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">模型閒置：雲端 <span style="white-space:nowrap">120 秒</span>、自架 <span style="white-space:nowrap">300 秒</span>。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：七步是整理者依 run sequence 與各節的順序排的；推論與工具的來回發生在同一個 run 裡，虛線回到排隊，表示這條 lane 接著處理下一則。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c03" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M1207 342L1195 350L1207 358Z" fill="#9AA3AE"></path>
+    <path d="M1478 210C1530 210 1530 350 1480 350" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c03)"></path>
+    <path d="M1057 400V452H1560V128H481V158" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="6 5" marker-end="url(#ag-c03)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>OpenClaw 內建一個 agent runtime：迴圈、工具接線、prompt 組裝都在裡面，和把回合交給外部 harness 的做法分開。每個設定好的 agent 有自己的 workspace、bootstrap 檔與 session 儲存；session 存在每個 agent 自己的 SQLite 資料庫。workspace（<code>agents.defaults.workspace</code>）是這個 agent 的工具與 context 唯一的工作目錄。新 session 的第一輪，OpenClaw 會把 workspace 裡幾個你可以編輯的檔案注入 system prompt 的 Project Context：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>檔案</th><th>放什麼（<span style="text-transform:none">agent</span> 頁的說明）</th></tr></thead>
+        <tbody>
+          <tr><td><code>AGENTS.md</code></td><td>操作指示與「記憶」；<br>裡面的 Tools 段只是你希望怎麼用工具，不決定有哪些工具</td></tr>
+          <tr><td><code>SOUL.md</code></td><td>人格、界線、語氣</td></tr>
+          <tr><td><code>IDENTITY.md</code></td><td>agent 的名字、風格、emoji</td></tr>
+          <tr><td><code>USER.md</code></td><td>使用者的檔案與偏好的稱呼；第 5 章的使用者模型就是這一檔</td></tr>
+          <tr><td><code>BOOTSTRAP.md</code></td><td>第一次啟動的儀式；只在全新的 workspace 建立，完成後刪掉就不會再出現</td></tr>
+          <tr><td><code>MEMORY.md</code></td><td>長期記憶；只有存在於 workspace 根目錄時才注入</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>空白的檔案會跳過；太大的檔案會截斷並加上標記，讓 prompt 保持精簡；缺檔時（MEMORY.md 除外）注入一行「缺檔」標記。<code>openclaw setup</code> 會建立設定檔並初始化這些檔案。內建的核心工具（read、exec、edit、write 與相關的系統工具）一律可用，但受工具政策約束。</p>
+
+    <p>一次 run 的順序，agent loop 頁寫成五步。Gateway 的 <code>agent</code> RPC 先驗參數、解析是哪個 session、存下 session 的中繼資料，然後立刻回 <code>{ runId, acceptedAt }</code>，不等跑完。接著決定模型與 thinking 等預設、載入 skills 快照，交給內建的 runEmbeddedAgent：它透過每個 session 的佇列與全域佇列把 run 排好、決定模型與認證、建立 session、訂閱 runtime 事件、串流助理與工具的增量、執行逾時。runtime 的事件被接成三條串流：tool、assistant、lifecycle（start、finishing、end、error）。最後 <code>agent.wait</code> 等這個 runId 的結果。</p>
+    <p>同一個 session key 的 run 排成一條 lane 依序執行，也可以再經過一條全域 lane，避免工具與 session 互相搶。run 開始串流前會登記一個寫入權（writer claim），之後每一次寫 transcript 都要帶著它，交易裡比對不符就寫不進去，所以一個被取代的 run 不會把過期的內容寫回去。run 在跑的時候又有新訊息進來，預設是 steer：把它導進正在跑的這一輪，在還沒開始的工具呼叫與下一次模型呼叫之前檢查。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>佇列模式</th><th><span style="text-transform:none">run</span> 在跑時，新訊息怎麼處理</th></tr></thead>
+        <tbody>
+          <tr><td>steer（預設）</td><td>導進正在跑的 run；正在跑的工具會跑完，<br>還沒開始的循序呼叫會跳過，並補上成對的結果</td></tr>
+          <tr><td>followup、collect</td><td>讓訊息等之後的回合，不導進目前這一輪</td></tr>
+          <tr><td>interrupt</td><td>中止正在跑的 run</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>system prompt 由四塊組成：OpenClaw 的基礎 prompt、skills 的 prompt、bootstrap 的 context、這一輪的覆寫；模型的上限與壓縮保留的 token 在這裡強制。hooks 分兩套：內部 hooks 是 <code>HOOK.md</code> 腳本，接指令與生命週期事件（例如 <code>agent:bootstrap</code>、<code>command:new</code>）；plugin hooks 是 agent 與工具生命週期裡的型別化處理器，例如 <code>before_tool_call</code> 回 <code>{ block: true }</code> 就能擋下一次工具呼叫，而且這個擋下是終局的。HTTP webhooks 是另一回事，第 8 章再講。</p>
+    <p>回覆的整形規則和第 7 章的心跳直接相關。最終回覆由助理的文字、允許時的工具摘要、模型出錯時的錯誤文字組成；精確的靜默 token <code>NO_REPLY</code> 會從送出的內容裡濾掉。但要不要回，是主機決定的，不是模型：直接的請求、被接受的群組請求預設一定要有回答；只有操作者明確允許靜默政策時，沒被點名的群組請求才可以不回。文件說模型寫出的 NO_REPLY 只是空輸出，不是免除必要回覆的許可；一個需要回覆的回合跑完工具卻沒寫出答案，OpenClaw 可以再跑一次不帶工具的收尾。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>逾時</th><th><span style="white-space:nowrap">預設</span></th><th>文件的說明</th></tr></thead>
+        <tbody>
+          <tr><td><code>agent.wait</code></td><td><span style="white-space:nowrap">30 秒</span></td><td>只是等待；時間到回 timeout，不會停掉 run</td></tr>
+          <tr><td>agent runtime</td><td><span style="white-space:nowrap">48 小時</span></td><td>整次執行的預算（172,800 秒），到期中止；<br>有進度也不重設</td></tr>
+          <tr><td>模型閒置</td><td><span style="white-space:nowrap">雲端 120 秒<br>自架 300 秒</span></td><td>等不到回應的片段就中止這一次模型請求</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>run 可能提前結束的地方有四個：agent 逾時（中止）、AbortSignal（取消）、Gateway 斷線或 RPC 逾時、<code>agent.wait</code> 逾時（只停止等待，不停 agent）。</p>
+    <p>整理者的補充：bootstrap 檔有預算、太大就截斷，本站的〈<a href="../context-engineering/">Effective Context Engineering</a>〉是 Anthropic 談 context 為什麼是有限資源的文章；本頁不用它擴寫。</p>
+  </div>
+</section>
+
+
+<section id="memory" data-toc="記憶的寫入">
+  <div class="container head">
+    <p class="chapter">Chapter 04 · Memory overview, Memory architecture</p>
+    <h2><span class="seg">記憶全寫成檔案，</span><span class="seg">長期記憶只有一個寫入者</span></h2>
+    <p class="lede">文件說模型只記得存到磁碟上的東西，沒有隱藏的狀態。記憶分五層，差在誰能寫、什麼時候放進 prompt；要進長期記憶只有一條路：背景排程的 dreaming 整併，而且先過一道看來源的閘。</p>
+    
+  </div>
+  <div class="cardband" id="card-04"><div class="cardlabel"><span class="n">圖卡 04 / 13</span><span class="t">長期記憶的寫入路徑</span><button type="button" class="zoom" data-card="04">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">長期記憶只有一個寫入者，而且要過閘</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">記憶架構頁的第三條原則：寫入的路徑就是安全邊界。每一筆都在 SQLite 欄位記下來源，模型沒辦法用文字改寫；dreaming 是預設開啟的背景整併</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 1　工作中的觀察</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">agent 追加到每天的筆記；<br>壓縮前的 flush、transcript 擷取</div>
+  </div>
+  <div style="position:absolute; left:348px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 2　情節層＋索引</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">每筆都帶來源標記：<br>owner、agent、untrusted、system</div>
+  </div>
+  <div style="position:absolute; left:636px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 3　閘：確定性篩選</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">依召回頻率、查詢多樣性等訊號排名</div>
+    <div style="margin-top:8px; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#C8501F;">untrusted、system 直接排除</div>
+  </div>
+  <div style="position:absolute; left:924px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#F3F9F5; border:1.5px solid #B4D5C0; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">Step 4　模型整併</div>
+    <div style="margin-top:4px; font-size:13px; color:#6B7380; line-height:1.55;">合併、取代、去重，保留出處；<br>要過結構驗證與檔案預算</div>
+  </div>
+  <div style="position:absolute; left:1212px; top:160px; width:266px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border:1px solid #1F2A3A; border-radius:8px; padding:14px 18px; display:flex; flex-direction:column; align-items:flex-start;">
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">Step 5　精選核心</div>
+    <div style="margin-top:4px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.55;">MEMORY.md 與 USER.md；<br>下一輪就讀到新的版本</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:300px; width:1480px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; ">DREAMS.md</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">每次整併的摘要與改寫前的版本都寫進 DREAMS.md，給人事後審；驗證不過的改寫退回只追加，放不下的候選留到下一次。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:444px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:468px; font-size:20px; font-weight:700; color:#1C2431;">三條擋掉投毒與重複的設計</div>
+
+  <div style="position:absolute; left:60px; top:510px; width:470px; height:228px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">召回一百次，也升不上去</div>
+    <div style="font-size:15.5px; color:#2B3340; line-height:1.7;">untrusted 與 system 的候選，在建 prompt 之前<br>就被結構排除；文件說這是前提，<br>不是扣分。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">cron、心跳、sub-agent 的 session 不產生候選。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:510px; width:470px; height:228px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">改寫前，再比對一次 hash</div>
+    <div style="font-size:15.5px; color:#2B3340; line-height:1.7;">取代 MEMORY.md 用樂觀並行：<br>中間有編輯器或別的 session 改過檔，<br>這一次就放棄改寫，改成只追加。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">每次接受的改寫，都存下改寫前的版本。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:510px; width:470px; height:228px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:26px 28px; display:flex; flex-direction:column; gap:12px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">只有精選層會自動注入</div>
+    <div style="font-size:15.5px; color:#2B3340; line-height:1.7;">觸發詞分數 <span style="white-space:nowrap">0.72</span> 以上、每輪最多三條；<br>每天的筆記與 transcript，<br>再相符也不會自動注入。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">文件說這是安全性質，不是調參。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：五格依記憶架構頁的流程圖重畫；「先過確定性的閘，再交給模型整併」的順序是文件寫的，每一格的文字是整理者的摘要。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M331 202L343 210L331 218Z" fill="#9AA3AE"></path>
+    <path d="M619 202L631 210L619 218Z" fill="#9AA3AE"></path>
+    <path d="M907 202L919 210L907 218Z" fill="#9AA3AE"></path>
+    <path d="M1195 202L1207 210L1195 218Z" fill="#9AA3AE"></path>
+    <path d="M1057 262L1057 296" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="4 4"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>記憶頁從檔案講起。agent 有四個和記憶有關的檔：<code>USER.md</code>（選用）放穩定的偏好、溝通風格、人際關係與進行中的專案，寫成指令，session 開始時用另一份小預算載入；<code>MEMORY.md</code> 是長期記憶，放不屬於個人檔案的持久事實與決定，session 開始時載入；<code>memory/YYYY-MM-DD.md</code> 是每天的筆記，放進行中的脈絡與觀察，今天與昨天的會在 <code>/new</code> 或 <code>/reset</code> 時自動載入；<code>DREAMS.md</code>（選用）是給人看的 dreaming 日記與整併摘要。想讓 agent 記住什麼，文件說直接跟它講就好，它會寫進合適的檔。</p>
+    <p>記憶架構頁先列了五條設計原則。沒有隱藏的狀態：每一種記憶都能用文字編輯器打開。寫入才是難的部分：文件引 LongMemEval 說寫了什麼比怎麼索引更重要，所以把整理從忙碌的回覆路徑搬到背景。寫入的路徑就是安全邊界：與其事後偵測壞記憶，不如在寫入時記下來源、在升級時用結構擋。確定性的閘，閘裡面才用模型判斷。失敗永遠不擋回覆：記憶子系統掛了只會讓召回變差，不會吃掉一輪。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>層</th><th>放在哪</th><th>誰寫</th><th><span style="white-space:nowrap">何時放進 <span style="text-transform:none">prompt</span></span></th></tr></thead>
+        <tbody>
+          <tr><td>指示</td><td><span style="white-space:nowrap"><code>AGENTS.md</code> 與<br>workspace 的指示檔</span></td><td><span style="white-space:nowrap">只有人</span></td><td><span style="white-space:nowrap">一律，<br>session 開始時</span></td></tr>
+          <tr><td>精選核心</td><td><span style="white-space:nowrap"><code>MEMORY.md</code>、<br><code>USER.md</code></span></td><td><span style="white-space:nowrap">dreaming 整併；<br>使用者直接要求</span></td><td><span style="white-space:nowrap">session 開始時；<br>來源合格才放，<br>有預算</span></td></tr>
+          <tr><td>情節</td><td><span style="white-space:nowrap">每天的筆記、<br>session transcript</span></td><td><span style="white-space:nowrap">工作中的 agent；<br>壓縮前的 flush；<br>transcript 擷取</span></td><td><span style="white-space:nowrap">召回時；<br>session 開始時不放</span></td></tr>
+          <tr><td>前瞻</td><td><span style="white-space:nowrap">常駐意圖（SQLite）<br>與排程工作</span></td><td><span style="white-space:nowrap"><code>intent</code> 工具；<br>排程</span></td><td><span style="white-space:nowrap">只在觸發時</span></td></tr>
+          <tr><td>審閱</td><td><span style="white-space:nowrap"><code>DREAMS.md</code>、<br>dreaming 報告</span></td><td><span style="white-space:nowrap">dreaming 的各階段</span></td><td><span style="white-space:nowrap">永遠不放，<br>給人讀</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>文件說最重要的界線在精選核心與情節層之間。精選的檔案小、來源合格時通常就在 context 裡、只能經過有閘的整併寫入；情節層的檔案大、適合一直追加，靠搜尋工具或 Active Memory 取用，不在 session 開始時載入。沒通過升級的閘，情節層的內容不會跑進精選層。</p>
+    <p>每一筆索引都帶來源標記，存在模型沒辦法用文字改寫的 SQLite 欄位裡。來源分四類，是封閉的集合：owner（主人在受信任的頻道打的）、agent（agent 從主人的內容推出來的）、untrusted（從網頁、工具輸出、群組裡的非主人這類外部內容推出來的）、system（心跳 prompt、cron 前言這類鷹架）。判斷不了的，外部來的算 untrusted、鷹架算 system，永遠不會預設成 owner。兩條衛生規則用這些標記擋掉常駐 agent 的典型毛病：cron、心跳、sub-agent 的 session 不產生長期記憶的候選；從記憶注入 context 的內容（bootstrap 檔、搜尋結果、召回的 transcript）會被標記，永遠不會再被當成新記憶擷取，文件的說法是召回一百次仍然是一筆。</p>
+    <p>來源也會在一輪之內傳下去。一個工具結果宣告自己是網路來源（抓網頁、瀏覽器、搜尋），這一輪之後產生的助理訊息都帶汙染標記，即使在主人的回合裡也當成 untrusted，下一則使用者訊息進來才清掉。文件自己點出缺口：只有會宣告的工具才算，讀本機檔案這類工具不會汙染這一輪。</p>
+    <p>寫入路徑的細節：工作中 agent 把觀察追加到每天的筆記；長對話壓縮前，一個靜默的 flush 回合先把還沒寫下的脈絡存進筆記；session 結束時 transcript 變成可以擷取的證據。這些都落在情節層、帶著來源進索引，等 dreaming。整併的輸出要通過結構驗證、在 bootstrap 檔的預算內、不能丟掉超過一定比例的既有條目，不然這一次就退回只追加。取代 MEMORY.md 時用樂觀並行：建輸入時記下的內容 hash 在原子改名前再比對一次，這中間有編輯器或別的 session 改過檔，就放棄改寫、改跑追加。每次接受的改寫都存下改寫前的版本，並在 DREAMS.md 加一段人看得懂的摘要。</p>
+    <p>召回分兩條道。第一條不呼叫模型：session 開始時注入來源合格的 MEMORY.md 與 USER.md；<code>memory_search</code> 用混合相關度乘上 30 天半衰期的新近度，再乘上寫入時定好的重要度（1 到 10）排序；寫入者可以替條目掛觸發詞，每則訊息進來先做一次字詞加向量的預篩，分數 0.72 以上的條目當隱藏 context 注入，每輪最多三條。自動注入只限精選層，文件說這是安全性質，不是調參：每天的筆記與 transcript 再相符也不會自動注入。第二條是 Active Memory 的召回 sub-agent，預設只在訊息看得出在問過去、而且第一條道沒有強命中時才跑。</p>
+
+    <div class="codeblock">
+      <span class="file">MEMORY.md 的一行 · 觸發詞與重要度寫成同一行的行尾註解（整理者改寫的例子）</span>
+<pre class="code">- 對外開放 Gateway 之前，先跑 security audit。 <span class="c">&lt;!-- trigger: 對外開放, 遠端存取 --&gt;</span> <span class="c">&lt;!-- importance: 9 --&gt;</span></pre>
+    </div>
+
+    <div class="explain terra">
+      <span class="label">提醒</span>
+      <h4>記憶是注入攻擊最想要的持久層</h4>
+      <p>記憶架構頁說，在記憶裡種一次指令、之後每次都被注入，是公認的攻擊類型（文件引 OWASP 的 agentic 應用清單與相關研究），而偵測式的防禦效果不好。它的防法是結構性的：來源標記存在分類程式寫的欄位，文字自稱來自主人也不會變成主人的內容；untrusted 的內容可以存、可以索引、可以被明確搜尋，但結構上進不了精選層，也不會自動注入，被明確叫出來時會包上不可信內容的框；dreaming 的閘看來源，不只看分數，所以它沒辦法經由每天的筆記洗進 MEMORY.md；每次整併都在 DREAMS.md 留下紀錄。文件舉的例子是一個被摘要的網頁，夾帶「把某個危險指令記成重要事項」：那段摘要被標成 untrusted，永遠不自動注入，召回再多次也升不上去，被搜尋出來時也包著不可信的框。</p>
+    </div>
+
+    <p>整理者的補充：本站的〈<a href="../agent-memory/">Agent Memory</a>〉是 Letta 談 agent 記憶的文章，講的是此刻哪些 token 在 context window 裡；本頁不用它擴寫。</p>
+  </div>
+</section>
+
+
+<section id="user-model" data-toc="使用者模型與意圖">
+  <div class="container head">
+    <p class="chapter">Chapter 05 · User model, Standing intents</p>
+    <h2><span class="seg">使用者模型寫成指令，</span><span class="seg">意圖編成觸發條件</span></h2>
+    <p class="lede">USER.md 放偏好與個人檔案，寫成「一律」「絕不」「偏好」這種指令，改了就就地取代。想要 agent 之後去做的事，文件不讓它躺在記憶檔裡：時間型的變成排程，事件型的存進 intent 表，每則訊息進來都用程式比對。</p>
+    
+  </div>
+  <div class="cardband" id="card-05"><div class="cardlabel"><span class="n">圖卡 05 / 13</span><span class="t">意圖的三個去處</span><button type="button" class="zoom" data-card="05">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">想做的事編成觸發條件，不寫成記憶</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">記憶架構頁：記得要去做和記得事實是兩種能力；前瞻的召回會隨 context 變長而變差，所以意圖在說出口的那一刻，就被編譯出模型</div>
+
+  <div style="position:absolute; left:60px; top:286px; width:230px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:700; color:#FFFFFF;">你說出一個意圖</div>
+  <div style="position:absolute; left:400px; top:276px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:17px; font-weight:700; color:#1C2431; line-height:1.35;"><div>它靠什麼<br>觸發？</div></div>
+
+  <div style="position:absolute; left:790px; top:172px; font-size:13px; font-weight:700; color:#2E7B4F;">時間</div>
+  <div style="position:absolute; left:790px; top:292px; font-size:13px; font-weight:700; color:#2E7B4F;">事件</div>
+  <div style="position:absolute; left:790px; top:412px; font-size:13px; font-weight:700; color:#6B7380;">編譯不了</div>
+
+  <div style="position:absolute; left:940px; top:150px; width:600px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">排程工作（cron job）</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">「星期五提醒我」這類，說出口的當下就建成排程；<br>到點由 Gateway 喚醒 agent 跑一輪</div>
+  </div>
+  <div style="position:absolute; left:940px; top:270px; width:600px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">intent 表（每個 agent 一張 SQLite 表）</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">「發版的話題出現時，提一下 changelog」；觸發欄位有關鍵字、<br>選用的嵌入、頻道與寄件人範圍、到期、次數、冷卻</div>
+  </div>
+  <div style="position:absolute; left:940px; top:390px; width:600px; height:96px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#1C2431;">留在 Markdown，標上 review 日期</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">抱負這類編譯不了的意圖，留在記憶檔裡；<br>dreaming 到了 review 日期，讓它過期或升級</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:520px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; ">每則訊息</div>
+    <div style="font-size:15px; color:#2B3340;">每則進來的訊息，都對已上膛的意圖跑一次確定性預篩；命中就當隱藏 context 注入這一輪的回覆，比對路徑不呼叫模型</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:600px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:624px; font-size:20px; font-weight:700; color:#1C2431;">三條讓意圖不嘮叨、也不走樣的規則</div>
+  <div style="position:absolute; left:60px; top:666px; width:470px; height:160px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">狀態是明確的</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">pending、armed、fired、done、cancelled、<br>expired；取消不交給模型自己推論。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">文件說模型不能被信任去重新推論取消。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:666px; width:470px; height:160px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#2E7B4F;">防嘮叨是結構</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">預設冷卻 <span style="white-space:nowrap">24 小時</span>、最多觸發 <span style="white-space:nowrap">3 次</span>、<br><span style="white-space:nowrap">90 天</span>到期、每輪最多注入 <span style="white-space:nowrap">3 個</span>。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">到期、次數、冷卻都是每個意圖自己的欄位。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:666px; width:470px; height:160px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">偏好另外存在 USER.md</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">寫成 Always、Never、Prefer 的指令；<br>改了就改寫原條，不追加矛盾的一條。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">只追加的偏好歷史，會讓模型照舊的值回答。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三個去處與預設值取自記憶架構頁；把它排成一個問題是整理者的畫法。時間型的提醒走排程，intent 工具只管事件型的。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c05" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M290 318L398 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+    <path d="M700 318H770" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M770 318V198H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+    <path d="M770 318H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c05)"></path>
+    <path d="M770 318V438H938" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c05)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>記憶架構頁說 USER.md 和 MEMORY.md 分開，是因為「照偏好做」和「記得事實」失敗的方式不一樣。它引用 PrefEval 的結果：只是放在 context 裡的偏好，幾輪之後模型就不再套用；在問題附近重述相關的指令，比更重的檢索或自我批評機制更能讓模型照做。由此訂出格式合約：條目寫成祈使句的指令（Always、Never、Prefer），不是「使用者曾經說過什麼」的觀察；每條帶狀態資料，觀察到的日期、仍然有效或已被取代；偏好改了就改寫那一條指令，不追加一條矛盾的，因為只追加的偏好歷史會讓模型照著舊的值回答。USER.md 與常駐意圖都屬於使用者層級，不會被綁到某個專案。</p>
+
+    <div class="codeblock">
+      <span class="file">一條偏好怎麼改 · 整理者的示意，實際欄位寫法以文件的 User model 頁為準</span>
+<pre class="code"><span class="c"># 寫成指令，不寫成「使用者上次好像說過……」</span>
+Prefer 回覆先講結論，再給三點重點。     <span class="c">觀察於 2026-09-12 · 有效</span>
+
+<span class="c"># 偏好改了：改寫這一條，不在下面追加一條矛盾的</span>
+<span class="a">Prefer 回覆只給結論，細節等我問。</span>       <span class="c">觀察於 2026-09-28 · 有效（取代上一版）</span></pre>
+    </div>
+
+    <p>整理者的對照：這一講的必讀〈Creating General User Models from Computer Use〉談的是使用者模型。OpenClaw 文件裡對應的是 USER.md 這一層，由使用者的直接要求與 dreaming 整併寫入、在 session 開始時放進 prompt。文件沒有用 General User Model 這個詞，這一段只是對應，不是比較。</p>
+
+    <p>記憶架構頁把「記得要去做」叫做前瞻記憶，說它和「記得事實」是不同的能力。它引用的研究說，前瞻的召回會隨 context 變長而明顯變差，回顧的召回卻幾乎完美，而且不能信任模型自己推論出一件事已經取消；所以把意圖當文字存在記憶檔，是最不可靠的設計。OpenClaw 的做法是在意圖說出口時就把它編譯出模型。時間型的（「星期五提醒我」）當下就變成排程工作。事件型的（「發版的話題出現時，提一下 changelog」）用 <code>intent</code> 工具存進每個 agent 的 SQLite 表，帶著機器可檢查的觸發欄位：關鍵字、選用的觸發嵌入、頻道與寄件人範圍、到期、觸發次數預算、冷卻。編譯不了的抱負留在 Markdown，標上 review 日期，讓 dreaming 決定讓它過期或升級。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>項目</th><th>文件寫的規則或預設</th></tr></thead>
+        <tbody>
+          <tr><td>狀態</td><td>pending、armed、fired、done、cancelled、expired，都是明確的狀態</td></tr>
+          <tr><td>比對</td><td>每則進來的訊息，對已上膛的意圖跑一次確定性的預篩；<br>命中就把意圖當隱藏 context 注入這一輪的回覆，<br>比對路徑不呼叫模型</td></tr>
+          <tr><td>冷卻</td><td>預設 24 小時</td></tr>
+          <tr><td>觸發次數</td><td>預設最多 3 次</td></tr>
+          <tr><td>到期</td><td>預設 90 天</td></tr>
+          <tr><td>每輪上限</td><td>一輪最多注入 3 個意圖</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>文件說防嘮叨是結構性的，靠的就是上表的冷卻、次數、到期與每輪上限。記憶頁另有一段講會影響之後行動的記憶。牽涉到核准或權限、暫時的限制、交接給別的 session 或人、到期條件、什麼時候動手才安全、來源或擁有者的權威、要避開某個誘人的動作時，文件建議記下動手的界線，不只記事實：什麼會改變之後的行為、在什麼條件下適用、何時到期或什麼會解鎖、該避免做什麼、來源是誰。它的例子之一是：另一個 session 正在設計 API 遷移，之後的回合不該在這個對話裡改 API 的實作，這裡的發現只當設計參考。它同時把界線說清楚：記憶可以保留核准的脈絡，但它不執行政策；硬性的控制要交給 OpenClaw 的核准設定、沙箱與排程。</p>
+
+    <div class="thought">
+      <span class="label">思考題 · 01</span>
+      <h4>你想讓 agent 記住的一件事，是事實、偏好，還是意圖？</h4>
+      <p>例如「我下個月要搬家」「我不喜歡一次收到很多通知」「搬家前一週提醒我換地址」。</p>
+      <p class="hint">照文件的分法：事實進 MEMORY.md；偏好寫成指令進 USER.md，改了就改寫那一條；意圖不要寫成文字，時間型的建排程，事件型的交給 intent，並想好它什麼時候到期。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="heartbeat-when" data-toc="心跳何時跑">
+  <div class="container head">
+    <p class="chapter">Chapter 06 · Heartbeat: cadence, defaults, monitor scratch</p>
+    <h2><span class="seg">心跳到點先過幾道檢查，</span><span class="seg">不符合就跳過</span></h2>
+    <p class="lede">心跳是系統擁有的排程：Gateway 替每個開了心跳的 agent 維護一個排程工作，預設每 30 分鐘在 main session 跑一輪 agent，讓模型把需要注意的事浮上來，又不洗版。到點之後先過幾道檢查：不在時段內、scratch 是空殼、正在忙、沒有送達的地方，都會跳過。</p>
+    
+  </div>
+  <div class="cardband" id="card-06"><div class="cardlabel"><span class="n">圖卡 06 / 13</span><span class="t">心跳到點，先過四道檢查</span><button type="button" class="zoom" data-card="06">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">心跳到點先過四道檢查，不符合就跳過</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">心跳頁：心跳是系統擁有的排程，預設每 30 分鐘在 main session 跑一輪 agent，讓模型把需要注意的事浮上來，又不洗版；它要有排程器才會跑</div>
+
+  <div style="position:absolute; left:60px; top:190px; width:200px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#FFFFFF; line-height:1.3;"><div>排程到點<div style="font-size:12.5px; font-weight:400; color:rgba(255,255,255,0.75);">預設每 30 分鐘</div></div></div>
+  <div style="position:absolute; left:300px; top:190px; width:220px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:15px; font-weight:700; color:#1C2431; line-height:1.3;"><div>在 active hours<br>時段內？</div></div>
+  <div style="position:absolute; left:560px; top:190px; width:220px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:15px; font-weight:700; color:#1C2431; line-height:1.3;"><div>scratch<br>不是空殼？</div></div>
+  <div style="position:absolute; left:820px; top:190px; width:220px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:15px; font-weight:700; color:#1C2431; line-height:1.3;"><div>agent 與目標<br>session 都閒著？</div></div>
+  <div style="position:absolute; left:1080px; top:190px; width:220px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:15px; font-weight:700; color:#1C2431; line-height:1.3;"><div>找得到<br>送達的對象？</div></div>
+  <div style="position:absolute; left:1340px; top:190px; width:200px; height:64px; box-sizing:border-box; background-color:#2E7B4F; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:16px; font-weight:700; color:#FFFFFF; line-height:1.3;"><div>跑一輪 agent<div style="font-size:12.5px; font-weight:400; color:rgba(255,255,255,0.8);">預設在 main session</div></div></div>
+
+  <div style="position:absolute; left:265px; top:196px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#6B7380;">是</div>
+  <div style="position:absolute; left:525px; top:196px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#6B7380;">是</div>
+  <div style="position:absolute; left:785px; top:196px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#6B7380;">是</div>
+  <div style="position:absolute; left:1045px; top:196px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#6B7380;">是</div>
+  <div style="position:absolute; left:1305px; top:196px; width:30px; text-align:center; font-size:13px; font-weight:700; color:#2E7B4F;">是</div>
+  <div style="position:absolute; left:420px; top:282px; font-size:13px; font-weight:700; color:#6B7380;">否</div>
+  <div style="position:absolute; left:680px; top:282px; font-size:13px; font-weight:700; color:#6B7380;">否</div>
+  <div style="position:absolute; left:940px; top:282px; font-size:13px; font-weight:700; color:#6B7380;">否</div>
+  <div style="position:absolute; left:1200px; top:282px; font-size:13px; font-weight:700; color:#6B7380;">否</div>
+
+  <div style="position:absolute; left:300px; top:330px; width:220px; height:112px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:8px; padding:14px 16px; display:flex; flex-direction:column; justify-content:center; gap:6px;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">跳過，等下一個 tick</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">時段外不跑；start 與 end<br>相同，會被當成零寬</div>
+  </div>
+  <div style="position:absolute; left:560px; top:330px; width:220px; height:112px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:8px; padding:14px 16px; display:flex; flex-direction:column; justify-content:center; gap:6px;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">跳過，省一次呼叫</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">只有標題、註解、空勾選項；<br>完全沒有 scratch 則照跑</div>
+  </div>
+  <div style="position:absolute; left:820px; top:330px; width:220px; height:112px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:8px; padding:14px 16px; display:flex; flex-direction:column; justify-content:center; gap:6px;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">延後</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">單純的輪詢記成跳過，<br>等下一個 tick；<br>帶事件的喚醒會重試</div>
+  </div>
+  <div style="position:absolute; left:1080px; top:330px; width:220px; height:112px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:8px; padding:14px 16px; display:flex; flex-direction:column; justify-content:center; gap:6px;">
+    <div style="font-size:15px; font-weight:700; color:#1C2431;">跳過，agent 不跑</div>
+    <div style="font-size:12.5px; color:#6B7380; line-height:1.5;">找不到主人：<span style="white-space:nowrap">no-route</span>；<br>三個顯示旗標全關也跳過</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:330px; width:200px; font-size:13px; color:#6B7380; line-height:1.6;">心跳是一種 automation：<br>每個開了心跳的 agent<br>有一個系統擁有的排程<br>工作；排程器關掉<br>（<span style="white-space:nowrap">cron.enabled: false</span>）<br>就沒有排定的心跳。</div>
+  <div style="position:absolute; left:1340px; top:330px; width:200px; font-size:13px; color:#6B7380; line-height:1.6;">跑的是完整的一輪：<br>心跳 prompt 原封不動<br>當成使用者訊息送出，<br>system prompt 和一般<br>回合一樣。</div>
+
+  <div style="position:absolute; left:60px; top:492px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:514px; font-size:20px; font-weight:700; color:#1C2431;">三個和節奏有關的數字</div>
+  <div style="position:absolute; left:60px; top:556px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">預設 30 分鐘，0m 只關週期</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">Anthropic 認證是 OAuth 或 token、又沒設間隔時<br>變成 1 小時；設成 0m 後，事件喚醒仍可以跑。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">心跳回合沒設逾時，就用間隔，最多 <span style="white-space:nowrap">600 秒</span>。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:556px; width:470px; height:180px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">每一次都是完整的一輪</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">間隔越短，燒的 token 越多；isolatedSession<br>每次從約 100K 降到約 2 到 5K token。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">lightContext、便宜的模型、小的 scratch 也能省。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:556px; width:470px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">事件喚醒也有節流</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">兩次事件回合之間至少 <span style="white-space:nowrap">30 秒</span>；<br><span style="white-space:nowrap">60 秒</span>內啟動 <span style="white-space:nowrap">5 次</span>，就觸發防洪。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">延後的工作，等保護期過了再繼續。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：跳過與延後是正常的路徑，所以分支用灰色；四道檢查的先後是整理者排的，文件只寫明「空 scratch 的判斷先於忙碌延後」。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+    </defs>
+    <path d="M260 222L298 222" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M520 222L558 222" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M780 222L818 222" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1040 222L1078 222" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c06)"></path>
+    <path d="M1300 222L1338 222" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c06)"></path>
+    <path d="M410 254L410 328" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c06)"></path>
+    <path d="M670 254L670 328" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c06)"></path>
+    <path d="M930 254L930 328" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c06)"></path>
+    <path d="M1190 254L1190 328" stroke="#9AA3AE" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ag-c06)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>心跳頁一開頭就說心跳是一種 automation。節奏由排程器負責：Gateway 替每個開了心跳的 agent 維護一個系統擁有的排程工作，在排程清單裡顯示成「Heartbeat (agent-id)」。你改的是設定裡的 <code>agents.*.heartbeat</code>，它是期望的狀態；實際的 tick 由持久化的排程負責，Gateway 啟動與重新載入設定時把改動寫進去。所以心跳要有排程器才會跑：<code>cron.enabled</code> 設成 false 時，Gateway 在啟動時警告，排定的心跳不會執行，也沒有另外的備援計時器；手動喚醒與事件喚醒仍然可以用。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>設定</th><th><span style="white-space:nowrap">預設</span></th><th>文件的說明</th></tr></thead>
+        <tbody>
+          <tr><td><code>every</code></td><td><span style="white-space:nowrap">30m</span></td><td>解析出的 Anthropic 認證是 OAuth 或 token、<br>又沒設間隔時變成 1h；<code>0m</code> 只關掉週期</td></tr>
+          <tr><td><code>target</code></td><td><span style="white-space:nowrap">owner</span></td><td>送到主人的 DM，從不送到群組（第 7 章）</td></tr>
+          <tr><td><code>timeoutSeconds</code></td><td><span style="white-space:nowrap">見右</span></td><td>沒設就用 agent 的逾時；那也沒設就用間隔，最多 600 秒。<br>背景指令完成後接著做的回合，用一般的 agent 逾時</td></tr>
+          <tr><td><code>activeHours</code></td><td><span style="white-space:nowrap">不限</span></td><td>在設定的時區檢查，時段外跳過，等下一個時段內的 tick；<br>start 與 end 相同會被當成零寬，永遠跳過</td></tr>
+          <tr><td><code>lightContext</code></td><td><span style="white-space:nowrap">false</span></td><td>true 時跳過 workspace 的 bootstrap 檔；scratch 照樣注入</td></tr>
+          <tr><td><code>isolatedSession</code></td><td><span style="white-space:nowrap">false</span></td><td>true 時每次在全新的 session 跑，不帶對話歷史</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p><code>every: "0m"</code> 只關掉週期性的節奏。背景指令跑完這類有目標的事件喚醒，仍然可以跑一輪 agent，而且保留每個 agent 的速率限制：兩次事件回合之間至少 30 秒；60 秒內啟動 5 次就觸發防洪，延後的工作等保護期過了再繼續。transcript 會用標記區分排定的心跳輪詢，和背景指令完成、排程喚醒、session 事件；排定的輪詢跑在設定的心跳 session（預設是 agent 的 main session），有目標的完成事件則回到擁有那件工作的 session。</p>
+    <p>忙碌時延後，是這一頁寫得最細的規則之一。main 佇列或排程工作正在跑或排著、同一個 agent 有回覆或 run 正在跑、要送達的那個 session 有工作在跑或排著，排定的心跳都會延後。還沒開始準備、也沒帶事件的單純輪詢，會記成跳過，等下一個持久化的 tick，不會開著一個跑到一半的排程卡在忙碌的工作後面；帶著排隊事件或排定任務的喚醒則會重試。立即與手動的喚醒只略過「同一個 agent 有 run 在跑」這一條廣泛的檢查，其他忙碌檢查照樣適用。不同的 agent 不會互相暫停。</p>
+    <p>每個心跳的排程工作有一份私有的 monitor scratch，存在共用的狀態資料庫；文件說把它想成心跳的檢查清單：小、穩定、每 30 分鐘看一次也安全。scratch 存在時，內容接在心跳 prompt 後面。用 <code>openclaw cron scratch &lt;jobId&gt;</code> 讀，用 <code>--set</code> 或 <code>--file</code> 取代，用 <code>--unset</code> 刪；寫入有比較後交換的保護，上限 256 KiB。agent 也能在心跳回合裡，透過 <code>heartbeat_respond</code> 的 scratch 欄位整份取代它。scratch 存在但實質上是空的（只有空行、註解、標題、空的勾選項），心跳就跳過以省下 API 呼叫；完全沒有 scratch 時照樣跑，由模型決定要做什麼。文件提醒不要把 API 金鑰、電話號碼、私密 token 放進 scratch，它會變成 prompt 的一部分。</p>
+
+    <div class="codeblock">
+      <span class="file">~/.openclaw/openclaw.json · 心跳設定的教學用精簡版</span>
+<pre class="code">{
+  commands: { ownerAllowFrom: [<span class="s">"telegram:123456789"</span>] },  <span class="c">// 主人是誰：警示送到這裡</span>
+  agents: { defaults: { heartbeat: {
+    every: <span class="s">"30m"</span>,                   <span class="c">// 0m 只關掉週期</span>
+    target: <span class="s">"owner"</span>,                <span class="c">// owner｜last｜none｜某個頻道</span>
+    activeHours: { start: <span class="s">"09:00"</span>, end: <span class="s">"22:00"</span> },
+    <span class="a">isolatedSession: true</span>,          <span class="c">// 不帶對話歷史</span>
+    lightContext: true               <span class="c">// 跳過 bootstrap 檔，只帶 scratch</span>
+  } } }
+}</pre>
+    </div>
+
+    <p>文件說心跳跑的是完整的 agent 回合，間隔越短燒越多 token。它給的省法：<code>isolatedSession: true</code> 不送完整的對話歷史，每次從約 100K token 降到約 2 到 5K；<code>lightContext: true</code> 跳過 bootstrap 檔；換便宜的模型；scratch 保持小；只要更新內部狀態時明確設 <code>target: "none"</code>。還有一個副作用：心跳跑完會保留共用 session 當時的 runtime 模型，如果心跳把 session 切到 context 較小的本機模型，下一個 main session 的回合可能 context 溢位；用 isolatedSession 就不會。要立刻叫醒它，用 <code>openclaw system event --text "…" --mode now</code> 排一則 system event 並立刻跑心跳；<code>--mode next-heartbeat</code>（預設）則等下一個 tick。</p>
+    <p>整理者的補充：isolatedSession 讓每一次心跳都從新的 session 開始，事情要靠 scratch 與檔案接下去；本站的〈<a href="../long-running-harnesses/">Effective Harnesses for <span style="white-space:nowrap">Long-Running</span> Agents</a>〉談長時程 agent 怎麼在 session 之間交接；本頁不用它擴寫。</p>
+  </div>
+</section>
+
+
+<section id="heartbeat-speak" data-toc="心跳何時開口">
+  <div class="container head">
+    <p class="chapter">Chapter 07 · Heartbeat: response contract, delivery, visibility</p>
+    <h2><span class="seg">沒事就回 NO_REPLY，</span><span class="seg">有事預設只找主人</span></h2>
+    <p class="lede">預設的心跳 prompt 刻意很窄：照 scratch 做、週期性的工作交給排程、不要從舊對話推論或重複舊任務、沒事就回 NO_REPLY。要通知時，警示預設只送到主人的 DM，從不送到群組；找不到主人，就在 agent 跑之前跳過。</p>
+    
+  </div>
+  <div class="cardband" id="card-07"><div class="cardlabel"><span class="n">圖卡 07 / 13</span><span class="t">心跳跑完的三種結果</span><button type="button" class="zoom" data-card="07">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">沒事就回 NO_REPLY，有事預設只找主人</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">心跳頁：預設 prompt 刻意很窄，照 scratch 做、週期性的工作交給排程、不從舊對話推論或重複舊任務、沒事就回 NO_REPLY；主動的行為要你自己打開</div>
+
+  <div style="position:absolute; left:60px; top:286px; width:230px; height:64px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:700; color:#FFFFFF;">心跳這一輪跑完</div>
+  <div style="position:absolute; left:400px; top:276px; width:300px; height:84px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center; font-size:17px; font-weight:700; color:#1C2431; line-height:1.35;"><div>模型怎麼回？<div style="font-size:12.5px; font-weight:400; color:#6B7380;">有工具回應時，它優先於文字</div></div></div>
+
+  <div style="position:absolute; left:812px; top:172px; font-size:13px; font-weight:700; color:#2E7B4F;">沒事</div>
+  <div style="position:absolute; left:812px; top:292px; font-size:13px; font-weight:700; color:#2E7B4F;">記下來</div>
+  <div style="position:absolute; left:812px; top:412px; font-size:13px; font-weight:700; color:#C8501F;">要通知</div>
+
+  <div style="position:absolute; left:940px; top:150px; width:600px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">NO_REPLY：什麼都不送</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">預設 prompt 要它沒事就這樣回；舊的 HEARTBEAT_OK 在頭尾、<br>其餘內容不超過 <span style="white-space:nowrap">300 字元</span>時，整則回覆也會被丟掉</div>
+  </div>
+  <div style="position:absolute; left:940px; top:270px; width:600px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#2E7B4F;">heartbeat_respond · notify: false</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">不顯示任何更新；有意義的結果以有上限的內部 context，<br>留給這個 session 的下一輪使用者對話</div>
+  </div>
+  <div style="position:absolute; left:940px; top:390px; width:600px; height:96px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:10px; padding:16px 22px; display:flex; flex-direction:column; justify-content:center; gap:5px;">
+    <div style="font-size:17px; font-weight:700; color:#C8501F;">notify: true ＋ notificationText</div>
+    <div style="font-size:13.5px; color:#6B7380; line-height:1.5;">送到主人的 DM：先找 ownerAllowFrom，再找頻道的 allowFrom；<br>從不送到群組，第一則警示會說明這是定期檢查</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:520px; width:1480px; height:56px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; ">送不出去</div>
+    <div style="font-size:15px; color:#2B3340;">頻道還沒準備好就記下未送達，一分鐘後再跑一次心跳，不占這一次的節奏；這是重跑，不是重送同一則</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:600px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:624px; font-size:20px; font-weight:700; color:#1C2431;">三條讓它不打擾你的預設</div>
+  <div style="position:absolute; left:60px; top:666px; width:470px; height:160px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">target 有四種選擇</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">owner 是預設，只找主人的 DM；last 跟著<br>最近的對話，含群組；none 只更新內部狀態。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">也能指定某個頻道；萬用字元的清單認不出主人。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:666px; width:470px; height:160px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#2E7B4F;">預設不送 OK，只送警示</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">showOk 關、showAlerts 開、useIndicator 開；<br>三個全關就跳過這一輪，連模型都不叫。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">帳號、頻道可以各自覆寫，越細的優先。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:666px; width:470px; height:160px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 26px; display:flex; flex-direction:column; gap:6px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">心跳不會讓 session 活著</div>
+    <div style="font-size:14.5px; color:#2B3340; line-height:1.6;">閒置到期看最後一則真正的使用者訊息；<br>介面的歷史會藏起心跳 prompt 與 OK。</div>
+    <div style="font-size:12.5px; color:#8A93A0;">底層的 transcript 仍保留，供稽核與重播。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三個出口取自心跳頁的回應合約；綠色表示安靜、橘色表示會打擾你，這套配色是整理者的。通知送不到時只記下最新的一筆，不是警示的歷史。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="an-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#2E7B4F"></path></marker>
+      <marker id="ao-c07" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+    </defs>
+    <path d="M290 318L398 318" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c07)"></path>
+    <path d="M700 318H760" stroke="#9AA3AE" stroke-width="1.5"></path>
+    <path d="M760 318V198H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c07)"></path>
+    <path d="M760 318H938" stroke="#2E7B4F" stroke-width="1.5" marker-end="url(#an-c07)"></path>
+    <path d="M790 318V438H938" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c07)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>心跳頁解釋了預設 prompt 為什麼這麼窄：它明確要 agent 不要從先前的對話推論或重複舊任務，所以預設安裝會保持安靜，而不是一直翻出過時的對話內容。心跳 prompt 原封不動當成排定的使用者訊息送出；心跳回合用的 system prompt 和一般回合一樣，沒有心跳專屬的段落。要它做很特定的事（例如檢查某個服務的狀態），就設 <code>agents.defaults.heartbeat.prompt</code> 換掉整段內容，不會合併。</p>
+
+    <div class="quote-en">
+      "Proactive heartbeat behavior is opt-in"
+      <span class="zh">「主動的心跳行為要你自己打開。」心跳頁講完預設 prompt 之後的這一句，接著列出兩種打開的方式。</span>
+    </div>
+
+    <p>兩種打開的方式都不是讓心跳自己變得更積極，而是另外建排程。週期性的檢查（看信箱、掃行事曆、排好的後續追蹤）建成排程工作，每個工作照自己的時間表執行自己設定的內容，文件說預設的心跳不會從先前的對話推論出週期性的工作。想要偶爾一句「需要什麼嗎？」的問候，也建一個排程，並把時間限制在你設定的時區內，避免夜裡打擾。心跳也可以回應背景執行的完成事件。</p>
+    <p>回應合約寫得很具體。沒事就回 <code>NO_REPLY</code>。心跳回合也可以改呼叫 <code>heartbeat_respond</code>：<code>notify: false</code> 不顯示任何更新，<code>notify: true</code> 加上 <code>notificationText</code> 就是一則警示；有結構化的工具回應時，它優先於文字。一個有意義的 <code>notify: false</code> 結果雖然不出聲，但會以有上限的內部 context 留給那個 session 的下一輪使用者對話；一則被擋下或未確認送達的警示也會記下來，連同警示文字與原因。文件強調這只是那個 session 最新的一筆結果，不是警示的歷史，也不是重送佇列。舊的自訂 prompt 仍可能回 <code>HEARTBEAT_OK</code>：它在回覆的開頭或結尾、而且剩下的內容不超過 300 字元時，整則回覆會被丟掉；警示則只回警示的文字，不要夾帶靜默的確認。</p>
+    <p>送達的規則：預設的 <code>owner</code> 目標先用 <code>commands.ownerAllowFrom</code> 的第一個具體項目，再用頻道的 <code>allowFrom</code>，從不送到群組；只有萬用字元的允許清單認不出主人。沒有可以私訊的主人時，輪詢在 agent 跑之前就以 <code>reason=no-route</code> 跳過。<code>target: "last"</code> 是明確選擇跟著最近一段對話走，包括群組；<code>target: "none"</code> 只更新內部狀態、不對外送。第一則經由預設 owner 送出的警示，會說明這是定期檢查、以及怎麼改成 <code>target: "none"</code>，之後的警示就不再附這一行。頻道還沒準備好而擋下警示時，OpenClaw 記下未送達，一分鐘後重跑心跳，不占掉這一次的節奏；這是再跑一次心跳，不是重送同一則。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>顯示旗標</th><th><span style="white-space:nowrap">預設</span></th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td><code>showOk</code></td><td><span style="white-space:nowrap">false</span></td><td>模型只回 OK 時，要不要送出 HEARTBEAT_OK 的確認</td></tr>
+          <tr><td><code>showAlerts</code></td><td><span style="white-space:nowrap">true</span></td><td>模型回了非 OK 的內容時，要不要送出警示</td></tr>
+          <tr><td><code>useIndicator</code></td><td><span style="white-space:nowrap">true</span></td><td>要不要發出給 UI 狀態列用的指示事件</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>三個都關掉，OpenClaw 直接跳過這一輪，連模型都不叫；只關掉警示時，心跳仍會跑、更新到期任務的時間，但不送出警示。旗標可以依帳號、頻道、頻道預設分層設定，越細的優先。還有兩條和「不打擾」有關：只有心跳的回覆不會讓 session 保持活著，閒置到期看的是最後一則真正的使用者或頻道訊息；Control UI 與 WebChat 的歷史會隱藏心跳 prompt 與只有 OK 的確認，但底層的 transcript 仍保留它們，供稽核與重播。</p>
+
+    <div class="pullquote">
+      心跳的預設是沒事就別出聲；要它更主動，文件的答案是另外建一個排程，而不是把心跳的 prompt 改得更積極。
+      <cite>整理自心跳頁</cite>
+    </div>
+
+    <div class="thought">
+      <span class="label">思考題 · 02</span>
+      <h4>什麼情況下，你的 agent 值得在設定的時段外打擾你？</h4>
+      <p>想一件真的需要馬上知道的事，例如某個部署失敗，或一封你在等的信。</p>
+      <p class="hint">文件的預設是安靜：時段外跳過、沒事回 NO_REPLY、只送主人的 DM。要例外，先想它該不該是一個獨立的排程或 webhook，有自己的時間表與執行紀錄，而不是讓每一次心跳都變得更愛講話。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="triggers" data-toc="其他觸發來源">
+  <div class="container head">
+    <p class="chapter">Chapter 08 · Automations, How automations work, Inbound webhooks</p>
+    <h2><span class="seg">主動的每條路，</span><span class="seg">最後都是一次 agent turn</span></h2>
+    <p class="lede">除了你傳來的訊息，心跳的 tick、排程工作、外部服務打來的 webhook、背景指令跑完，都會讓 Gateway 開一輪 agent。文件說排程跑在 Gateway 程序裡，不在模型裡：Gateway 沒在跑，排程就不會觸發。</p>
+    
+  </div>
+  <div class="cardband" id="card-08"><div class="cardlabel"><span class="n">圖卡 08 / 13</span><span class="t">五種主動的觸發來源</span><button type="button" class="zoom" data-card="08">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">主動的每條路，最後都是一次 agent turn</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">除了你傳來的訊息，還有這五種東西會讓 Gateway 開一輪 agent；它們都掛在 Gateway 的排程器與佇列上，跑的是同一個 agent loop</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.12em; color:#8A93A0;">TRIGGERS</div>
+  <div style="position:absolute; left:60px; top:172px; width:276px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:8px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">心跳的 tick</div><div style="font-size:12.5px; color:#6B7380;">系統擁有的排程，預設 main session</div></div>
+  <div style="position:absolute; left:361px; top:172px; width:276px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:8px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">排程工作</div><div style="font-size:12.5px; color:#6B7380;">照自己的時間表；main 或 isolated</div></div>
+  <div style="position:absolute; left:662px; top:172px; width:276px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:8px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">/hooks/agent（webhook）</div><div style="font-size:12.5px; color:#6B7380;">外部服務送一個回合，預設 isolated</div></div>
+  <div style="position:absolute; left:963px; top:172px; width:276px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:8px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">/hooks/wake、system event</div><div style="font-size:12.5px; color:#6B7380;">通知排進 main session，可要求立刻心跳</div></div>
+  <div style="position:absolute; left:1264px; top:172px; width:276px; height:64px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:8px 14px; display:flex; flex-direction:column; justify-content:center; gap:3px;"><div style="font-size:15px; font-weight:700; color:#1C2431;">背景指令跑完</div><div style="font-size:12.5px; color:#6B7380;">回到擁有那件工作的 session</div></div>
+
+  <div style="position:absolute; left:360px; top:330px; width:880px; height:100px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:19px; font-weight:700; color:#FFFFFF;">一次 agent turn</div><div style="margin-top:5px; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.5;">進 Gateway 的 session lane，照第 03 卡的七步跑；<br>跑在哪個 session，由觸發的來源決定</div></div></div>
+
+  <div style="position:absolute; left:60px; top:342px; width:270px; font-size:13px; color:#6B7380; line-height:1.6;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.12em; color:#8A93A0;">ALSO</div>你傳來的訊息，<br>也走同一條 lane（第 03 卡）</div>
+  <div style="position:absolute; left:1270px; top:342px; width:270px; font-size:13px; color:#6B7380; line-height:1.6;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; letter-spacing:0.12em; color:#8A93A0;">ISOLATED RUNS</div>排定的執行有自己的生命週期，<br>不繼承建立它那段對話的狀態</div>
+
+  <div style="position:absolute; left:60px; top:470px; width:1480px; height:60px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; gap:18px; padding:0px 22px;">
+    <div style="flex-shrink:0; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; color:#FFFFFF; background-color:#1F2A3A; ">在 Gateway 裡</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.5;">文件說排程跑在 Gateway 程序裡，不在模型裡：Gateway 沒在跑，排程就不會觸發。工作存在 SQLite，重啟不會丟；啟動時過期的 agent 回合改排，不馬上補跑。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:566px; width:470px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F;">重複的請求，升級成排程</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">agent 認出你要了好幾次，提議排成排程；<br>你確認一句白話，建好就立刻試跑一次。</div>
+    <div style="font-size:13px; color:#8A93A0;">試跑失敗就刪掉；文件說沒有重複偵測引擎。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:566px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431;">預設 isolated，比較乾淨</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">/hooks/agent 每次一個新的 session；<br>心跳也能設 isolatedSession，不帶對話歷史。</div>
+    <div style="font-size:13px; color:#8A93A0;">固定的 session key，會讓同 key 的請求排隊。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:566px; width:470px; height:180px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:10px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F;">外部來的內容，當資料</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.65;">wake 的文字是 system event，只送你控制的短通知；<br>不可信的內容，交給權限受限的 agent。</div>
+    <div style="font-size:13px; color:#8A93A0;">文件說包框不會拿掉工具或 workspace 的存取。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：五種來源是整理者從心跳、排程、webhook 三頁彙整的，不代表全部；常駐意圖的命中是在訊息進來時注入 context，見第 05 卡。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c08" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M198 238L560 328" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M499 238L680 328" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M800 238L800 328" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M1101 238L920 328" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+    <path d="M1402 238L1040 328" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c08)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>排程頁說 automations 是 OpenClaw 內建的排程器：它把工作存下來、在對的時間喚醒 agent，輸出可以送到聊天頻道、webhook，或哪裡都不送。CLI 叫 <code>openclaw automations</code>，<code>openclaw cron</code> 是同一組指令的別名。運作頁補了幾條：工作定義、執行狀態與執行紀錄都存在共用的 SQLite 狀態資料庫，重啟不會弄丟；一次性的工作在成功完成後自動刪除；每一次執行都有時間預算，隔離的 agent 回合由排程器自己的 60 分鐘看門狗先管，指令型工作預設 10 分鐘、腳本 5 分鐘；Gateway 啟動時，過期的 agent 回合工作會重新排程，不會馬上補跑，避免排程器一啟動就執行模型與工具；醒來時錯過的 tick 會合併。</p>
+
+    <div class="codeblock">
+      <span class="file">terminal · 一次性提醒（教學用精簡版）</span>
+<pre class="code"><span class="c"># 時間到，在 main session 排一則 system event 並立刻喚醒；跑完就刪</span>
+openclaw automations create <span class="s">"2027-02-01T16:00:00Z"</span> \
+  <span class="k">--name</span> <span class="s">"Reminder"</span> <span class="k">--session</span> main \
+  <span class="k">--system-event</span> <span class="s">"提醒：看一下草稿"</span> \
+  <span class="k">--wake</span> now <span class="k">--delete-after-run</span></pre>
+    </div>
+
+    <p>隔離執行有幾條防護，和「主動，但別亂講」直接相關。排定的執行從受理到結果存檔有自己的生命週期，不繼承建立它的那段對話的請求狀態。如果第一個結果只是「處理中」「正在整理」這類過渡的回覆，又沒有 sub-agent 還在負責最終答案，OpenClaw 會再問一次，拿到真正的結果才送出。被擋下的指令不會被報成成功；模型或供應商失敗，即使沒有回覆內容也算工作錯誤，會觸發失敗通知。</p>
+    <p>這一章最接近講題 mixed initiative 的，是運作頁最後一節：把重複的工作升級成排程。文件說多數排程應該從 agent 已經做過的工作開始：你好幾次要它做差不多的事，它會提議排成排程，而不是再跑一次；好處是你已經讀過一次它的輸出，知道排程送來的會長什麼樣。文件明說沒有重複偵測引擎、也不另存歷史，是 agent 從對話本身認出重複，並先查既有的排程清單避免重複建立；沒有排程工具的 agent 根本不會提議。</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>agent 提議</strong>同樣的事被要求了好幾次，agent 提議排成排程；先查清單，已經有的不重建。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>用白話確認</strong>確認句用白話重述時間與任務，例如「每個工作日 07:00（Europe/Vienna），我整理夜裡的更新貼在這裡」；你確認的是這句話，不是一串 cron 運算式。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>建立並立刻試跑</strong>建好工作，預設送到你提出要求的頻道與討論串，馬上用 force 模式跑一次、送到同一個討論串，讓你在第一次排定之前就看到真正的輸出。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>試跑失敗就移除</strong>告訴你，並把工作刪掉。</div></div>
+    </div>
+
+    <p>文件特別說明工作建立時是啟用的，不是「停用等核准」，而且這是刻意的安全選擇。排程器會監督啟用的工作：失敗的工作發失敗通知，反覆出錯就自動停用，記下原因並通知主人。停用的工作沒有人監督，一個一直等不到確認的停用工作不會觸發、也不會解釋自己，文件說這種無聲的沒結果，比一個會跑、會抱怨的工作更糟。你的確認仍然擋在建立之前，所以不會有東西在你背後被排上去。</p>
+    <p>外部服務也能叫醒 agent。Gateway 的 HTTP hooks 預設關閉，打開後只接受 POST，每個請求都要帶 hook 專用的 token（<code>Authorization: Bearer</code> 或 <code>x-openclaw-token</code> 標頭），放在網址查詢字串裡的 token 會被拒絕。文件要你用專用的 token，不要拿 Gateway 自己的認證 token。它有兩種動作：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>動作</th><th>做什麼</th><th>文件的提醒</th></tr></thead>
+        <tbody>
+          <tr><td><code>/hooks/wake</code></td><td><span style="white-space:nowrap">把一則受信任的通知，<br>排進選定 agent 的<br>main session，<br>可以要求立刻跑心跳</span></td><td><span style="white-space:nowrap">wake 的文字是 system event，<br>不是包起來的外部內容；<br>只送你自己控制的短通知</span></td></tr>
+          <tr><td><code>/hooks/agent</code></td><td><span style="white-space:nowrap">送一個 agent 回合，<br><code>message</code> 必填；<br>預設 isolated，<br>每次一個新的 session</span></td><td><span style="white-space:nowrap">回 200 只代表受理，<br>不代表模型跑完或訊息送到；<br>要等結果就加 <code>waitForCompletion</code></span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>自訂路徑的 hooks 透過對應表，把外部的 payload 轉成 wake 或 agent 動作；排程頁的索引另有 Gmail PubSub 觸發，建議用受限的讀信 agent，本頁沒讀那一頁。webhook 頁的警告：端點放在 loopback、tailnet 或受信任的反向代理後面，遠端呼叫用 HTTPS，只開需要的路徑；用專用的 hook token 與子路徑；限制允許的 agent；除非必要，不要讓請求自己指定 session key；外部事件的內容當資料。agent hook 的內容預設會包上不可信的框，但文件說包框不會拿掉工具或 workspace 的存取，處理不可信的輸入要用權限受限的 agent。</p>
+
+    <div class="thought">
+      <span class="label">思考題 · 03</span>
+      <h4>你每週手動叫 agent 做的事裡，哪一件該升級成排程？</h4>
+      <p>例如每週一整理上週的 PR、每天早上看一次某個監控頁。</p>
+      <p class="hint">照文件的順序：先讓 agent 做過幾次、你看過輸出長什麼樣，再用一句白話確認時間與任務，並要它立刻試跑一次。需要在事情發生時才跑的，考慮 webhook，而不是縮短排程的間隔。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="pairing" data-toc="配對與存取">
+  <div class="container head">
+    <p class="chapter">Chapter 09 · Pairing, Access control</p>
+    <h2><span class="seg">配對分兩種：</span><span class="seg">誰能說話，</span><span class="seg">哪台裝置能接進來</span></h2>
+    <p class="lede">文件說 pairing 是 OpenClaw 明確的存取核准步驟：DM 配對決定誰能跟 bot 說話，裝置配對決定哪些 node 能加入 Gateway。陌生人傳來的 DM，預設只換到一組配對碼，訊息在你核准之前不會被處理。</p>
+    
+  </div>
+  <div class="cardband" id="card-09"><div class="cardlabel"><span class="n">圖卡 09 / 13</span><span class="t">兩種配對：DM 與裝置</span><button type="button" class="zoom" data-card="09">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">配對分兩種：誰能說話，哪台裝置能接進來</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">配對頁：pairing 是 OpenClaw 明確的存取核准步驟，用在兩個地方。兩邊的狀態都存在共用的 SQLite 狀態資料庫，文件提醒把它當敏感資料</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">DM PAIRING</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">DM 配對：誰能跟 bot 說話</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">NODE PAIRING</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">裝置配對：哪台 node 能接進來</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:222px; width:700px; height:54px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#8A93A0;">1</div><div style="font-size:15px; font-weight:700; color:#1C2431;">陌生人傳來一則 DM</div><div style="font-size:13px; color:#6B7380;">dmPolicy 是 pairing，這是預設</div></div>
+  <div style="position:absolute; left:60px; top:290px; width:700px; height:54px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#8A93A0;">2</div><div style="font-size:15px; font-weight:700; color:#1C2431;">回一組 8 碼配對碼</div><div style="font-size:13px; color:#6B7380;"><span style="white-space:nowrap">1 小時</span>失效；每個頻道帳號最多 3 個待核准</div></div>
+  <div style="position:absolute; left:60px; top:358px; width:700px; height:54px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:8px; padding:0px 18px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">3</div><div style="font-size:15px; font-weight:700; color:#1C2431;">訊息不處理，等你核准</div><div style="font-size:13px; color:#6B7380;">Control UI 的存取請求，或 CLI 的 pairing approve</div></div>
+  <div style="position:absolute; left:60px; top:426px; width:700px; height:54px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:0px 18px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:rgba(255,255,255,0.6);">4</div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">寄件人進允許清單</div><div style="font-size:13px; color:rgba(255,255,255,0.75);">之後的 DM 照常處理</div></div>
+  <div style="position:absolute; left:60px; top:496px; width:700px; font-size:13.5px; color:#6B7380; line-height:1.6;">配對碼是大寫字元，不含容易混淆的 0、O、1、I；<br>只有建立新請求時才送出，大約每個寄件人每小時一次。</div>
+
+  <div style="position:absolute; left:840px; top:222px; width:700px; height:54px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#8A93A0;">1</div><div style="font-size:15px; font-weight:700; color:#1C2431;">裝置帶身分連上</div><div style="font-size:13px; color:#6B7380;">宣告 role: node，簽 Gateway 給的 challenge</div></div>
+  <div style="position:absolute; left:840px; top:290px; width:700px; height:54px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:0px 18px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#8A93A0;">2</div><div style="font-size:15px; font-weight:700; color:#1C2431;">建一個待核准的請求</div><div style="font-size:13px; color:#6B7380;"><span style="white-space:nowrap">5 分鐘</span>失效；setup code 的 token <span style="white-space:nowrap">10 分鐘</span>失效</div></div>
+  <div style="position:absolute; left:840px; top:358px; width:700px; height:54px; box-sizing:border-box; background-color:#EEF6F0; border:1px solid #B4D5C0; border-radius:8px; padding:0px 18px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:#2E7B4F;">3</div><div style="font-size:15px; font-weight:700; color:#1C2431;">你核准</div><div style="font-size:13px; color:#6B7380;">官方 app 的資料相符會自動核准；其他先看角色與範圍</div></div>
+  <div style="position:absolute; left:840px; top:426px; width:700px; height:54px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:0px 18px; display:flex; align-items:center; gap:14px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; font-weight:600; color:rgba(255,255,255,0.6);">4</div><div style="font-size:15px; font-weight:700; color:#FFFFFF;">拿到 device token</div><div style="font-size:13px; color:rgba(255,255,255,0.75);">權限限在核准的角色：完整或有限</div></div>
+  <div style="position:absolute; left:840px; top:496px; width:700px; font-size:13.5px; color:#6B7380; line-height:1.6;">有限權限不含 operator.admin；純文字的區網 ws:// 設定<br>自動用有限權限，要完整權限得換成 wss:// 或 Tailscale Serve。</div>
+
+  <div style="position:absolute; left:60px; top:572px; width:700px; height:204px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">核准只給 DM 的存取</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">不會順便給群組權限，也不會讓對方變成下特權指令的主人。<br>還沒有主人時，CLI 會把第一個核准的人設成主人，<br>Control UI 則要你明確勾選。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">dmPolicy 另有 allowlist、open（清單要明確包含 "*"）、disabled。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:572px; width:700px; height:204px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">要更多權限，就重新申請</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">已配對的裝置重連時要求更大的範圍或角色，<br>OpenClaw 保留原本的核准，另開一個待核准的升級請求；<br>不會悄悄拿到更多權限。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">文件說 setup code 在有效期間，要當密碼看待。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩欄的四步都取自配對頁，排成對照是整理者的畫法；淡綠底標的是兩邊「由人核准」的那一步，只是分類色，不是評價。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M404 279L416 279L410 287Z" fill="#9AA3AE"></path>
+    <path d="M404 347L416 347L410 355Z" fill="#9AA3AE"></path>
+    <path d="M404 415L416 415L410 423Z" fill="#9AA3AE"></path>
+    <path d="M1184 279L1196 279L1190 287Z" fill="#9AA3AE"></path>
+    <path d="M1184 347L1196 347L1190 355Z" fill="#9AA3AE"></path>
+    <path d="M1184 415L1196 415L1190 423Z" fill="#9AA3AE"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>DM 配對用在有實作 OpenClaw 配對 API 的頻道。配對碼是 8 個大寫字元，不含容易混淆的字（0、O、1、I），1 小時後失效；只有建立新請求時才會送出配對訊息，大約每個寄件人每小時一次；每個頻道帳號的待核准請求最多 3 個，多的會被忽略，直到有一個過期或被核准。核准可以在 Control UI 的 DM 存取請求佇列裡做，也可以用 CLI：</p>
+
+    <div class="codeblock">
+      <span class="file">terminal · 核准一個 DM 配對</span>
+<pre class="code">openclaw pairing list telegram
+openclaw pairing approve telegram &lt;CODE&gt; <span class="k">--notify</span>   <span class="c"># 核准，並在同一個頻道通知對方</span></pre>
+    </div>
+
+    <p>核准只給 DM 的存取，不給群組的存取，也不會讓對方變成下特權指令的主人（command owner）。還沒有主人時，CLI 會自動把第一個核准的人設成主人，Control UI 則是一個要你明確勾選的選項；主人存在之後，之後的核准只給 DM 存取。主人可以更新、重啟 Gateway、改設定、核准指令，但主人的身分不給聊天的存取，頻道與群組的規則照樣適用。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th><span style="text-transform:none">dmPolicy</span></th><th>陌生人的 DM</th><th>補充</th></tr></thead>
+        <tbody>
+          <tr><td>pairing（預設）</td><td>收到配對碼，<br>核准之前不處理</td><td>配對碼 1 小時失效；<br>每個頻道帳號最多 3 個待核准</td></tr>
+          <tr><td>allowlist</td><td>直接擋下，不走配對</td><td>只有允許清單上的人能私訊</td></tr>
+          <tr><td>open</td><td>任何人都能私訊</td><td>允許清單要明確包含 "*"，是刻意的選擇</td></tr>
+          <tr><td>disabled</td><td>整個忽略</td><td>所有進來的 DM 都不處理</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>存取控制頁把幾件常被混在一起的事分開。允許清單有兩層：DM 允許清單管誰能私訊 bot，群組允許清單管 bot 接受哪些群組、頻道或伺服器；群組裡還可以再限制誰能觸發。檢查順序是先看群組政策與允許清單，再看 mention 或回覆的啟動，回覆 bot 的訊息不能繞過群組的寄件人允許清單。文件的建議是：DM 用配對加允許清單；群組依成員決定，你信任的私人群組（團隊、家人、朋友）開 <code>groupPolicy: "open"</code> 是正常的部署，陌生人能加入或發言的群組就留著寄件人允許清單或 mention 門檻。</p>
+    <p>另一組要分開的概念是「誰能觸發 agent」和「哪些附帶的 context 會送到模型」。前者是 dmPolicy、groupPolicy、允許清單與 mention 門檻；後者是回覆的原文、引用、討論串歷史、轉寄的中繼資料，由 <code>contextVisibility</code> 控制：預設 all 照收，allowlist 只留允許清單上的寄件人的內容，allowlist_quote 再多保留一則明確引用的回覆。文件說「模型看得到未列入允許清單的人被引用的文字」這類回報，本身是強化建議，不是認證或沙箱的繞過。斜線指令與指示只對授權的寄件人有效。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th><span style="text-transform:none">session.dmScope</span></th><th>DM 的 <span style="text-transform:none">session</span> 怎麼分</th></tr></thead>
+        <tbody>
+          <tr><td>main（預設）</td><td>所有 DM 共用 agent 的 main session，跨裝置延續；<br>文件說這是個人 agent 的預設</td></tr>
+          <tr><td><span style="white-space:nowrap">per-channel-peer</span></td><td>每個頻道加寄件人，各自一個隔離的 DM context</td></tr>
+          <tr><td><span style="white-space:nowrap">per-account-channel-peer</span></td><td>同上，再依帳號分開（多帳號的頻道）</td></tr>
+          <tr><td><span style="white-space:nowrap">per-peer</span></td><td>同一種頻道裡，每個寄件人一個 session</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>多個人能私訊同一個 bot 時，文件建議設 per-channel-peer，security audit 偵測到多使用者的 DM 流量時也會這樣建議。但它強調這是對話 context 的邊界，不是主機管理的邊界：互不信任的使用者共用同一台 Gateway 主機與設定時，要改成每個信任邊界各跑一個 Gateway，這是第 10 章的主題。</p>
+    <p>裝置配對：node 以 <code>role: node</code> 的裝置身分連上，Gateway 建一個待核准的請求，5 分鐘後失效。推薦的做法是在已連上、有 <code>operator.admin</code> 的 Control UI 裡產生 setup code，手機的 OpenClaw app 掃 QR 或貼上；官方 iOS、Android app 的中繼資料相符時會自動核准，其他情況要看過角色與範圍再用 <code>openclaw devices approve</code> 核准。setup code 裡有一個一次性的 bootstrap token，10 分鐘後失效，文件說在有效期間要把它當密碼。可以選完整權限或有限權限（不含 <code>operator.admin</code>）；純文字的區網 <code>ws://</code> 設定自動用有限權限。已配對的裝置不會悄悄拿到更多權限：它重連時要求更大的範圍或角色，OpenClaw 保留原本的核准，另開一個待核准的升級請求。</p>
+    <p>配對的狀態都存在共用的 SQLite 狀態資料庫 <code>~/.openclaw/state/openclaw.sqlite</code>，文件提醒把它當敏感資料，因為這些列決定誰能存取你的助理。</p>
+  </div>
+</section>
+
+
+<section id="trust" data-toc="信任邊界">
+  <div class="container head">
+    <p class="chapter">Chapter 10 · Security, trust model</p>
+    <h2><span class="seg">信任邊界畫在 Gateway，</span><span class="seg">互不信任就分開跑</span></h2>
+    <p class="lede">安全頁說 OpenClaw 的預設是保守的，而且整份指引假設一個 Gateway 就是一個信任邊界：一個操作者，或成員彼此信任的團隊。它不是給互相敵對的人共用的多租戶邊界；要混合信任，就分開 Gateway 與憑證，最好連 OS 使用者或主機都分開。</p>
+    
+  </div>
+  <div class="cardband" id="card-10"><div class="cardlabel"><span class="n">圖卡 10 / 13</span><span class="t">一個 Gateway 一個信任邊界</span><button type="button" class="zoom" data-card="10">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">信任邊界畫在 Gateway，互不信任就分開跑</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">安全頁：整份指引假設一個 Gateway 就是一個信任邊界。預設是保守的：綁 loopback、陌生 DM 先配對、群組要允許清單與 mention；偏離了用 security audit 檢查</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-size:22px; font-weight:700; color:#C8501F;">✗ 互不信任的人，共用一個 Gateway</div>
+  <div style="position:absolute; left:840px; top:150px; font-size:22px; font-weight:700; color:#2E7B4F;">✓ 每個信任邊界，各自一個 Gateway</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:650px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:120px; top:200px; width:200px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">使用者 A</div>
+  <div style="position:absolute; left:440px; top:200px; width:200px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">使用者 B</div>
+  <div style="position:absolute; left:250px; top:300px; width:260px; height:56px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">同一個 Gateway</div>
+  <div style="position:absolute; left:536px; top:302px; width:224px; height:52px; box-sizing:border-box; background-color:#FCF1EA; border:1px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11.5px; color:#C8501F;">per-channel-peer</div><div style="font-size:12.5px; color:#2B3340;">只隔開對話的 context</div></div></div>
+  <div style="position:absolute; left:60px; top:420px; width:210px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">同一台主機</div>
+  <div style="position:absolute; left:285px; top:420px; width:210px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">同一份設定</div>
+  <div style="position:absolute; left:510px; top:420px; width:250px; height:46px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:500; color:#C8501F;">同樣的憑證與工具</div>
+  <div style="position:absolute; left:60px; top:490px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">文件說 OpenClaw 不是讓互相敵對的使用者，共用一個 agent 或 Gateway 的<br>安全邊界；把 DM session 依寄件人隔開，也只是對話的邊界。</div>
+
+  <div style="position:absolute; left:850px; top:196px; width:330px; height:276px; box-sizing:border-box; border:1.5px dashed #B4D5C0; border-radius:12px;"></div>
+  <div style="position:absolute; left:1200px; top:196px; width:330px; height:276px; box-sizing:border-box; border:1.5px dashed #B4D5C0; border-radius:12px;"></div>
+  <div style="position:absolute; left:868px; top:204px; font-size:12.5px; font-weight:700; color:#2E7B4F;">信任邊界 A</div>
+  <div style="position:absolute; left:1218px; top:204px; font-size:12.5px; font-weight:700; color:#2E7B4F;">信任邊界 B</div>
+
+  <div style="position:absolute; left:895px; top:232px; width:240px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">使用者 A</div>
+  <div style="position:absolute; left:895px; top:306px; width:240px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">Gateway A</div>
+  <div style="position:absolute; left:895px; top:386px; width:240px; height:62px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#2E7B4F;">自己的憑證</div><div style="font-size:12.5px; color:#6B7380;">最好連 OS 使用者或主機都分開</div></div></div>
+
+  <div style="position:absolute; left:1245px; top:232px; width:240px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#1C2431;">使用者 B</div>
+  <div style="position:absolute; left:1245px; top:306px; width:240px; height:50px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#FFFFFF;">Gateway B</div>
+  <div style="position:absolute; left:1245px; top:386px; width:240px; height:62px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; display:flex; align-items:center; justify-content:center; text-align:center;"><div><div style="font-size:14px; font-weight:700; color:#2E7B4F;">自己的憑證</div><div style="font-size:12.5px; color:#6B7380;">最好連 OS 使用者或主機都分開</div></div></div>
+  <div style="position:absolute; left:840px; top:490px; width:700px; font-size:14px; color:#6B7380; line-height:1.6;">混合信任或互相敵對的使用者：分開 Gateway 與憑證，<br>最好連 OS 使用者或主機都分開；彼此信任的人，留在同一個邊界裡。</div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#C8501F;">分開 DM session，只是對話的邊界</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">per-channel-peer 讓每個寄件人有自己的 DM context，<br>但文件說它不是主機管理的邊界。</div>
+    <div style="font-size:13px; color:#8A93A0;">共用主機與設定的人，仍然在同一個信任領域裡。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:170px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:22px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F;">信任範圍內，多人是正常的部署</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">一個操作者，或成員彼此信任的團隊；家人、團隊的<br>私人群組開 groupPolicy open，文件說是正常的部署。</div>
+    <div style="font-size:13px; color:#8A93A0;">陌生人能加入的群組，留著允許清單或 mention 門檻。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左邊是文件明文反對的用法；skills 頁也說共用的 Gateway 是一個信任領域，skill library 的擁有權不會讓你和 Gateway 的操作者隔開。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+      <marker id="ao-c10" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#C8501F"></path></marker>
+    </defs>
+    <path d="M220 250L340 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M540 250L420 298" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M380 356L165 418" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c10)"></path>
+    <path d="M380 356L390 418" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c10)"></path>
+    <path d="M380 356L635 418" stroke="#C8501F" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ao-c10)"></path>
+    <path d="M1015 276L1015 304" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M1015 356L1015 384" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M1365 276L1365 304" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+    <path d="M1365 356L1365 384" stroke="#9AA3AE" stroke-width="1.5" marker-end="url(#ag-c10)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>README 的安全段只有兩句，是整份信任模型的起點：把進來的訊息當成不可信的輸入；除非你設定沙箱，main session 的工具就在主機上跑。README 另外用一句話概括架構的立場：受信任的 Gateway、不受信任的執行、確定性的政策；細節在〈Why OpenClaw〉那一頁，本頁沒讀。</p>
+    <p>安全頁列的保守預設有三條：一般主機安裝時 Gateway 綁在 loopback；多數聊天頻道對陌生的 DM 寄件人回配對碼，而不是處理訊息；群組要在允許清單上，通常還要 mention 才啟動。例外也寫明了：容器映像預設綁在對外的介面，要搭配認證；少數 workspace 型的頻道預設信任 workspace 的成員，各頻道的頁面都寫了自己的預設。文件說照這些預設跑就在不錯的狀態，偏離了用一個指令檢查：</p>
+
+    <div class="codeblock">
+      <span class="file">terminal · 檢查設定有沒有偏離安全的預設</span>
+<pre class="code">openclaw security audit</pre>
+    </div>
+
+    <p>信任邊界的說法在三頁都出現。安全頁：群組聊天與多使用者操作是這個邊界裡支援的部署，但 OpenClaw 不是讓互相敵對的使用者共用一個 agent 或 Gateway 的安全邊界。存取控制頁：把 DM session 依寄件人隔開，是對話 context 的邊界，不是主機管理的邊界。skills 頁：共用的 Gateway 仍然是一個信任領域，附在共用 session 上的 skill 是那個 session 的輸入，不是存祕密的地方；skill library 的擁有權管的是管理與發現，不會給新的工具、憑證、主機的安裝權，也不會讓你和 Gateway 的操作者隔開。</p>
+    <p>有一個預設要特別知道：有訊息工具的 agent，預設可以跨對話、跨頻道供應商傳訊息；部署需要把訊息限制在目前的供應商或對話時，要另外設定跨供應商傳訊的限制，在工具權限那一頁，本頁沒讀。</p>
+    <p>隱私這一面，README 說你的 prompt 只會送到你設定的模型供應商與聊天平台，以及你自己開啟的診斷匯出；OpenClaw 本身預設只做每天一次的版本檢查，匿名的功能統計要你選擇加入，設 <code>update.checkOnStart: false</code> 兩者都關。狀態、記憶與憑證留在你的硬體上。</p>
+
+    <div class="explain stone">
+      <span class="label">背景</span>
+      <h4>安全分區裡，本頁沒讀的頁</h4>
+      <p>安全頁本身是一個索引：信任模型與邊界矩陣、audit 檢查的清單、強化的基準設定、prompt injection 與不可信輸入的包框、工具與 agent 的權限、瀏覽器控制的風險、網路暴露、祕密與儲存、事件應變，各是一頁。README 要你在連接其他使用者、或把 Gateway 開到遠端之前，先讀安全指南、exposure runbook 與沙箱指南。</p>
+    </div>
+
+    <p>整理者的補充：把外來訊息當成不可信的輸入，本站的〈<a href="../prompt-injection-security/">Understanding Prompt Injections</a>〉是 OpenAI 談 prompt injection 的文章；本頁不用它擴寫。</p>
+  </div>
+</section>
+
+
+<section id="sandbox" data-toc="沙箱">
+  <div class="container head">
+    <p class="chapter">Chapter 11 · Sandboxing, Modes, scope, and backend</p>
+    <h2><span class="seg">沙箱只搬走工具執行，</span><span class="seg">Gateway 留在主機</span></h2>
+    <p class="lede">OpenClaw 可以把工具執行放進沙箱後端，縮小出事時的影響範圍。沙箱預設關閉；開了之後 Gateway 程序仍在主機上，只有工具執行搬進去。文件的最小啟用範例用 non-main：main session 以外的 session 都進沙箱。</p>
+    
+  </div>
+  <div class="cardband" id="card-11"><div class="cardlabel"><span class="n">圖卡 11 / 13</span><span class="t">三種沙箱模式</span><button type="button" class="zoom" data-card="11">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">沙箱只搬走工具執行，Gateway 留在主機</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">沙箱頁：沙箱預設關閉；開了之後 Gateway 程序仍在主機上，只有工具執行搬進沙箱。文件說它不是完美的邊界，但模型做了蠢事時，能實質限制檔案與程序的存取</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:260px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">mode</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">main session 的工具</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">群組、頻道與其他 session 的工具</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">模式頁的說明</div>
+  </div>
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:260px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:18px; font-weight:600; color:#1C2431;">off</div><div style="font-size:13px; color:#8A93A0;">預設</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>在 Gateway 所在的主機上跑</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>也在主機上跑</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>沒有 agent 層級的沙箱；建立者角色<br>要求沙箱的 session 仍會進沙箱</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:306px; width:1480px; height:96px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; display:grid; grid-template-columns:260px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:18px; font-weight:600; color:#2E7B4F;">non-main</div><div style="font-size:13px; color:#8A93A0;">最小啟用範例用它</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>在主機上跑；main 的 key 固定是<br>agent:&lt;agentId&gt;:main，不能改</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; font-weight:700; color:#2E7B4F; line-height:1.5;"><div>進沙箱</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>群組與頻道的 session 有自己的 key，<br>所以一定算 non-main</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:402px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:260px repeat(3, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:18px; font-weight:600; color:#1C2431;">all</div><div style="font-size:13px; color:#8A93A0;">每個 session 都關起來</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; font-weight:700; color:#2E7B4F; line-height:1.5;"><div>進沙箱</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; font-weight:700; color:#2E7B4F; line-height:1.5;"><div>進沙箱</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>每一個 session 都在沙箱裡跑；<br>Gateway 程序照樣留在主機</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:514px; width:1480px; font-size:13.5px; color:#6B7380; line-height:1.6;">README 的說法是同一件事：除非你設定沙箱，main session 的工具就在主機上跑。操作者的角色把沙箱設成 required 時，那個角色建立的 session 不管 mode 都進沙箱，後端不可用就失敗關閉。</div>
+
+  <div style="position:absolute; left:60px; top:582px; width:470px; height:180px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">scope：建幾個環境</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">agent（預設）一個 agent 一個；session<br>一個 session 一個；shared 全部共用一個。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">後端預設 docker，另有 podman、ssh、openshell、crabbox。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:582px; width:470px; height:180px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#2E7B4F; line-height:1.4;">工具政策先於沙箱</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">工具被全域或某個 agent deny，沙箱不會<br>把它帶回來；要徹底關掉 exec，就用 deny。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">skill 的 env 與 apiKey 只注入主機，不進沙箱。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:582px; width:470px; height:180px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#C8501F; line-height:1.4;">elevated 是刻意的逃生口</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">tools.elevated 讓 exec 在沙箱外跑，預設在<br>Gateway 主機；/exec 只對授權的寄件人有效。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">角色要求的沙箱（required），elevated 也繞不過。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三列取自模式頁，「在主機上跑」指這個模式下沒有進沙箱。管理者可以替某個閒置的聊天關掉沙箱，但碰不到 required 的 session。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <p>沙箱頁的註記說它不是完美的安全邊界，但在模型做了蠢事時，能實質限制檔案系統與程序的存取。控制它的有三處：全域的 <code>agents.defaults.sandbox</code>、每個 agent 的 <code>agents.entries.*.sandbox</code>，以及建立者角色要求的沙箱政策。模式頁把它拆成三個互相獨立的設定：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>設定</th><th>可選的值</th><th><span style="white-space:nowrap">預設</span></th></tr></thead>
+        <tbody>
+          <tr><td><code>mode</code></td><td>off、non-main、all：什麼時候套用</td><td><span style="white-space:nowrap">off</span></td></tr>
+          <tr><td><code>scope</code></td><td>agent、session、shared：建幾個容器或環境</td><td><span style="white-space:nowrap">agent</span></td></tr>
+          <tr><td><code>backend</code></td><td>docker、podman、ssh、openshell、crabbox：誰來執行</td><td><span style="white-space:nowrap">docker</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>mode 決定什麼時候套用。off 沒有 agent 層級的沙箱，但建立者角色要求沙箱的 session 仍會進沙箱。non-main 把 agent 的 main session 以外的每個 session 都放進沙箱；main session 的 key 固定是 <code>agent:&lt;agentId&gt;:main</code>，不能改，群組與頻道的 session 有自己的 key，所以一定算 non-main。all 讓每個 session 都進沙箱。scope 決定建幾個容器或環境：agent 是一個 agent 一個，session 是一個 session 一個，shared 是所有沙箱 session 共用一個。操作者的角色可以把沙箱設成 required：那個角色建立的 session 不管 agent 的模式都進沙箱，這個要求在 session 裡不能改，後端不可用時失敗關閉，elevated 執行也繞不過；管理者可以替某一個閒置的聊天關掉沙箱，但碰不到 required 的 session。</p>
+
+    <div class="codeblock">
+      <span class="file">~/.openclaw/openclaw.json · 最小啟用（教學用精簡版）</span>
+<pre class="code">{ agents: { defaults: { sandbox: {
+  mode: <span class="s">"non-main"</span>,          <span class="c">// off｜non-main｜all</span>
+  scope: <span class="s">"session"</span>,          <span class="c">// agent｜session｜shared</span>
+  workspaceAccess: <span class="s">"none"</span>    <span class="c">// 沙箱不給 agent 的 workspace 存取</span>
+} } } }</pre>
+    </div>
+
+    <p>工具的 allow／deny 政策在沙箱規則之前套用：一個工具在全域或某個 agent 被 deny，沙箱不會把它帶回來。<code>tools.elevated</code> 是明確的逃生口，讓 <code>exec</code> 在沙箱外跑（預設在 Gateway 主機，exec 的目標是 node 時在 node）；<code>/exec</code> 指示只對授權的寄件人有效、只在那個 session 持續。要徹底關掉 exec，用工具政策的 deny。和第 12 章有關的一條：skill 的 <code>env</code> 與 <code>apiKey</code> 只注入主機上那一輪的程序，不進沙箱；skill 需要的執行檔是在主機上檢查的，agent 跑在沙箱裡時，容器裡也要有。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>後端</th><th>在哪裡跑</th><th>文件說適合</th></tr></thead>
+        <tbody>
+          <tr><td>Docker、Podman</td><td>本機的容器；<br>網路預設 none</td><td>本機開發與容器隔離；<br>瀏覽器沙箱只支援 Docker 引擎</td></tr>
+          <tr><td>SSH</td><td>任何 SSH 連得到的主機</td><td>把執行卸到遠端機器</td></tr>
+          <tr><td>OpenShell</td><td>OpenShell 管理的沙箱</td><td>受管理的遠端沙箱，可以雙向同步</td></tr>
+          <tr><td>Crabbox</td><td>租用的雲端機器</td><td>工具在雲端跑，agent 留在本機</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>除錯時，<code>openclaw sandbox explain</code> 會列出某個 session 或 agent 實際生效的沙箱模式、主機上的 workspace、容器的掛載、工具政策，以及要改哪個設定鍵；文件把「為什麼被擋」的思考方式寫在沙箱、工具政策與 elevated 的對照頁，本頁沒讀。</p>
+  </div>
+</section>
+
+
+<section id="skills" data-toc="skills 與稽核">
+  <div class="container head">
+    <p class="chapter">Chapter 12 · Skills, ClawHub security audits</p>
+    <h2><span class="seg">外來的 skill 要先驗，</span><span class="seg">稽核看的是一致性</span></h2>
+    <p class="lede">skill 是教 agent 怎麼、何時用工具的 Markdown 說明書，每個放在一個含 SKILL.md 的資料夾。文件要你把第三方 skill 當成不可信的程式碼；公開的 skill 登記處 ClawHub 在安裝前給稽核結果，它問的核心是：名稱、摘要、要求的權限和實際內容對不對得上。</p>
+    
+  </div>
+  <div class="cardband" id="card-12"><div class="cardlabel"><span class="n">圖卡 12 / 13</span><span class="t">安裝 skill 前的一致性稽核</span><button type="button" class="zoom" data-card="12">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">安裝前先對帳：宣稱的用途和內容對得上嗎</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">skills 頁說第三方 skill 要當成不可信的程式碼；ClawHub 稽核問的是一致性</div>
+
+  <div style="position:absolute; left:60px; top:150px; width:410px; height:48px; box-sizing:border-box; background-color:#4B5866; border-radius:12px 12px 0px 0px; padding:0px 24px; display:flex; align-items:center; font-size:18px; font-weight:700; color:#FFFFFF;">一個 skill 版本的自我介紹</div>
+  <div style="position:absolute; left:60px; top:198px; width:410px; height:236px; box-sizing:border-box; background-color:#FFFFFF; border:1px solid #D5DAE1; border-top:none; border-radius:0px 0px 12px 12px; padding:20px 24px; display:flex; flex-direction:column; gap:11px;">
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15.5px; color:#2B3340;">name 與 description：它說自己做什麼</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15.5px; color:#2B3340;">requires：要的執行檔、環境變數、設定</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15.5px; color:#2B3340;">宣告的權限與需要的憑證</div></div>
+    <div style="display:flex; align-items:center; gap:10px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A93A0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg><div style="font-size:15.5px; color:#2B3340;">安裝說明、套件資料、附帶的檔案</div></div>
+    <div style="margin-top:6px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">SKILL.md &#183; metadata.openclaw &#183; files</div>
+    <div style="margin-top:2px; font-size:13px; color:#8A93A0;">↑ 都是發行者自己寫的說法，稽核拿它對內容</div>
+  </div>
+
+  <div style="position:absolute; left:580px; top:120px; font-size:20px; font-weight:700; color:#1C2431;">一致性稽核的三個問題（ClawScan 的風險分析）</div>
+  <div style="position:absolute; left:580px; top:158px; width:960px; height:98px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:18px 24px; display:flex; align-items:flex-start; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">1</div>
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:20px; font-weight:700; color:#1C2431;">這份權力，在預期之內嗎？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">EXPECTED</div></div>
+      <div style="font-size:14px; color:#6B7380;">名稱、摘要、metadata 和實際內容，是不是使用者會合理預期的樣子</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:270px; width:960px; height:98px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:18px 24px; display:flex; align-items:flex-start; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">2</div>
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:20px; font-weight:700; color:#1C2431;">有沒有揭露？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">DISCLOSED</div></div>
+      <div style="font-size:14px; color:#6B7380;">要的憑證、本機指令、供應商 API、套件安裝，都寫在宣告裡，而且和用途一致</div>
+    </div>
+  </div>
+  <div style="position:absolute; left:580px; top:382px; width:960px; height:98px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:18px 24px; display:flex; align-items:flex-start; gap:20px;">
+    <div style="width:34px; height:34px; flex-shrink:0; border-radius:50%; background-color:#2E7B4F; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#FFFFFF;">3</div>
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      <div style="display:flex; align-items:baseline; gap:14px;"><div style="font-size:20px; font-weight:700; color:#1C2431;">權力和用途成比例嗎？</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; letter-spacing:0.08em; color:#8A93A0;">PROPORTIONATE</div></div>
+      <div style="font-size:14px; color:#6B7380;">文件說強大的行為不自動等於壞；問的是它有沒有被宣稱的用途撐起來</div>
+    </div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:530px; width:480px; height:140px; box-sizing:border-box; background-color:#1F2A3A; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#FFFFFF;">結果：狀態＋風險等級</div>
+    <div style="font-size:14px; color:rgba(255,255,255,0.78); line-height:1.6;">狀態有 Pass、Review、Warn、Malicious、<br>Pending、Error；風險等級有 Low、Medium、High。</div>
+  </div>
+  <div style="position:absolute; left:580px; top:530px; width:960px; height:140px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:20px; font-weight:700; color:#1C2431;">為什麼分成兩個問題</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">風險等級問「這裡有多大的權力」，狀態問「你該拿這個結果怎麼辦」。文件的例子：<br>發文用的 skill 可能是 Review 加 Medium，不代表惡意，只代表它能用可觀的帳號權力行事。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:690px; width:1480px; height:0px; border-top:1px solid #E5E9EE;"></div>
+  <div style="position:absolute; left:60px; top:706px; font-size:20px; font-weight:700; color:#1C2431;">安裝前的三條規則（skills 頁）</div>
+  <div style="position:absolute; left:60px; top:742px; font-size:16px; color:#2B3340;">① 第三方 skill 當成不可信的程式碼：啟用前先讀，不可信的輸入與有風險的工具用沙箱跑。</div>
+  <div style="position:absolute; left:60px; top:772px; font-size:16px; color:#2B3340;">② openclaw skills verify 向 ClawHub 查這個 skill 的 trust envelope；驗證失敗會以非零結束。</div>
+  <div style="position:absolute; left:60px; top:802px; font-size:16px; color:#2B3340;">③ security.installPolicy 在每一條安裝路徑之前跑本機的政策指令，拿不到有效的決定就擋下。</div>
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：文件說稽核是強的訊號，不保證零風險，Pass 也不能取代你的判斷；三個問題取自稽核頁「預期、揭露、成比例」的說法，排成三道是整理者的畫法。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="ag-c12" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#9AA3AE"></path></marker>
+    </defs>
+    <path d="M472 318L576 318" stroke="#9AA3AE" stroke-width="2" marker-end="url(#ag-c12)"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>skills 頁說 OpenClaw 載入內建的 skill 加上本機的覆寫，並在載入時依環境、設定與執行檔是否存在來過濾。SKILL.md 的 frontmatter 至少要有 name 與 description，OpenClaw 遵循 AgentSkills 規格。同名的 skill 出現在好幾處時，優先順序高的贏：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>優先</th><th>來源</th><th>路徑</th></tr></thead>
+        <tbody>
+          <tr><td>1（最高）</td><td>workspace 的 skills</td><td><code>&lt;workspace&gt;/skills</code></td></tr>
+          <tr><td>2</td><td>專案 agent 的 skills</td><td><code>&lt;workspace&gt;/.agents/skills</code></td></tr>
+          <tr><td>3</td><td>個人 agent 的 skills</td><td><code>~/.agents/skills</code></td></tr>
+          <tr><td>4</td><td>受管理的本機 skills</td><td><code>&lt;state-dir&gt;/skills</code></td></tr>
+          <tr><td>5</td><td>Workshop 產生的</td><td>state 目錄裡每個 agent 的 <span style="white-space:nowrap">workshop-skills</span></td></tr>
+          <tr><td>6</td><td>內建（另有只給 Custodian agent 的一組）</td><td>隨安裝附帶</td></tr>
+          <tr><td>7（最低）</td><td>額外目錄與 plugin 帶的</td><td><code>skills.load.extraDirs</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="codeblock">
+      <span class="file">SKILL.md · 教學用精簡版（欄位照文件的 image-lab 例子，文字是整理者寫的）</span>
+<pre class="code">---
+name: image-lab
+description: 透過影像供應商的流程產生或修改圖片
+metadata: { <span class="s">"openclaw"</span>: { <span class="s">"requires"</span>: { <span class="s">"bins"</span>: [<span class="s">"uv"</span>], <span class="s">"env"</span>: [<span class="s">"GEMINI_API_KEY"</span>] } } }
+---
+使用者要產生或修改圖片時，用 image_generate 工具……  <span class="c"># 正文：何時、怎麼用工具</span></pre>
+    </div>
+
+    <p>skills 頁反覆區分三件事。位置決定同名時誰贏，就是上表的優先順序。agent 的允許清單決定某個 agent 看得到哪些 skill：非空的清單就是最終集合，不和預設合併，設成空清單就一個都沒有。但允許清單不是主機 shell 的授權邊界：同一個 agent 能用 exec 的話，要另外用沙箱、OS 使用者隔離、exec 的允許或拒絕清單與個別資源的憑證來限制。plugin 帶的 skill 也一樣，skill 符合資格，不等於給了工具的存取。</p>
+    <p>載入時的篩選寫在 frontmatter 的 <code>metadata.openclaw</code>：<code>os</code> 是硬性的平台篩選，<code>requires.bins</code> 要每個執行檔都在 PATH 上，<code>requires.env</code> 要環境變數存在或由設定提供，<code>requires.config</code> 要設定裡某個路徑為真。一輪開始時，OpenClaw 解析這個 agent 有效的 skill 清單、把設定裡的 env 與 apiKey 套進這一輪的程序環境、把符合資格的 skill 編成一段精簡的 XML 放進 system prompt，跑完再還原環境。skill 清單在 session 開始時做快照，SKILL.md 改了、Gateway 重啟、新的遠端 node 連上時，下一輪才刷新。成本是確定的：每個 skill 約 97 字元再加上 name、description、location 的長度，以每 token 約 4 字元算，約 24 個 token；超過 prompt 預算時先保住名稱與位置，剩下的預算才放縮短的描述。</p>
+    <p>Skill Workshop 是 agent 與它的 workshop 目錄之間的提案佇列：agent 發現可以重用的工作時，先寫一份提案，而不是直接寫 SKILL.md，由你用 <code>openclaw skills workshop inspect</code>、<code>evaluate</code>、<code>apply</code> 審；例外是每週排定的整理回合，它可以直接改 workshop 目錄裡的 SKILL.md。整理者的讀法：這和第 8 章的升級排程是同一種安排，agent 提議，人決定。</p>
+    <p>skills 頁的安全段：把第三方 skill 當成不可信的程式碼，啟用前先讀，不可信的輸入與有風險的工具優先用沙箱跑。workspace、專案與額外目錄的 skill，只接受解析後的實際路徑還在設定根目錄裡的。<code>security.installPolicy</code> 可以在每一條安裝路徑（ClawHub、上傳、Git、本機、更新、依賴安裝）之前跑一個受信任的本機政策指令，拿不到有效的決定就失敗關閉。<code>openclaw skills verify</code> 向 ClawHub 查這個 skill 的 trust envelope，驗證失敗時以非零結束。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>稽核狀態</th><th>意思（稽核頁的說法）</th></tr></thead>
+        <tbody>
+          <tr><td>Pass</td><td>沒看到高於低風險的問題</td></tr>
+          <tr><td>Review</td><td>安裝前先讀 findings；這個版本仍可能是正當的</td></tr>
+          <tr><td>Warn</td><td>格外小心：ClawHub 發現高影響的疑慮或警訊</td></tr>
+          <tr><td>Malicious</td><td>不要安裝</td></tr>
+          <tr><td>Pending</td><td>稽核還沒跑完</td></tr>
+          <tr><td>Error</td><td>稽核沒辦法完成</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>風險等級（Low、Medium、High）描述的是影響範圍：照預期使用時，這個版本看起來有多大的權力。文件把兩個問題分開：風險等級問「這裡有多少權力」，稽核狀態問「你該拿這個結果怎麼辦」。它的例子是一個發文用的 skill 可能是 Review 加 Medium，不代表惡意，只代表它看起來符合用途，但能用可觀的帳號權力行事。findings 分 Info、Low、Medium、High、Critical，低信心的 findings 不放進公開的彙總。</p>
+    <p>ClawHub 稽核提交的發行物：skill 的指示或 plugin 的中繼資料、宣告的環境變數與權限、安裝說明與套件資料、附帶的檔案與清單、相容性與能力的中繼資料。主要的問題是一致性。文件說強大的行為不自動等於壞：很多有用的工具需要憑證、本機指令、供應商 API 或套件安裝，稽核看的是這份權力是否在預期之內、有沒有揭露、是否成比例。稽核頁合併三個來源：SkillSpector；騰訊朱雀實驗室的 A.I.G 掃描器，它檢查 agent 指示裡的弱點樣式、提供佐證，但不下最終判定、也不單獨擋安裝；以及 ClawHub 自己的 ClawScan 做的風險分析，它用 OWASP 的 Agentic Skills Top 10 當鏡頭，看 prompt injection、工具誤用、憑證外洩、不安全的執行、記憶或 context 投毒、過度的自主權這類風險。</p>
+    <p>文件說稽核是強的安全訊號，但不保證零風險；Pass 讓人安心，但不能取代你自己的判斷，尤其是能發文、改資料、跑指令、讀檔、碰正式系統的工具。安裝前要看的清單：整體狀態、風險等級、列出的 findings、需要的憑證、權限與環境變數，以及擁有者、來源、版本、changelog、下載數、星數這些信任訊號；只裝你理解而且信任的內容。</p>
+    <p>整理者的補充：本站的〈<a href="../agent-skills/">Agent Skills</a>〉是 Anthropic 談 skill 這個資料夾格式的文章；本頁不用它擴寫。</p>
+  </div>
+</section>
+
+
+<section id="reading" data-toc="讀法與動手做">
+  <div class="container head">
+    <p class="chapter">Chapter 13 · How to read it, and a minimal build</p>
+    <h2><span class="seg">先找誰觸發一輪，</span><span class="seg">再找誰寫狀態、</span><span class="seg">誰守邊界</span></h2>
+    <p class="lede">三條讀法：每個行為先找是什麼觸發了這一輪；每一份狀態先找誰寫它、什麼時候放進 prompt；每一個動作先找誰能觸發、模型看到什麼、工具在哪裡跑。五步順序是架構與迴圈、記憶與意圖、心跳與排程、配對與信任、擴充；最後是一份對應課程作業的清單。</p>
+    
+  </div>
+  <div class="cardband" id="card-13"><div class="cardlabel"><span class="n">圖卡 13 / 13</span><span class="t">讀法：觸發者、寫入者、邊界</span><button type="button" class="zoom" data-card="13">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">先找觸發者，再找寫入者，最後找邊界</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">整理者的讀法：每一種主動都落在 Gateway 開的一輪；每一份狀態都寫明了誰能寫、何時放進 prompt；每一個動作都分層把關</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:318px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">01 &#183; TRIGGERS</div>
+    <div style="font-size:24px; font-weight:700; color:#C8501F; line-height:1.4;">每一次主動，<br>都是 Gateway 開的一輪</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">訊息、心跳 tick、排程、webhook、<br>背景指令跑完，最後都進同一條 lane；<br>先問它由什麼觸發、跑在哪個 session。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 把「記得要去做」寫進記憶檔<br>✓ 時間型交給排程，事件型交給 intent</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:318px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">02 &#183; WRITERS</div>
+    <div style="font-size:24px; font-weight:700; color:#2E7B4F; line-height:1.4;">每一份狀態，<br>先問誰能寫、何時注入</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">五層記憶、USER.md、常駐意圖、<br>monitor scratch、DREAMS.md 都寫明了；<br>長期記憶只有一個有閘的寫入者。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 相信文字自稱來自主人<br>✓ 來源標記存在模型寫不到的欄位</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:318px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:28px 30px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">03 &#183; BOUNDARIES</div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">每一個動作，<br>分三層把關</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">誰能觸發：配對與允許清單；<br>模型看到什麼：context 與不可信的框；<br>工具在哪裡跑：政策、沙箱、elevated。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">✗ 用分開的 DM session 隔開互不信任的人<br>✓ 每個信任邊界，各自一個 Gateway</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:556px; font-size:20px; font-weight:700; color:#1C2431;">讀這份文件的五步</div>
+  <div style="position:absolute; left:60px; top:596px; width:260px; height:72px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:rgba(255,255,255,0.6);">01</div>
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">架構與迴圈（第 2、3 章）</div>
+  </div>
+  <div style="position:absolute; left:360px; top:596px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">02</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">記憶與意圖（第 4、5 章）</div>
+  </div>
+  <div style="position:absolute; left:660px; top:596px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">03</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">心跳與排程（第 6 到 8 章）</div>
+  </div>
+  <div style="position:absolute; left:960px; top:596px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">04</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">配對與信任（第 9 到 11 章）</div>
+  </div>
+  <div style="position:absolute; left:1260px; top:596px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF6F0; border:1.5px solid #B4D5C0; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">05</div>
+    <div style="font-size:16px; font-weight:700; color:#2E7B4F;">擴充與稽核（第 12 章）</div>
+  </div>
+  <div style="position:absolute; left:60px; top:688px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">這個順序和文件站依主題的分區（concepts、gateway、automation、channels、tools、clawhub）不同，是照「建一個主動 agent 需要先懂什麼」排的；<br>對應課程作業 HW1 的七步動手做清單，在第 13 章的正文。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三條讀法與五步順序都是整理者依前面十二張卡整理的，文件本身沒有這樣分；✗／✓ 兩行各取自對應的章。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M334 624L346 632L334 640Z" fill="#9AA3AE"></path>
+    <path d="M634 624L646 632L634 640Z" fill="#9AA3AE"></path>
+    <path d="M934 624L946 632L934 640Z" fill="#9AA3AE"></path>
+    <path d="M1234 624L1246 632L1234 640Z" fill="#9AA3AE"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <p>這一章是整理者寫的。三條讀法來自前面十二章反覆出現的模式。第一，OpenClaw 的每一種主動都落在同一個地方：Gateway 開一輪 agent；讀任何功能時，先問它由什麼觸發、跑在哪個 session（第 3、6、8 章）。第二，文件對每一份狀態都寫了誰能寫、什麼時候放進 prompt：五層記憶、USER.md、常駐意圖、monitor scratch、DREAMS.md（第 4 到 6 章）；找不到寫入者的東西，就不要假設它會被記住。第三，信任是分層的：誰能觸發（配對與允許清單）、模型看到什麼（context 可見度、不可信內容的框）、工具在哪裡跑（工具政策、沙箱、elevated），而整個 Gateway 是一個信任邊界（第 9 到 12 章）。</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="n">1</div><div class="t"><strong>架構與迴圈</strong>Gateway 接哪些連線、一輪怎麼跑、誰決定要不要回。第 2、3 章。</div></div>
+      <div class="cascade-step"><div class="n">2</div><div class="t"><strong>記憶與意圖</strong>五層、寫入路徑、使用者模型、常駐意圖。第 4、5 章。</div></div>
+      <div class="cascade-step"><div class="n">3</div><div class="t"><strong>心跳與排程</strong>什麼時候跑、什麼時候開口、還有哪些東西會開一輪。第 6 到 8 章。</div></div>
+      <div class="cascade-step"><div class="n">4</div><div class="t"><strong>配對與信任</strong>誰能找上它、一個 Gateway 一個信任邊界、沙箱。第 9 到 11 章。</div></div>
+      <div class="cascade-step"><div class="n">5</div><div class="t"><strong>擴充</strong>skills 的載入與篩選、ClawHub 稽核。第 12 章。</div></div>
+    </div>
+
+    <p>這個順序和文件站的分區不同：文件站依主題分成 concepts、gateway、automation、channels、tools、clawhub 等區，本頁照建一個主動 agent 需要的順序排。</p>
+
+    <dl class="faq">
+      <div><dt>心跳會不會一直打擾我？</dt><dd>文件的預設是安靜：預設 prompt 沒事回 NO_REPLY、不從舊對話推論舊任務；警示預設只送主人的 DM、從不送群組；可以用 activeHours 限時段；三個顯示旗標全關就連模型都不叫。</dd></div>
+      <div><dt>workspace 裡的 HEARTBEAT.md 還有用嗎？</dt><dd>沒有。runtime 只讀資料庫裡的 monitor scratch；<code>openclaw doctor --fix</code> 會把 HEARTBEAT.md 匯入 scratch、把舊的 tasks: 轉成排程工作，並封存原檔。</dd></div>
+      <div><dt>家人或團隊能共用一個 Gateway 嗎？</dt><dd>在彼此信任的範圍內可以，群組聊天與多使用者操作都是支援的部署；多人私訊同一個 bot 時建議設 <code>session.dmScope: "per-channel-peer"</code>。互不信任的使用者就分開 Gateway 與憑證，最好分開 OS 使用者或主機。</dd></div>
+    </dl>
+
+    <h3 style="margin-top:2.2rem;">動手做：一個會自己開口、也知道什麼時候閉嘴的最小 agent</h3>
+    <p class="lede">這一段不在原文裡。它把課程作業 HW1（從零建一個有工具、終端、記憶與 <span style="white-space:nowrap">human-in-the-loop</span> 的 agent harness）用得到的設計壓成一份清單；每一條都能在前面的章節找到出處，實作細節是你自己的。</p>
+    <ol class="checklist">
+      <li><span class="box" aria-hidden="true"></span><div><strong>一個長駐程序持有所有連線</strong><small>聊天、控制端、裝置都連到它；一個 session 一條 lane，同一個 session 的 run 依序跑（第 2、3 章）。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>給 agent 一個唯一的工作目錄</strong><small>工具只在這裡跑；新 session 第一輪注入指示、人格與使用者檔案，太大就截斷（第 3 章）。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>記憶寫成檔案，分層並帶來源</strong><small>每天的筆記只追加；長期記憶只由一個有閘的整併寫入；外部內容標成不可信、永遠不自動注入（第 4 章）。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>偏好寫成指令，意圖編成觸發條件</strong><small>偏好改了就地取代；時間型的意圖交給排程，事件型的用程式比對，加冷卻、次數與到期（第 5 章）。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>加一個窄 prompt 的定時回合</strong><small>沒事回一個會被濾掉的靜默 token；時段外、忙碌時、沒有送達對象時跳過；警示只送主人（第 6、7 章）。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>把人放在「升級成排程」這一步</strong><small>agent 提議，用一句白話確認，立刻試跑一次，失敗就刪（第 8 章）。</small></div></li>
+      <li><span class="box" aria-hidden="true"></span><div><strong>陌生人先配對，工具先過政策再決定在哪裡跑</strong><small>未核准的訊息不處理；被 deny 的工具沙箱帶不回來；外來的 skill 先驗再裝（第 9 到 12 章）。</small></div></li>
+    </ol>
+
+    <p>整理者的補充：本站的〈<a href="../claude-code-best-practices/">Best Practices for Claude Code</a>〉是另一個 agent 的官方文件，談權限、hooks 與 subagent 怎麼設，可以和第 11、12 章對照著讀；本頁不用它擴寫。</p>
+  </div>
+</section>
+
+
+<section id="glossary" class="nocard glossary" data-toc="名詞速查">
+  <div class="wide">
+    <p class="eyebrow">Reference · 名詞速查</p>
+    <h2><span class="seg">關鍵名詞，</span><span class="seg">和它們在文件的哪一頁</span></h2>
+    <p class="lede">依「架構、迴圈、記憶、主動、配對與信任、擴充」的順序排；解釋是整理者依文件的用法寫的，每條最後寫它在文件的哪一頁。</p>
+    <dl class="glossary-grid">
+      <div class="term"><dt>Gateway</dt><span class="zh-name">閘道程序</span><dd>長駐的控制中心，持有聊天平台連線、sessions、工具與事件；預設綁 127.0.0.1:18789。README、架構頁。</dd></div>
+      <div class="term"><dt>Channel</dt><span class="zh-name">聊天頻道</span><dd>一個聊天平台的連線，例如 WhatsApp、Telegram、Slack，由 Gateway 維持。README、架構頁。</dd></div>
+      <div class="term"><dt>Node</dt><span class="zh-name">裝置節點</span><dd>以 role: node 連上的裝置，提供相機、錄螢幕、定位這類指令。架構頁、配對頁。</dd></div>
+      <div class="term"><dt>Workspace</dt><span class="zh-name">工作目錄</span><dd>agent 唯一的工作目錄；記憶與 bootstrap 檔都是裡面的 Markdown。agent 頁。</dd></div>
+      <div class="term"><dt>Bootstrap files</dt><span class="zh-name">啟動檔</span><dd>AGENTS.md、SOUL.md、IDENTITY.md、USER.md、BOOTSTRAP.md、MEMORY.md，新 session 第一輪注入。agent 頁。</dd></div>
+      <div class="term"><dt>Agent loop</dt><span class="zh-name">agent 迴圈</span><dd>每個 session 依序執行的一次 run：收件、組 context、推論、工具、串流、寫入。agent loop 頁。</dd></div>
+      <div class="term"><dt>Session lane</dt><span class="zh-name">session 佇列</span><dd>同一個 session key 的 run 排成的佇列，防止工具與 session 互相搶。agent loop 頁。</dd></div>
+      <div class="term"><dt>NO_REPLY</dt><span class="zh-name">靜默 token</span><dd>會從送出內容濾掉的精確字串；不是免除必要回覆的許可。agent loop 頁、心跳頁。</dd></div>
+      <div class="term"><dt>Memory tiers</dt><span class="zh-name">記憶分層</span><dd>指示、精選核心、情節、前瞻、審閱五層，差在誰寫、何時放進 prompt。記憶架構頁。</dd></div>
+      <div class="term"><dt>Provenance</dt><span class="zh-name">來源標記</span><dd>owner、agent、untrusted、system 四類，存在模型寫不到的 SQLite 欄位。記憶架構頁。</dd></div>
+      <div class="term"><dt>Dreaming</dt><span class="zh-name">背景整併</span><dd>預設開啟的排程整併，候選過了確定性的閘才寫進 MEMORY.md 與 USER.md。記憶頁、記憶架構頁。</dd></div>
+      <div class="term"><dt>User model</dt><span class="zh-name">使用者模型</span><dd>USER.md 裡寫成指令的偏好，帶觀察日期與有效或已取代的狀態。記憶架構頁。</dd></div>
+      <div class="term"><dt>Standing intents</dt><span class="zh-name">常駐意圖</span><dd>事件型的前瞻記憶，用 intent 工具存進 SQLite，每則訊息用程式比對。記憶架構頁。</dd></div>
+      <div class="term"><dt>Heartbeat</dt><span class="zh-name">心跳</span><dd>系統擁有的排程，預設每 30 分鐘在 main session 跑一輪 agent。心跳頁。</dd></div>
+      <div class="term"><dt>Monitor scratch</dt><span class="zh-name">心跳清單</span><dd>每個心跳工作的私有小清單，接在心跳 prompt 後面；上限 256 KiB。心跳頁。</dd></div>
+      <div class="term"><dt>heartbeat_respond</dt><span class="zh-name">心跳回應工具</span><dd>notify: false 不出聲但留給下一輪；notify: true 加文字就是一則警示。心跳頁。</dd></div>
+      <div class="term"><dt>Automations</dt><span class="zh-name">排程工作</span><dd>Gateway 內建的排程器；CLI 叫 openclaw automations，cron 是別名。排程頁、運作頁。</dd></div>
+      <div class="term"><dt>Inbound webhooks</dt><span class="zh-name">入站 webhook</span><dd>/hooks/wake 排一則通知進 main session；/hooks/agent 送一個預設 isolated 的回合。webhook 頁。</dd></div>
+      <div class="term"><dt>Pairing</dt><span class="zh-name">配對</span><dd>明確的存取核准，用在 DM（誰能說話）與裝置（哪台能接進來）。配對頁。</dd></div>
+      <div class="term"><dt>dmPolicy</dt><span class="zh-name">DM 政策</span><dd>pairing（預設）、allowlist、open、disabled，在訊息被處理之前把關。存取控制頁。</dd></div>
+      <div class="term"><dt>contextVisibility</dt><span class="zh-name">context 可見度</span><dd>哪些引用、討論串歷史會送到模型；和誰能觸發是兩件事。存取控制頁。</dd></div>
+      <div class="term"><dt>Trust boundary</dt><span class="zh-name">信任邊界</span><dd>一個 Gateway 一個：單一操作者或彼此信任的團隊，不是互相敵對的多租戶。安全頁。</dd></div>
+      <div class="term"><dt>Sandbox mode</dt><span class="zh-name">沙箱模式</span><dd>off（預設）、non-main、all；只有工具執行進沙箱，Gateway 留在主機。沙箱頁、模式頁。</dd></div>
+      <div class="term"><dt>tools.elevated</dt><span class="zh-name">逃生口</span><dd>明確讓 exec 在沙箱外跑的設定；工具政策的 deny 仍先於沙箱。沙箱頁。</dd></div>
+      <div class="term"><dt>SKILL.md</dt><span class="zh-name">skill 說明書</span><dd>帶 YAML frontmatter 的 Markdown，教 agent 何時、怎麼用工具；載入時依條件篩選。skills 頁。</dd></div>
+      <div class="term"><dt>ClawHub</dt><span class="zh-name">skill 登記處</span><dd>公開的 skill 登記處，安裝前給稽核狀態、風險等級與 findings。skills 頁、稽核頁。</dd></div>
+    </dl>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>資料來源：GitHub · openclaw/openclaw，Peter Steinberger 與社群（repo 建立於 2025-11-24；授權 MIT，© OpenClaw Foundation）。本頁讀 README 與 docs.openclaw.ai 的 16 頁：architecture、agent、agent loop、memory、memory architecture、heartbeat、automations 與其中的 how it works、inbound webhooks、pairing、access control、security、sandboxing 與其中的 modes, scope, and backend、skills、ClawHub security audits。README 與文件依 2026-09-30 抓到的版本，專案之後還會改。<br><a href="https://github.com/openclaw/openclaw">github.com/openclaw/openclaw</a></p>
+    <p class="credit">整理於 2026-09-30</p>
+    <p class="disclaimer">本頁為學習用的重述與整理，不是原文逐句翻譯。觀點與著作權屬於原作者。程式片段為教學用精簡版，實際用法請以原文與官方文件為準。</p>
+  </div>
+</footer>
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="圖卡大圖"><button type="button" class="close">關閉（Esc）</button><div class="frame"></div></div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fitFrames() {
+    var frames = document.querySelectorAll('.cardband .frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  var KEY = 'rearranged-article-mode';
+  function setMode(m, save) {
+    document.body.classList.toggle('mode-cards', m === 'cards');
+    var btns = document.querySelectorAll('.modebar button[data-mode]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-mode') === m ? 'true' : 'false');
+    }
+    if (save) { try { localStorage.setItem(KEY, m); } catch (e) {} }
+    fitFrames();
+  }
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  setMode(saved === 'cards' ? 'cards' : 'full', false);
+
+  var box = document.getElementById('lightbox');
+  var boxFrame = box.querySelector('.frame');
+  function fitLightbox() {
+    if (!box.classList.contains('open')) return;
+    var root = boxFrame.firstElementChild;
+    if (!root) return;
+    var s = Math.min(1, (window.innerWidth - 48) / W, (window.innerHeight - 48) / H);
+    root.style.transform = 'scale(' + s + ')';
+    boxFrame.style.width = Math.round(W * s) + 'px';
+    boxFrame.style.height = Math.round(H * s) + 'px';
+  }
+  function openLightbox(num) {
+    var bandEl = document.getElementById('card-' + num);
+    if (!bandEl) return;
+    var root = bandEl.querySelector('.frame > div');
+    boxFrame.innerHTML = '';
+    var clone = root.cloneNode(true);
+    clone.style.transform = '';
+    boxFrame.appendChild(clone);
+    box.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    fitLightbox();
+  }
+  function closeLightbox() {
+    box.classList.remove('open');
+    boxFrame.innerHTML = '';
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var b = t.closest('.modebar button[data-mode]');
+    if (b) { setMode(b.getAttribute('data-mode'), true); return; }
+    var z = t.closest('.cardlabel .zoom');
+    if (z) { openLightbox(z.getAttribute('data-card')); return; }
+    if (t.closest('.lightbox') && !t.closest('.lightbox .frame')) { closeLightbox(); }
+  });
+  document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') closeLightbox(); });
+  window.addEventListener('resize', function () { fitFrames(); fitLightbox(); });
+  window.addEventListener('load', fitFrames);
+  fitFrames();
+})();
+</script>
+</body>
+</html>
