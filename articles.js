@@ -251,6 +251,41 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "cs329z-unit-05",
+      "path": "articles/cs329z-unit-05/index.html",
+      "title": "CS 329Z 單元 5 對照：DSPy 把 prompt 交給編譯器，其他單元的讀物怎麼接",
+      "summary": "CS 329Z 第 3 週「Frameworks & Orchestration」只配了一篇讀物 DSPy。本頁把它和其他單元的讀物並排：框架該抽象掉哪一層（對照〈Building Effective Agents〉與 AutoGen）、DSPy 之後的最佳化器調了什麼（單元 9 的 MIPRO、BetterTogether、GEPA）、metric 從哪裡來（EvalGen 與 AutoMetrics），以及哪些讀物引了它。判斷題不附答案，判斷留給讀者。",
+      "source": {
+        "name": "CS 329Z · Engineering AI Agents（Stanford，Fall 2026）",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "date": "2026-09-30",
+      "tags": [
+        "cs329z",
+        "unit-synthesis",
+        "dspy",
+        "prompt-optimization",
+        "agent-frameworks"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 3,
+        "kind": "單元對照",
+        "section": "Frameworks & Agent Design",
+        "lecture": "Frameworks & Orchestration",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/cs329z-unit-05/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "cs329z-unit-04",
       "path": "articles/cs329z-unit-04/index.html",
       "title": "CS 329Z 單元 4 對照：MCP 規格和其他單元的讀物，在工具的寫法、錯誤與沙箱上怎麼接",
