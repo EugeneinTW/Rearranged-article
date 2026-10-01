@@ -216,6 +216,41 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "cs329z-unit-14",
+      "path": "articles/cs329z-unit-14/index.html",
+      "title": "CS 329Z 單元 14 對照：主動的 agent 該看多少、何時開口，GUM、NAP 與 OpenClaw 各給了什麼證據",
+      "summary": "CS 329Z 第 11 週「Proactive Agents」那一講的三篇讀物並排：GUM 從螢幕截圖推出帶信心的命題，再讓助理 Gumbo 依期望效用決定何時開口；NAP 用一個月的手機螢幕訓練模型預測使用者的下一步；OpenClaw 的文件寫明一個開源的個人 agent 怎麼定時醒來、又怎麼預設安靜。本頁整理三篇在三個問題上各拿出什麼證據：使用者模型從哪裡來、何時開口、誰替使用者模型把關，以及原文之間怎麼互相引用、同一件事各怎麼稱呼。判斷題不附答案，判斷留給讀者。",
+      "source": {
+        "name": "CS 329Z · Engineering AI Agents（Stanford，Fall 2026）",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "date": "2026-09-30",
+      "tags": [
+        "cs329z",
+        "unit-synthesis",
+        "proactive-agents",
+        "user-modeling",
+        "agent-privacy"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 11,
+        "kind": "單元對照",
+        "section": "Coding Agents & Proactive Agents",
+        "lecture": "Proactive Agents",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/cs329z-unit-14/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "cs329z-unit-10",
       "path": "articles/cs329z-unit-10/index.html",
       "title": "CS 329Z 單元 10 對照：資料要多少、誰來判好壞、誰來寫，五篇讀物各給了什麼證據",
