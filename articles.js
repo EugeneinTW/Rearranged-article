@@ -1,6 +1,40 @@
 window.ARTICLES = {
   "articles": [
     {
+      "slug": "cs329z-course-map",
+      "path": "articles/cs329z-course-map/index.html",
+      "title": "CS 329Z 課程地圖：15 個單元、50 篇讀物，七條主線怎麼串起一門課",
+      "summary": "Stanford CS 329Z（Engineering AI Agents，2026 秋季）的 50 篇讀物與 15 頁單元對照，在這一頁收成一張地圖：15 個單元落在哪幾週、各有幾篇讀物；15 頁的 45 道判斷題分成七條跨單元的主線，每條寫成一個問題，列出證據在哪些單元的哪一章；50 篇之間的 121 條引用裡，被引最多的 12 篇；四條讀法路線；以及跨單元會換意思的用詞。主線不附答案，判斷留給讀者。",
+      "source": {
+        "name": "CS 329Z · Engineering AI Agents（Stanford，Fall 2026）",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "date": "2026-10-01",
+      "tags": [
+        "cs329z",
+        "course-map",
+        "unit-synthesis",
+        "llm-agents"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 11,
+        "kind": "課程地圖",
+        "section": "全課程",
+        "lecture": "17 講、15 個單元",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/cs329z-course-map/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "webshop-web-agents",
       "path": "articles/webshop-web-agents/index.html",
       "title": "WebShop：用一家有 118 萬件真實商品、能自動評分的模擬網路商店，考語言代理能不能照一句指令搜尋、挑選並買下對的商品",
