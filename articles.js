@@ -251,6 +251,41 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "cs329z-unit-12",
+      "path": "articles/cs329z-unit-12/index.html",
+      "title": "CS 329Z 單元 12 對照：agent 的護欄守不守得住，隱私、注入與擴展政策六篇讀物各給了什麼證據",
+      "summary": "CS 329Z 第 8 週「Agent Safety & Guardrails」那一講的六篇讀物並排：PrivacyLens、隱私風險搜尋與 CDI 論文在模擬裡量 agent 的隱私洩漏與防禦，Li 示範能上網的 LLM 把公開的訪談連回受訪者，OpenAI 說明 prompt injection 與七層防禦，Anthropic 的 RSP 把能力門檻和安全措施綁在一起。本頁整理六篇的威脅模型、在三個問題上各拿出什麼證據、原文之間怎麼互相引用，以及同一件事各篇怎麼稱呼。判斷題不附答案，判斷留給讀者。",
+      "source": {
+        "name": "CS 329Z · Engineering AI Agents（Stanford，Fall 2026）",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "date": "2026-09-30",
+      "tags": [
+        "cs329z",
+        "unit-synthesis",
+        "agent-safety",
+        "agent-privacy",
+        "red-teaming"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 8,
+        "kind": "單元對照",
+        "section": "Safety",
+        "lecture": "Agent Safety & Guardrails",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/cs329z-unit-12/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "cs329z-unit-10",
       "path": "articles/cs329z-unit-10/index.html",
       "title": "CS 329Z 單元 10 對照：資料要多少、誰來判好壞、誰來寫，五篇讀物各給了什麼證據",
