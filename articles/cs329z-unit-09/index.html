@@ -1,0 +1,1610 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>單元 9 對照：最佳化</title>
+<meta name="description" content="CS 329Z 第 5 週「Optimization」那一講的四篇讀物並排：Snell 等人研究推論時的算力怎麼分配，GEPA 讓模型讀執行軌跡改寫指令，MIPRO 同時調指令與示範，BetterTogether 把挑示範和微調權重接在一起。本頁整理四篇在三個問題上各拿出什麼證據：示範和指令哪個帶來進步、調完 prompt 還要不要動權重、模型幾乎不會的題目多花力氣有沒有用，再整理原文之間怎麼互相引用、同一件事各叫什麼名字。判斷題不附答案，判斷留給讀者。">
+<meta name="keywords" content="cs329z, unit-synthesis, prompt-optimization, fine-tuning, test-time-compute">
+<meta name="source" content="https://cs329z.stanford.edu/">
+<meta name="date" content="2026-09-30">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&amp;family=Noto+Sans+TC:wght@400..900&amp;family=JetBrains+Mono:wght@400..700&amp;family=IBM+Plex+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Theme: tech-modern 變體「測試報告語意色」
+   藍 = 主色 / 綠 = pass / 琥珀 = 注意 / 紅 = fail
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --paper: #ffffff;
+  --paper-soft: #f3f5f8;
+  --paper-shadow: #dde2e8;
+  --ink: #121821;
+  --ink-soft: #3b4450;
+  --ink-mute: #6b7481;
+  --primary: #1e56a8;
+  --primary-deep: #143a72;
+  --primary-bg: #e6eef9;
+  --accent: #157a52;
+  --accent-deep: #0d5236;
+  --accent-bg: #e1f3e9;
+  --warm: #b8620e;
+  --warm-deep: #7d4108;
+  --warm-bg: #fbeddc;
+  --danger: #b83228;
+  --danger-bg: #f9e3e0;
+  --stone: #5a6370;
+  --stone-bg: #eceff3;
+  --code-bg: #0f1720;
+  --code-ink: #e6edf3;
+  --code-mute: #8b98a8;
+  --code-blue: #7cc4ff;
+  --code-green: #7ee2b8;
+  --code-amber: #ffc46b;
+
+  --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-cjk: 'Noto Sans TC', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --content-width: 780px;
+  --wide-width: 1100px;
+  --gutter: 24px;
+}
+
+/* ---------- reset & 排版 ---------- */
+* { box-sizing: border-box; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+body {
+  margin: 0; padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-cjk);
+  font-size: 18px;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: var(--content-width); margin: 0 auto; padding: 0 var(--gutter); }
+.wide { max-width: var(--wide-width); margin: 0 auto; padding: 0 var(--gutter); }
+section { padding-block: 64px; }
+section + section { border-top: 1px solid var(--paper-shadow); }
+
+h1, h2, h3, h4 { font-family: var(--font-cjk); font-weight: 700; text-wrap: balance; }
+h1 { font-size: 56px; line-height: 1.14; margin: 0 0 24px; font-weight: 800; }
+h2 { font-size: 36px; line-height: 1.25; margin: 0 0 18px; letter-spacing: -0.01em; }
+h2 .seg { display: inline-block; }
+h3 { font-size: 25px; line-height: 1.35; margin: 44px 0 14px; }
+h4 { font-size: 20px; line-height: 1.4; margin: 26px 0 10px; }
+p { margin: 0 0 18px; }
+ul, ol { padding-left: 26px; margin: 0 0 18px; }
+li { margin-bottom: 8px; }
+em { font-style: normal; color: var(--primary-deep); font-weight: 600; }
+strong { font-weight: 700; }
+a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+code {
+  font-family: var(--font-mono); font-size: 0.86em;
+  background: var(--stone-bg); color: var(--primary-deep);
+  padding: 2px 6px; border-radius: 4px;
+}
+.mono { font-family: var(--font-mono); }
+
+/* ---------- Hero ---------- */
+.hero {
+  padding-block: 84px 60px;
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-soft) 100%);
+  border-bottom: 2px solid var(--primary-deep);
+  position: relative;
+}
+.hero::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: linear-gradient(90deg,
+    var(--primary) 0%, var(--primary) 25%,
+    var(--accent) 25%, var(--accent) 50%,
+    var(--warm) 50%, var(--warm) 75%,
+    var(--danger) 75%, var(--danger) 100%);
+}
+.hero-meta {
+  display: flex; flex-wrap: wrap; gap: 10px 22px;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  margin-bottom: 32px;
+}
+.hero-meta span::before { content: "—"; margin-right: 10px; color: var(--paper-shadow); }
+.hero-meta span:first-child::before { content: ""; margin: 0; }
+.hero h1 { font-size: 60px; font-weight: 800; word-break: keep-all; }
+.hero h1 .accent {
+  display: block; margin-top: 12px;
+  font-size: 0.55em; font-weight: 600; line-height: 1.3;
+  color: var(--primary-deep);
+}
+.hero .lede { font-size: 22px; max-width: 720px; }
+.hero-keystat {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 28px; margin: 44px 0 0; padding-top: 34px;
+  border-top: 1px dashed var(--paper-shadow);
+}
+.hero-keystat dt {
+  font-family: var(--font-sans);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--ink-mute); margin-bottom: 6px;
+}
+.hero-keystat dd {
+  margin: 0; font-family: var(--font-mono);
+  font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1;
+}
+.hero-keystat dd small { font-family: var(--font-cjk); font-size: 14px; color: var(--ink-mute); font-weight: 400; margin-left: 6px; }
+
+/* ---------- Chapter / lede / eyebrow ---------- */
+.chapter {
+  font-family: var(--font-mono);
+  font-size: 12.5px; color: var(--primary);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 0 0 10px;
+}
+.chapter::before { content: "§ "; color: var(--paper-shadow); margin-right: 4px; }
+.lede {
+  font-size: 22px; line-height: 1.6; color: var(--ink-soft);
+  margin: 0 0 28px; font-weight: 400;
+}
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--primary); margin: 0 0 14px;
+}
+
+/* ---------- Pull quote ---------- */
+.pullquote {
+  margin: 48px -16px; padding: 32px 40px;
+  font-family: var(--font-cjk);
+  font-size: 27px; line-height: 1.5; font-weight: 600;
+  color: var(--primary-deep);
+  border-left: 5px solid var(--primary);
+  background: linear-gradient(90deg, var(--primary-bg) 0%, transparent 100%);
+}
+.pullquote.bronze {
+  color: var(--accent-deep); border-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-bg) 0%, transparent 100%);
+}
+.pullquote.terra {
+  color: var(--warm-deep); border-color: var(--warm);
+  background: linear-gradient(90deg, var(--warm-bg) 0%, transparent 100%);
+}
+.pullquote cite {
+  display: block; margin-top: 16px; font-style: normal; font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: 13px; color: var(--ink-mute);
+  letter-spacing: 0.06em;
+}
+.pullquote cite::before { content: "— "; }
+
+/* ---------- English quote ---------- */
+.quote-en {
+  margin: 28px 0;
+  font-family: var(--font-sans); font-style: italic;
+  font-size: 21px; line-height: 1.5; color: var(--ink);
+  padding-left: 20px; border-left: 3px solid var(--accent);
+}
+.quote-en .zh {
+  display: block; margin-top: 10px;
+  font-family: var(--font-cjk); font-style: normal;
+  font-size: 15px; color: var(--ink-soft); line-height: 1.6;
+}
+
+/* ---------- Story ---------- */
+.story {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 14px;
+  padding: 38px 44px; margin: 48px 0;
+  position: relative;
+}
+.story::before {
+  content: "❝"; position: absolute; top: -6px; left: 24px;
+  font-size: 72px; color: var(--warm); line-height: 1;
+  font-family: var(--font-sans);
+}
+.story .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.18em;
+  color: var(--warm); margin-bottom: 10px; padding-left: 42px;
+}
+.story h4 { margin: 0 0 16px; font-size: 22px; color: var(--warm-deep); }
+.story p { margin-bottom: 14px; font-size: 17px; line-height: 1.7; }
+.story p:last-child { margin-bottom: 0; }
+
+/* ---------- Explain ---------- */
+.explain {
+  background: var(--primary-bg);
+  border-left: 4px solid var(--primary);
+  border-radius: 4px;
+  padding: 26px 30px; margin: 36px 0;
+  font-family: var(--font-cjk); position: relative;
+}
+.explain.bronze { background: var(--accent-bg); border-color: var(--accent); }
+.explain.terra { background: var(--warm-bg); border-color: var(--warm); }
+.explain.stone { background: var(--stone-bg); border-color: var(--stone); }
+.explain .label {
+  position: absolute; top: -12px; left: 16px;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.15em; padding: 4px 12px;
+  border-radius: 3px; text-transform: uppercase;
+}
+.explain.bronze .label { background: var(--accent); }
+.explain.terra .label { background: var(--warm); }
+.explain.stone .label { background: var(--stone); }
+.explain h4 { margin: 4px 0 12px; font-size: 19px; color: var(--primary-deep); }
+.explain.bronze h4 { color: var(--accent-deep); }
+.explain.terra h4 { color: var(--warm-deep); }
+.explain.stone h4 { color: var(--ink); }
+.explain p { font-size: 16.5px; }
+.explain p:last-child { margin-bottom: 0; }
+.explain ul, .explain ol { margin: 8px 0 0; padding-left: 22px; }
+.explain li { margin-bottom: 6px; font-size: 16px; }
+.explain code { background: rgba(255,255,255,0.75); }
+
+/* ---------- Stat grid ---------- */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.stat-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 28px 24px; text-align: center;
+  border-top: 4px solid var(--primary);
+}
+.stat-card.bronze { border-color: var(--accent); }
+.stat-card.terra { border-color: var(--warm); }
+.stat-card.danger { border-color: var(--danger); }
+.stat-card .big {
+  font-family: var(--font-mono);
+  font-size: 46px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--primary-deep); line-height: 1; margin-bottom: 10px;
+}
+.stat-card.bronze .big { color: var(--accent-deep); }
+.stat-card.terra .big { color: var(--warm-deep); }
+.stat-card.danger .big { color: var(--danger); }
+.stat-card .big small { font-family: var(--font-cjk); font-size: 16px; opacity: 0.75; margin-left: 4px; font-weight: 500; }
+.stat-card .label {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.stat-card .note { margin-top: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.55; }
+
+/* ---------- Compare table ---------- */
+.table-scroll { overflow-x: auto; margin: 36px 0; }
+.compare {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-cjk); font-size: 15.5px;
+  background: var(--paper-soft);
+  border-radius: 10px; overflow: hidden;
+  min-width: 560px;
+}
+.compare th, .compare td {
+  padding: 15px 18px; text-align: left;
+  border-bottom: 1px solid var(--paper-shadow);
+  vertical-align: top; line-height: 1.6;
+}
+.compare th {
+  background: var(--primary-deep); color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+}
+.compare tr:last-child td { border-bottom: none; }
+.compare td:first-child { font-weight: 700; color: var(--primary-deep); width: 24%; }
+.compare .id { font-family: var(--font-mono); font-size: 13px; display: block; color: var(--ink-mute); font-weight: 500; margin-bottom: 2px; }
+.compare .yes { color: var(--accent-deep); font-weight: 700; }
+.compare .no { color: var(--danger); font-weight: 700; }
+
+/* ---------- Value cards ---------- */
+.values {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 22px; margin: 40px 0;
+}
+.value-card {
+  background: var(--paper-soft);
+  border-radius: 12px;
+  padding: 26px 24px;
+  border-top: 5px solid var(--primary);
+}
+.value-card:nth-child(2) { border-top-color: var(--accent); }
+.value-card:nth-child(3) { border-top-color: var(--warm); }
+.value-card:nth-child(4) { border-top-color: var(--primary-deep); }
+.value-card:nth-child(5) { border-top-color: var(--stone); }
+.value-card .num {
+  font-family: var(--font-mono);
+  font-size: 38px; font-weight: 700;
+  color: var(--primary); line-height: 1; margin-bottom: 12px;
+}
+.value-card:nth-child(2) .num { color: var(--accent); }
+.value-card:nth-child(3) .num { color: var(--warm); }
+.value-card:nth-child(4) .num { color: var(--primary-deep); }
+.value-card:nth-child(5) .num { color: var(--stone); }
+.value-card .tag {
+  display: inline-block; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--primary); margin-bottom: 10px;
+}
+.value-card:nth-child(2) .tag { color: var(--accent); }
+.value-card:nth-child(3) .tag { color: var(--warm); }
+.value-card:nth-child(4) .tag { color: var(--primary-deep); }
+.value-card h4 { margin: 0 0 10px; font-size: 19px; line-height: 1.4; }
+.value-card p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin: 0; }
+
+/* ---------- 擴充檢查卡（附成本標籤） ---------- */
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px; margin: 40px 0;
+}
+.card {
+  background: var(--paper-soft);
+  border: 1px solid var(--paper-shadow);
+  border-radius: 12px;
+  padding: 24px 24px 22px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.card .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card h4 { margin: 0; font-size: 18.5px; line-height: 1.4; }
+.card p { margin: 0; font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); }
+.card .signal { font-family: var(--font-mono); font-size: 12.5px; color: var(--primary-deep); background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 6px; padding: 6px 10px; margin-top: 4px; overflow-x: auto; white-space: nowrap; }
+.pill {
+  flex: none; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px;
+}
+.pill.fast { background: var(--accent-bg); color: var(--accent-deep); }
+.pill.mid { background: var(--warm-bg); color: var(--warm-deep); }
+.pill.slow { background: var(--danger-bg); color: var(--danger); }
+
+/* ---------- Thought ---------- */
+.thought {
+  background: var(--accent-bg);
+  border-left: 4px solid var(--accent);
+  padding: 26px 30px; margin: 40px 0;
+  border-radius: 4px; position: relative;
+}
+.thought .label {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--accent-deep); margin-bottom: 10px;
+}
+.thought h4 { font-size: 19px; margin: 0 0 14px; color: var(--accent-deep); line-height: 1.45; }
+.thought p { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); margin-bottom: 8px; }
+.thought .hint {
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px dashed rgba(13, 82, 54, 0.3);
+  font-size: 14px; color: var(--accent-deep);
+}
+.thought .hint::before { content: "建議方向："; font-weight: 700; }
+
+/* ---------- Code block ---------- */
+.codeblock { margin: 30px 0; }
+.codeblock .file {
+  display: inline-block; font-family: var(--font-mono);
+  font-size: 12px; color: var(--ink-mute);
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow); border-bottom: none;
+  border-radius: 8px 8px 0 0; padding: 7px 14px;
+}
+pre.code {
+  margin: 0; background: var(--code-bg); color: var(--code-ink);
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65;
+  padding: 22px 24px; border-radius: 0 10px 10px 10px;
+  overflow-x: auto; tab-size: 2; white-space: pre;
+}
+pre.code.solo { border-radius: 10px; }
+pre.code .c { color: var(--code-mute); }
+pre.code .k { color: var(--code-blue); }
+pre.code .s { color: var(--code-green); }
+pre.code .a { color: var(--code-amber); font-weight: 700; }
+
+/* ---------- Flow（eval 迴圈圖） ---------- */
+.flow { display: flex; align-items: stretch; margin: 40px 0; }
+.flow-step {
+  flex: 1 1 0; min-width: 0;
+  background: var(--paper-soft); border: 1px solid var(--paper-shadow);
+  border-radius: 10px; padding: 18px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.flow-step .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--primary); letter-spacing: 0.1em; }
+.flow-step strong { font-size: 17px; line-height: 1.3; }
+.flow-step span.d { font-size: 14px; line-height: 1.55; color: var(--ink-soft); }
+.flow-step.score { border-color: var(--accent); background: var(--accent-bg); }
+.flow-step.score .k { color: var(--accent-deep); }
+.flow-arrow { flex: none; width: 30px; position: relative; }
+.flow-arrow::before {
+  content: ""; position: absolute; top: 50%; left: 2px; right: 2px; height: 2px;
+  background: var(--primary); transform: translateY(-50%);
+}
+.flow-arrow::after {
+  content: ""; position: absolute; top: 50%; right: 4px; width: 9px; height: 9px;
+  border-top: 2px solid var(--primary); border-right: 2px solid var(--primary);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+/* ---------- Cascade（編號步驟） ---------- */
+.cascade { display: flex; flex-direction: column; gap: 14px; margin: 32px 0; }
+.cascade-step {
+  display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px;
+}
+.cascade-step .n {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--primary); color: var(--paper);
+  font-family: var(--font-mono); font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.cascade-step .t { font-size: 16.5px; line-height: 1.65; }
+.cascade-step .t strong { display: block; margin-bottom: 2px; }
+
+/* ---------- Checklist ---------- */
+.checklist { list-style: none; padding: 0; margin: 32px 0; display: flex; flex-direction: column; gap: 12px; }
+.checklist li {
+  display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
+  background: var(--paper-soft); border-radius: 10px; padding: 16px 20px; margin: 0;
+  font-size: 16.5px; line-height: 1.65;
+}
+.checklist .box {
+  width: 24px; height: 24px; margin-top: 3px;
+  border: 2px solid var(--accent); border-radius: 6px; background: var(--paper);
+}
+.checklist strong { display: block; }
+.checklist small { display: block; color: var(--ink-soft); font-size: 15px; }
+
+/* ---------- Glossary ---------- */
+.glossary { background: var(--primary-deep); color: var(--paper); padding-block: 64px; }
+.glossary h2 { color: var(--paper); margin-top: 0; }
+.glossary .eyebrow { color: var(--accent-bg); }
+.glossary .lede { color: var(--paper); opacity: 0.8; }
+.glossary-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 26px; margin: 42px 0 0;
+}
+.term { border-top: 2px solid var(--accent); padding-top: 16px; }
+.term:nth-child(3n+2) { border-color: var(--warm); }
+.term:nth-child(3n+3) { border-color: var(--paper); }
+.term dt {
+  font-family: var(--font-mono);
+  font-size: 14px; font-weight: 700;
+  color: var(--accent-bg); letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+.term .zh-name { font-family: var(--font-cjk); font-size: 16px; font-weight: 600; color: var(--paper); margin-bottom: 8px; display: block; }
+.term dd { margin: 0; font-family: var(--font-cjk); font-size: 14.5px; line-height: 1.65; color: rgba(255, 255, 255, 0.8); }
+
+/* ---------- TOC ---------- */
+.toc {
+  position: fixed; right: 24px; top: 50%; transform: translateY(-50%); z-index: 10;
+  font-family: var(--font-sans); font-size: 12px;
+  background: var(--paper); border: 1px solid var(--paper-shadow); border-radius: 10px;
+  padding: 18px 20px; max-width: 236px;
+  box-shadow: 0 4px 18px rgba(18, 24, 33, 0.08);
+}
+.toc h5 { margin: 0 0 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-mute); }
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc -1; }
+.toc li { margin-bottom: 6px; counter-increment: toc; font-size: 12px; line-height: 1.45; display: flex; gap: 8px; }
+.toc li::before { content: counter(toc, decimal-leading-zero); font-family: var(--font-mono); color: var(--ink-mute); font-size: 10.5px; padding-top: 2px; }
+.toc a { color: var(--ink-soft); text-decoration: none; }
+.toc a:hover { color: var(--primary); }
+@media (max-width: 1340px) { .toc { display: none; } }
+
+/* ---------- Footer ---------- */
+footer {
+  padding-block: 48px 64px;
+  background: var(--paper-soft);
+  text-align: center;
+  font-family: var(--font-cjk);
+  font-size: 13.5px; color: var(--ink-mute);
+}
+footer p { margin: 0 0 8px; }
+footer .credit { font-family: var(--font-sans); }
+footer .disclaimer { margin-top: 14px; font-size: 12px; opacity: 0.75; max-width: 640px; margin-inline: auto; }
+
+/* ---------- 響應式 ---------- */
+@media (max-width: 768px) {
+  body { font-size: 17px; }
+  .hero { padding-block: 56px 42px; }
+  .hero h1 { font-size: 36px; }
+  .hero .lede { font-size: 18px; }
+  h2 { font-size: 27px; }
+  h3 { font-size: 22px; }
+  section { padding-block: 46px; }
+  .lede { font-size: 19px; }
+  .pullquote { font-size: 21px; margin: 34px 0; padding: 24px; }
+  .story { padding: 30px 24px; }
+  .stat-card .big { font-size: 36px; }
+  .flow { flex-direction: column; }
+  .flow-arrow { width: auto; height: 30px; }
+  .flow-arrow::before { top: 2px; bottom: 2px; left: 50%; right: auto; width: 2px; height: auto; transform: translateX(-50%); }
+  .flow-arrow::after { top: auto; bottom: 4px; left: 50%; right: auto; transform: translateX(-50%) rotate(135deg); }
+  .compare td:first-child { width: auto; }
+}
+
+/* ---------- 列印 ---------- */
+@media print {
+  .toc { display: none; }
+  body { font-size: 12pt; }
+  .hero, .glossary {
+    color: var(--ink) !important; background: white !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .glossary h2, .glossary .term dt, .glossary .lede, .glossary .term .zh-name { color: var(--ink) !important; }
+  .glossary .term dd { color: var(--ink-soft) !important; }
+  pre.code { background: #f3f5f8 !important; color: #121821 !important; border: 1px solid #ccd; white-space: pre-wrap; }
+  pre.code .c, pre.code .k, pre.code .s, pre.code .a { color: inherit !important; }
+  section { page-break-inside: avoid; }
+}
+
+/* ---------- 整合版：模式列、圖卡帶、燈箱 ---------- */
+.modebar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap; padding: 10px var(--gutter); background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--paper-shadow); font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.modebar .brand { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.modebar .left { display: flex; align-items: center; gap: 14px; }
+.modebar .homelink { font-size: 12px; font-weight: 600; color: var(--ink-mute); text-decoration: none; }
+.modebar .homelink:hover { color: var(--primary); text-decoration: underline; }
+.modebar .switch { display: flex; gap: 6px; }
+.modebar button { font: inherit; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.modebar button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+.modebar button:focus-visible, .cardlabel .zoom:focus-visible, .lightbox .close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.modebar .canvaslink { font-size: 12px; color: var(--ink-mute); }
+.cardband { max-width: 1600px; margin: 4px auto 40px; padding: 0 var(--gutter); }
+.cardlabel { display: flex; align-items: baseline; gap: 14px; padding: 0 2px 8px; font-family: var(--font-sans); font-size: 13px; color: var(--ink-mute); }
+.cardlabel .n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--warm); }
+.cardlabel .zoom { margin-left: auto; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--paper-shadow); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+.frame { position: relative; width: 100%; max-width: 1600px; overflow: hidden; background: #FFFFFF; border: 1px solid var(--paper-shadow); border-radius: 6px; }
+.frame > div { transform-origin: top left; line-height: normal; font-size: 16px; color: var(--ink); font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(18, 24, 33, 0.86); display: none; align-items: center; justify-content: center; padding: 24px; }
+.lightbox.open { display: flex; }
+.lightbox .frame { border: none; border-radius: 8px; max-width: none; width: auto; flex: none; }
+.lightbox .close { position: absolute; top: 14px; right: 18px; font: inherit; font-family: var(--font-sans); font-size: 13px; color: #FFFFFF; background: transparent; border: 1px solid rgba(255, 255, 255, 0.55); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.faq { margin: 36px 0 8px; padding: 0; }
+.faq > div { padding: 18px 0; border-top: 1px solid var(--paper-shadow); }
+.faq > div:last-child { border-bottom: 1px solid var(--paper-shadow); }
+.faq dt { margin: 0 0 6px; font-weight: 700; font-size: 17px; color: var(--ink); }
+.faq dt::before { content: "問"; display: inline-block; margin-right: 10px; padding: 1px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; color: #FFFFFF; background: var(--primary); vertical-align: 2px; }
+.faq dd { margin: 0; font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+body.mode-cards section .prose { display: none; }
+body.mode-cards section.nocard { display: none; }
+body.mode-cards section { padding-block: 44px; }
+body.mode-cards .toc li.nocard { display: none; }
+@media (max-width: 768px) { .cardband { margin-bottom: 32px; } .modebar { font-size: 12px; } }
+@media print {
+  .modebar, .lightbox, .cardlabel .zoom { display: none !important; }
+  body.mode-cards section .prose { display: block !important; }
+  body.mode-cards section.nocard { display: block !important; }
+  section { page-break-inside: auto; }
+  .cardband, .story, .explain, .thought, .stat-grid, .values, .cards, .table-scroll { page-break-inside: avoid; }
+  .frame { height: auto !important; border: none; border-radius: 0; }
+  .frame > div { transform: none !important; zoom: 0.44; }
+}
+
+</style>
+</head>
+<body>
+<div class="modebar">
+  <div class="left"><a class="homelink" href="../../">← 首頁</a><span class="brand">CS329Z U9 · 圖卡 + 教材</span></div>
+  <div class="switch" role="group" aria-label="閱讀模式">
+    <button type="button" data-mode="full" aria-pressed="true">圖卡＋詳解</button>
+    <button type="button" data-mode="cards" aria-pressed="false">只看圖卡</button>
+  </div>
+  <a class="canvaslink" href="cards.html">圖卡連續閱讀版</a>
+</div>
+<nav class="toc" aria-label="目錄">
+  <h5>目錄</h5>
+  <ol>
+    <li class="nocard"><a href="#prologue">單元 9 讀什麼</a></li>
+    <li><a href="#topics">講題對照</a></li>
+    <li><a href="#demos-instructions">示範還是指令</a></li>
+    <li><a href="#weights">要不要動權重</a></li>
+    <li><a href="#hard-problems">幾乎不會的題</a></li>
+    <li><a href="#citations">誰引了誰</a></li>
+    <li><a href="#judgment">判斷題</a></li>
+    <li class="nocard"><a href="#glossary">同一件事的名字</a></li>
+  </ol>
+</nav>
+<header class="hero">
+  <div class="container">
+    <div class="hero-meta">
+      <span>CS 329Z 單元 9 · 第 5 週</span>
+      <span>單元對照頁</span>
+      <span>讀物 4 篇：必讀 2、選讀 2</span>
+      <span>判斷題不附答案</span>
+    </div>
+    <p class="eyebrow">CS 329Z UNIT 9 · 單元對照</p>
+    <h1><span style="white-space:nowrap">調 prompt、調權重，</span><wbr><span style="white-space:nowrap">還是多花推論算力</span><span class="accent"><span style="white-space:nowrap">Snell、GEPA、MIPRO</span> <span style="white-space:nowrap">與 BetterTogether</span> <span style="white-space:nowrap">在三個問題上的證據</span></span></h1>
+    <p class="lede">CS 329Z 第 5 週星期三的「Optimization」那一講配了四篇讀物：必讀是 Snell 等人談推論時的算力怎麼分配的論文，以及讓模型讀執行軌跡、改寫指令的 GEPA；選讀是同時調指令與示範的 MIPRO，以及把挑示範和微調權重接在一起的 BetterTogether。這一頁把四篇並排，整理它們在三個問題上各拿出什麼證據、原文之間怎麼互相引用、同一件事各叫什麼名字；判斷題不附答案。每章開頭先放一張圖解卡講重點，往下是詳細說明；想速讀就切到「只看圖卡」。</p>
+    <dl class="hero-keystat">
+      <div><dt>讀物 · 必讀 2、選讀 2</dt><dd>4<small>篇</small></dd></div>
+      <div><dt>單元內的互相引用</dt><dd>4<small>條</small></dd></div>
+      <div><dt>第一篇到最後一篇</dt><dd>13<small>個月</small></dd></div>
+      <div><dt>整理出的爭點</dt><dd>3<small>個</small></dd></div>
+    </dl>
+  </div>
+</header>
+
+
+<section id="prologue" data-toc="單元 9 讀什麼" class="nocard">
+  <div class="container">
+    <p class="chapter">Prologue · 整理者的引言</p>
+    <h2><span class="seg">四篇讀物，</span><span class="seg">各調一個不同的地方</span></h2>
+    <p class="lede">Snell 等人調的是推論時的算力，GEPA 改寫 prompt 裡的指令，MIPRO 同時挑指令與示範，BetterTogether 挑示範之後再微調權重。這一頁不重述四篇，而是把它們放在一起讀：哪裡各說各話、哪裡互相引用、證據各在什麼條件下量出來。</p>
+
+    <p>CS 329Z 第 5 週星期三的「Optimization」屬於同名的「Optimization」分區。課程頁列的講題有七項：從 prompt 到微調的全景；prompt 最佳化（GEPA、MIPROv2、OPRO、TextGrad）；<span style="white-space:nowrap">test-time</span> compute；LoRA 與 QLoRA；蒸餾；RLHF 與 DPO；以及何時調 prompt、調權重、調推論算力。這一講配了兩篇必讀、兩篇選讀，本站都整理過：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>讀物</th><th><span style="white-space:nowrap">類別</span></th><th>出處與日期</th><th>這篇在做什麼</th></tr></thead>
+        <tbody>
+          <tr><td><a href="../test-time-compute/">Snell 等</a></td><td><span style="white-space:nowrap">必讀</span></td><td><span style="white-space:nowrap">論文 · arXiv 2024-08</span><br><span style="white-space:nowrap">書單列 ICLR 2025</span><br>UC Berkeley、<span style="white-space:nowrap">Google DeepMind</span></td><td>推論時多花的算力，<br>依題目對模型多難來分配；<br>FLOPs 對等時，<br>和放大約 14 倍的模型比</td></tr>
+          <tr><td><a href="../gepa-prompt-evolution/">GEPA</a></td><td><span style="white-space:nowrap">必讀</span></td><td><span style="white-space:nowrap">論文 · arXiv 2025-07</span><br><span style="white-space:nowrap">ICLR 2026</span><br>UC Berkeley、Stanford 等</td><td>反思用的 LM 讀執行軌跡<br>與評分時的文字回饋，<br>改寫某一個模組的指令</td></tr>
+          <tr><td><a href="../mipro-optimizer/">MIPRO</a></td><td><span style="white-space:nowrap">選讀</span></td><td><span style="white-space:nowrap">論文 · arXiv 2024-06</span><br><span style="white-space:nowrap">EMNLP 2024</span><br>Stanford 等</td><td>只有最後一個分數，<br>一起調每個模組的<br>指令與示範</td></tr>
+          <tr><td><a href="../finetuning-prompt-optimization/">BetterTogether</a></td><td><span style="white-space:nowrap">選讀</span></td><td><span style="white-space:nowrap">論文 · arXiv 2024-07</span><br><span style="white-space:nowrap">EMNLP 2024</span><br>Stanford</td><td>先挑示範，<br>再用答對的軌跡微調權重，<br>最後在新權重上重挑示範</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>四篇都是論文，證據的條件卻差很多，後面每一章都要記得這件事。Snell 等人只用了 MATH 一個資料集與 <span style="white-space:nowrap">PaLM 2-S*</span> 一個模型，驗證器與修訂模型都是為了這個研究微調的。另外三篇都建在單元 5 的 DSPy 上，Omar Khattab 與 Christopher Potts 都在三篇的作者名單上；它們各在自己挑的任務與 7B 到 8B 的開放模型上比較，GEPA 另外用了 <span style="white-space:nowrap">GPT-4.1 Mini</span>。四篇的正式篇名與原文連結列在頁尾。</p>
+
+    <div class="explain stone">
+      <span class="label">這一頁怎麼讀</span>
+      <h4>整理證據，不下判斷</h4>
+      <ul>
+        <li><strong>單元</strong>：整理者依課程的講次把 50 篇讀物分成 15 組，單元 9 對應第 5 週星期三那一講。</li>
+        <li><strong>數字</strong>：都取自讀物原文，出處寫成本站讀物頁的章號，點過去可以看當時的條件。</li>
+        <li><strong>比較</strong>：各篇的任務、模型與預算單位不同，數字不直接互比；放在一起時會寫出各自的條件。</li>
+        <li><strong>和單元 5 的分工</strong>：<a href="../cs329z-unit-05/#optimizers">單元 5 的對照頁第 3 章</a>已經從 DSPy 出發，並排過 MIPRO、BetterTogether、GEPA 各調示範、指令、權重的哪一種組合；這一頁不重寫那一段，改看三篇之間的分歧，並加進 Snell 等人的推論算力。</li>
+        <li><strong>判斷題</strong>：第 6 章的三題不附答案，這一頁只把證據排在一起，怎麼判斷留給讀者。</li>
+      </ul>
+    </div>
+
+    <div class="pullquote">
+      四篇各量一種調法，沒有一篇把 prompt、權重與推論算力放在同一個任務上一起比。
+      <cite>整理者的讀法</cite>
+    </div>
+  </div>
+</section>
+
+
+<section id="topics" data-toc="講題對照">
+  <div class="container head">
+    <p class="chapter">Chapter 01 · 講題對照</p>
+    <h2><span class="seg">何時調哪一個，</span><span class="seg">四篇各答一部分</span></h2>
+    <p class="lede">七個講題裡，四篇都碰到的是最後一項：何時調 prompt、調權重、調推論算力，但每一篇只比了其中兩樣。下表每一格寫出本站讀物頁對應的章，● 是那一章的主題，○ 是順帶談到，— 是沒有談，第二行寫原文在那附近談的事。</p>
+    
+  </div>
+  <div class="cardband" id="card-02"><div class="cardlabel"><span class="n">圖卡 02 / 07</span><span class="t">何時調哪一個，四篇各答一部分</span><button type="button" class="zoom" data-card="02">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">何時調哪一個，四篇各答一部分</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">課程列的七個講題 × 四篇讀物：格子寫本站讀物頁的章號，實心圓是那一章的主題，空心圓是順帶談到；「—」是沒有談，灰字寫原文在附近談的事</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:44px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:300px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">講題</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#1F2A3A;">Snell<span style="font-size:12px; font-weight:400; color:#8A93A0;">必讀 · 2024</span></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#1F2A3A;">GEPA<span style="font-size:12px; font-weight:400; color:#8A93A0;">必讀 · 2025</span></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#1F2A3A;">MIPRO<span style="font-size:12px; font-weight:400; color:#8A93A0;">選讀 · 2024</span></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#1F2A3A;">BetterTogether<span style="font-size:12px; font-weight:400; color:#8A93A0;">選讀 · 2024</span></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:204px; width:1480px; height:56px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">從 prompt 到微調的全景</div><div style="font-size:12px; color:#8A93A0;">一篇有專章</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#6B7380;"><div style="width:10px; height:10px; border-radius:50%; border:1.5px solid #6B7380; box-sizing:border-box;"></div>第 2 章</div><div style="font-size:14px; color:#2B3340;">改分布的兩條路</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#6B7380;"><div style="width:10px; height:10px; border-radius:50%; border:1.5px solid #6B7380; box-sizing:border-box;"></div>第 1 章</div><div style="font-size:14px; color:#2B3340;">兩種參數並列</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#6B7380;"><div style="width:10px; height:10px; border-radius:50%; border:1.5px solid #6B7380; box-sizing:border-box;"></div>第 1 章</div><div style="font-size:14px; color:#2B3340;">只調 prompt</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#1F2A3A;"><div style="width:10px; height:10px; border-radius:50%; background-color:#1F2A3A;"></div>第 1 章</div><div style="font-size:14px; color:#2B3340;">每個模組兩個旋鈕</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:260px; width:1480px; height:56px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">prompt 最佳化</div><div style="font-size:12px; color:#8A93A0;">GEPA、MIPROv2、OPRO、TextGrad</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:15px; font-weight:700; color:#9AA3AE;">—</div><div style="font-size:14px; color:#8A93A0;">用固定的 4-shot</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#1F2A3A;"><div style="width:10px; height:10px; border-radius:50%; background-color:#1F2A3A;"></div>第 3、9 章</div><div style="font-size:14px; color:#2B3340;">反思改寫指令</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#1F2A3A;"><div style="width:10px; height:10px; border-radius:50%; background-color:#1F2A3A;"></div>第 3 到 7 章</div><div style="font-size:14px; color:#2B3340;">指令與示範一起調</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#1F2A3A;"><div style="width:10px; height:10px; border-radius:50%; background-color:#1F2A3A;"></div>第 2 章</div><div style="font-size:14px; color:#2B3340;">只挑示範</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:316px; width:1480px; height:56px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;"><span style="white-space:nowrap">test-time</span> compute</div><div style="font-size:12px; color:#8A93A0;">一篇有專章</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#1F2A3A;"><div style="width:10px; height:10px; border-radius:50%; background-color:#1F2A3A;"></div>第 3 到 11 章</div><div style="font-size:14px; color:#2B3340;">依難度分配算力</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#6B7380;"><div style="width:10px; height:10px; border-radius:50%; border:1.5px solid #6B7380; box-sizing:border-box;"></div>第 11 章</div><div style="font-size:14px; color:#2B3340;">推論時搜尋</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:15px; font-weight:700; color:#9AA3AE;">—</div><div style="font-size:14px; color:#8A93A0;">只談最佳化時的預算</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:15px; font-weight:700; color:#9AA3AE;">—</div><div style="font-size:14px; color:#8A93A0;">推論設定固定</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:372px; width:1480px; height:56px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">LoRA／QLoRA</div><div style="font-size:12px; color:#8A93A0;">兩篇順帶談到 LoRA</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:15px; font-weight:700; color:#9AA3AE;">—</div><div style="font-size:14px; color:#8A93A0;">微調沒有提 LoRA</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#6B7380;"><div style="width:10px; height:10px; border-radius:50%; border:1.5px solid #6B7380; box-sizing:border-box;"></div>第 7 章</div><div style="font-size:14px; color:#2B3340;">GRPO 用 LoRA</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:15px; font-weight:700; color:#9AA3AE;">—</div><div style="font-size:14px; color:#8A93A0;">不動權重</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#6B7380;"><div style="width:10px; height:10px; border-radius:50%; border:1.5px solid #6B7380; box-sizing:border-box;"></div>第 2 章</div><div style="font-size:14px; color:#2B3340;">只試過 LoRA</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:428px; width:1480px; height:56px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">蒸餾</div><div style="font-size:12px; color:#8A93A0;">一篇列為未來方向</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#6B7380;"><div style="width:10px; height:10px; border-radius:50%; border:1.5px solid #6B7380; box-sizing:border-box;"></div>第 13 章</div><div style="font-size:14px; color:#2B3340;">列為未來方向</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:15px; font-weight:700; color:#9AA3AE;">—</div><div style="font-size:14px; color:#8A93A0;">跨模型搬 prompt</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:15px; font-weight:700; color:#9AA3AE;">—</div><div style="font-size:14px; color:#8A93A0;">較強的模型產生示範</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:15px; font-weight:700; color:#9AA3AE;">—</div><div style="font-size:14px; color:#8A93A0;">同一個模型自己教自己</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:484px; width:1480px; height:56px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:300px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1C2431;">RLHF／DPO</div><div style="font-size:12px; color:#8A93A0;">四篇都沒有談</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:15px; font-weight:700; color:#9AA3AE;">—</div><div style="font-size:14px; color:#8A93A0;">附錄 K 試過 ReST-EM</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:15px; font-weight:700; color:#9AA3AE;">—</div><div style="font-size:14px; color:#8A93A0;">比的是 GRPO</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:15px; font-weight:700; color:#9AA3AE;">—</div><div style="font-size:14px; color:#8A93A0;">不動權重</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:15px; font-weight:700; color:#9AA3AE;">—</div><div style="font-size:14px; color:#8A93A0;">用答對的軌跡微調</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:540px; width:1480px; height:56px; box-sizing:border-box; background-color:#F4F6F9; border:1.5px solid #9AA6B5; border-radius:0px 0px 8px 8px; display:grid; grid-template-columns:300px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="font-size:16px; font-weight:700; color:#1F2A3A;">何時調 prompt、權重、算力</div><div style="font-size:12px; color:#8A93A0;">四篇都碰到，三篇有專章</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#1F2A3A;"><div style="width:10px; height:10px; border-radius:50%; background-color:#1F2A3A;"></div>第 11 章</div><div style="font-size:14px; color:#2B3340;">對上放大 14 倍的模型</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#1F2A3A;"><div style="width:10px; height:10px; border-radius:50%; background-color:#1F2A3A;"></div>第 8 章</div><div style="font-size:14px; color:#2B3340;">只調 prompt 對 GRPO</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#6B7380;"><div style="width:10px; height:10px; border-radius:50%; border:1.5px solid #6B7380; box-sizing:border-box;"></div>第 9、10 章</div><div style="font-size:14px; color:#2B3340;">示範還是指令</div></div>
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:2px;"><div style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:#1F2A3A;"><div style="width:10px; height:10px; border-radius:50%; background-color:#1F2A3A;"></div>第 5 章</div><div style="font-size:14px; color:#2B3340;">兩樣一起調</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:616px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">四篇都碰到：何時調哪一個</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">Snell 比推論算力與放大模型，<br>GEPA 比 prompt 與強化學習調權重，<br>BetterTogether 比 prompt、權重與交替。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">MIPRO 比的是 prompt 裡的示範與指令。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:616px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">調權重的三個講題，只順帶碰到</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">LoRA 出現在 GEPA 的 GRPO 與 BetterTogether；<br>蒸餾只在 Snell 等人的未來方向；<br>QLoRA、RLHF、DPO 四篇都沒有談。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">單元 10 的 LIMA 與資料標註綜述談到其中幾項。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:616px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">講題列的方法，只有 GEPA 是讀物</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">MIPROv2 是 GEPA 的對手，MIPRO 論文<br>沒有用這個名字；OPRO 是 MIPRO 的基線，<br>TextGrad 是 GEPA 表 2 的對手。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">第 2 到 4 章把三個爭點並排。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：格子是整理者依四篇的章節對出來的，不是原文的分類；灰字是原文在那個講題附近談的事，不代表原文談了這個講題。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>講題</th><th style="text-transform:none">Snell</th><th style="text-transform:none">GEPA</th><th style="text-transform:none">MIPRO</th><th style="text-transform:none">BetterTogether</th></tr></thead>
+        <tbody>
+          <tr><td>從 prompt<br>到微調的全景</td><td><span style="white-space:nowrap">○ <a href="../test-time-compute/#two-knobs">第 2 章</a></span><br><span style="white-space:nowrap">改分布兩條路</span></td><td><span style="white-space:nowrap">○ <a href="../gepa-prompt-evolution/#rollouts">第 1 章</a></span><br><span style="white-space:nowrap">兩種參數並列</span></td><td><span style="white-space:nowrap">○ <a href="../mipro-optimizer/#problem">第 1 章</a></span><br><span style="white-space:nowrap">只調 prompt</span></td><td><span style="white-space:nowrap">● <a href="../finetuning-prompt-optimization/#two-knobs">第 1 章</a></span><br><span style="white-space:nowrap">模組有兩旋鈕</span></td></tr>
+          <tr><td>prompt 最佳化<br><span style="font-weight:400;font-size:13px">GEPA、MIPROv2、<br>OPRO、TextGrad</span></td><td><span style="white-space:nowrap;color:var(--ink-mute)">—</span><br><span style="white-space:nowrap;color:var(--ink-mute)">固定 4-shot</span></td><td><span style="white-space:nowrap">● <a href="../gepa-prompt-evolution/#mutation">第 3</a>、<a href="../gepa-prompt-evolution/#vs-optimizers">9 章</a></span><br><span style="white-space:nowrap">反思改寫指令</span></td><td><span style="white-space:nowrap">● <a href="../mipro-optimizer/#proposal">第 3</a>–<a href="../mipro-optimizer/#lineup">7 章</a></span><br><span style="white-space:nowrap">指令與示範</span></td><td><span style="white-space:nowrap">● <a href="../finetuning-prompt-optimization/#bootstrap">第 2 章</a></span><br><span style="white-space:nowrap">只挑示範</span></td></tr>
+          <tr><td><span style="white-space:nowrap">test-time</span><br>compute</td><td><span style="white-space:nowrap">● <a href="../test-time-compute/#compute-optimal">第 3</a>–<a href="../test-time-compute/#exchange-results">11 章</a></span><br><span style="white-space:nowrap">依難度分配</span></td><td><span style="white-space:nowrap">○ <a href="../gepa-prompt-evolution/#extensions">第 11 章</a></span><br><span style="white-space:nowrap">推論時搜尋</span></td><td><span style="white-space:nowrap;color:var(--ink-mute)">—</span><br><span style="white-space:nowrap;color:var(--ink-mute)">只談最佳化期</span></td><td><span style="white-space:nowrap;color:var(--ink-mute)">—</span><br><span style="white-space:nowrap;color:var(--ink-mute)">推論設定固定</span></td></tr>
+          <tr><td>LoRA／QLoRA</td><td><span style="white-space:nowrap;color:var(--ink-mute)">—</span><br><span style="white-space:nowrap;color:var(--ink-mute)">微調未提 LoRA</span></td><td><span style="white-space:nowrap">○ <a href="../gepa-prompt-evolution/#setup">第 7 章</a></span><br><span style="white-space:nowrap">GRPO 用 LoRA</span></td><td><span style="white-space:nowrap;color:var(--ink-mute)">—</span><br><span style="white-space:nowrap;color:var(--ink-mute)">不動權重</span></td><td><span style="white-space:nowrap">○ <a href="../finetuning-prompt-optimization/#bootstrap">第 2 章</a></span><br><span style="white-space:nowrap">只試過 LoRA</span></td></tr>
+          <tr><td>蒸餾</td><td><span style="white-space:nowrap">○ <a href="../test-time-compute/#takeaways">第 13 章</a></span><br><span style="white-space:nowrap">列為未來方向</span></td><td><span style="white-space:nowrap;color:var(--ink-mute)">—</span><br><span style="white-space:nowrap;color:var(--ink-mute)">跨模型搬 prompt</span></td><td><span style="white-space:nowrap;color:var(--ink-mute)">—</span><br><span style="white-space:nowrap;color:var(--ink-mute)">強模型產示範</span></td><td><span style="white-space:nowrap;color:var(--ink-mute)">—</span><br><span style="white-space:nowrap;color:var(--ink-mute)">自己教自己</span></td></tr>
+          <tr><td>RLHF／DPO</td><td><span style="white-space:nowrap;color:var(--ink-mute)">—</span><br><span style="white-space:nowrap;color:var(--ink-mute)">試過 ReST-EM</span></td><td><span style="white-space:nowrap;color:var(--ink-mute)">—</span><br><span style="white-space:nowrap;color:var(--ink-mute)">比的是 GRPO</span></td><td><span style="white-space:nowrap;color:var(--ink-mute)">—</span><br><span style="white-space:nowrap;color:var(--ink-mute)">不動權重</span></td><td><span style="white-space:nowrap;color:var(--ink-mute)">—</span><br><span style="white-space:nowrap;color:var(--ink-mute)">答對軌跡微調</span></td></tr>
+          <tr><td>何時調 prompt、<br>調權重、<br>調推論算力</td><td><span style="white-space:nowrap">● <a href="../test-time-compute/#exchange-results">第 11 章</a></span><br><span style="white-space:nowrap">對上放大模型</span></td><td><span style="white-space:nowrap">● <a href="../gepa-prompt-evolution/#vs-grpo">第 8 章</a></span><br><span style="white-space:nowrap">prompt 對 GRPO</span></td><td><span style="white-space:nowrap">○ <a href="../mipro-optimizer/#results">第 9</a>、<a href="../mipro-optimizer/#conditional">10 章</a></span><br><span style="white-space:nowrap">示範或指令</span></td><td><span style="white-space:nowrap">● <a href="../finetuning-prompt-optimization/#results">第 5 章</a></span><br><span style="white-space:nowrap">兩樣一起調</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>這張表是整理者依四篇的章節對出來的，不是原文的分類。從表上看得出幾件事：</p>
+    <ul>
+      <li>「何時調哪一個」四篇都碰到，但各只比兩樣：Snell 等人比推論算力與放大模型，GEPA 比只調 prompt 與用強化學習調權重，BetterTogether 比調 prompt、調權重與兩者交替，MIPRO 比 prompt 裡的示範與指令。沒有一篇在同一個任務上三樣一起比。</li>
+      <li>講題列的四個 prompt 最佳化方法，只有 GEPA 是讀物本身。MIPROv2 是 GEPA 表上的對手；MIPRO 論文提出的叫 MIPRO，全文沒有 MIPROv2 這個名字，GEPA 與單元 11 的 AutoMetrics 都把 DSPy 裡的 MIPROv2 引作 MIPRO 這篇（<a href="../mipro-optimizer/#prologue">MIPRO 序章</a>）。OPRO 在 MIPRO 裡被推廣成多模組的基線（<a href="../mipro-optimizer/#baselines">MIPRO 第 5 章</a>），GEPA 只在相關工作引了它的論文；TextGrad 是 GEPA 表 2 的對手（<a href="../gepa-prompt-evolution/#vs-optimizers">GEPA 第 9</a>、<a href="../gepa-prompt-evolution/#related">12 章</a>）。</li>
+      <li>調權重的三個講題，四篇只順帶碰到。LoRA 出現在 GEPA 的 GRPO 與 BetterTogether 的微調設定；蒸餾只出現在 Snell 等人列的未來方向：把測試時算力的輸出蒸餾回 base 模型；QLoRA、RLHF 與 DPO 四篇都沒有談。</li>
+      <li><span style="white-space:nowrap">test-time</span> compute 是 Snell 等人的全篇；GEPA 第 5.1 節把同一套搜尋用在推論時，替一批題目直接找更好的解，作者說是初步結果。</li>
+    </ul>
+    <p>講題表上四篇沒談的幾項，本站其他單元的讀物有談到。下表列出它們談到同一個講題的地方，標出單元：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>講題</th><th>其他單元的讀物</th><th>談到什麼</th></tr></thead>
+        <tbody>
+          <tr><td>從 prompt<br>到微調的全景</td><td><span style="white-space:nowrap">單元 5 <a href="../dspy-compiling-pipelines/#bootstrap">DSPy 第 6</a>、<a href="../dspy-compiling-pipelines/#search">7 章</a></span><br><span style="white-space:nowrap"><a href="../cs329z-unit-05/#optimizers">單元 5 對照頁第 3 章</a></span></td><td>teleprompter 產生示範，<br>也能拿示範去微調；<br>三篇各調示範、指令、<br>權重的哪一種組合</td></tr>
+          <tr><td>prompt 最佳化</td><td><span style="white-space:nowrap">單元 10 <a href="../data-flywheels/#flywheel">Data Flywheels 第 1 章</a></span><br><span style="white-space:nowrap">單元 11 <a href="../autometrics-evaluators/#generate">AutoMetrics 第 4</a>、<a href="../autometrics-evaluators/#tau-bench">12 章</a></span><br><span style="white-space:nowrap">單元 12 <a href="../privacy-risk-simulation/#attack-search">隱私風險搜尋第 4</a>、<a href="../privacy-risk-simulation/#related">11 章</a></span></td><td>引 MIPRO 說 few-shot 範例最有效；<br>用 MIPROv2 產生評審，<br>用 GEPA 最佳化 agent；<br>反思式搜尋，相關工作引了<br>OPRO、TextGrad、MIPRO、GEPA</td></tr>
+          <tr><td><span style="white-space:nowrap">test-time</span><br>compute</td><td><span style="white-space:nowrap">單元 1 <a href="../compound-ai-systems/#reasons">複合式 AI 系統第 1</a>、<a href="../compound-ai-systems/#cases">3 章</a></span></td><td>假設情境：訓練預算加三倍到 35%，<br>多次取樣加測試到 80%；<br>AlphaCode 2 一題最多產生<br>一百萬個解</td></tr>
+          <tr><td>LoRA／QLoRA</td><td><span style="white-space:nowrap">單元 11 <a href="../autometrics-evaluators/#generate">AutoMetrics 第 4 章</a></span><br><span style="white-space:nowrap">單元 12 <a href="../contextualized-privacy-defense/#optimization">CDI 第 6 章</a></span></td><td>用 LoRA 微調 ModernBERT 當指標；<br>用 LoRA 與 GRPO<br>訓練 4B 的指引模型</td></tr>
+          <tr><td>蒸餾</td><td><span style="white-space:nowrap">單元 5 <a href="../dspy-compiling-pipelines/#hotpotqa-results">DSPy 第 12 章</a></span><br><span style="white-space:nowrap">單元 10 <a href="../llm-data-annotation/#fine-tuning">LLM 資料標註綜述第 8 章</a></span></td><td>大模型的程式當 teacher，<br>編出 <span style="white-space:nowrap">T5-Large</span>；<br>綜述整理自我演化<br>與蒸餾兩條路</td></tr>
+          <tr><td>RLHF／DPO</td><td><span style="white-space:nowrap">單元 10 <a href="../lima-less-is-more/#hypothesis">LIMA 第 1</a>、<a href="../lima-less-is-more/#preference">5 章</a></span><br><span style="white-space:nowrap">單元 10 <a href="../llm-data-annotation/#alignment">LLM 資料標註綜述第 9 章</a></span></td><td>只用 1,000 筆做監督式微調，<br>對手 DaVinci003 用 RLHF；<br>合成的成對偏好<br>常拿去跑 DPO</td></tr>
+          <tr><td>何時調 prompt、<br>調權重、<br>調推論算力</td><td><span style="white-space:nowrap">單元 10 <a href="../data-flywheels/#flywheel">Data Flywheels 第 1 章</a></span><br><span style="white-space:nowrap">單元 1 <a href="../compound-ai-systems/#reasons">複合式 AI 系統第 1 章</a></span></td><td>微調負擔大，<br>很多團隊寧可用 LLM API；<br>改系統設計<br>通常比等一次訓練跑完快</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>這些讀物屬於其他講，各有自己的條件；這一頁只在直接相關時引用它們，後面三章會標出單元。</p>
+  </div>
+</section>
+
+
+<section id="demos-instructions" data-toc="示範還是指令">
+  <div class="container head">
+    <p class="chapter">Chapter 02 · 爭點一</p>
+    <h2><span class="seg">MIPRO 量到示範領先，</span><span class="seg">GEPA 說趨勢變了</span></h2>
+    <p class="lede">prompt 裡該調示範還是指令，兩篇的結論方向不同，而且 GEPA 直接點名 MIPRO。MIPRO 在 Llama-3-8B 上量到只調示範多半勝過只調指令；一年後的 GEPA 只改寫指令，在兩個較新的模型上都贏過同時調兩者的 MIPROv2。兩邊比的組與用的模型都不一樣。</p>
+    
+  </div>
+  <div class="cardband" id="card-03"><div class="cardlabel"><span class="n">圖卡 03 / 07</span><span class="t">MIPRO 量到示範領先，GEPA 說趨勢變了</span><button type="button" class="zoom" data-card="03">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">MIPRO 量到示範領先，GEPA 說趨勢變了</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">prompt 裡該調示範還是指令：左邊是 MIPRO 表 2 的測試集，右邊是 GEPA 表 1、表 2 的總分提升；兩邊的模型、任務與比的組都不同</div>
+
+  <div style="position:absolute; left:1010px; top:122px; display:flex; align-items:center; gap:22px; font-size:13px; color:#2B3340;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:22px; height:11px; background-color:#4B5866; border-radius:2px;"></div>只調示範</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:22px; height:11px; box-sizing:border-box; background-color:#FFFFFF; border:1.5px solid #4B5866; border-radius:2px;"></div>只調指令</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:22px; height:11px; background-color:#C5CCD5; border-radius:2px;"></div>指令＋示範</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">MIPRO · 2024 · TABLE 2</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">MIPRO：只調示範在多數任務領先</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">GEPA · 2025 · TABLES 1 AND 2</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">GEPA：只改寫指令，12 格都贏 MIPROv2</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:430px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:60px; top:208px; font-size:12px; color:#8A93A0;">任務</div>
+  <div style="position:absolute; left:200px; top:208px; font-size:12px; color:#8A93A0;">測試集分數，上條只調示範、下條只調指令</div>
+  <div style="position:absolute; left:610px; top:208px; font-size:12px; color:#8A93A0;">兩者（MIPRO）</div>
+
+  <div style="position:absolute; left:56px; top:418px; width:704px; height:74px; box-sizing:border-box; border:1.5px dashed #9AA3AE; border-radius:6px;"></div>
+
+  <div style="position:absolute; left:60px; top:230px; width:130px; height:32px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#1C2431;">HotPotQA</div>
+  <div style="position:absolute; left:200px; top:234px; width:110px; height:11px; background-color:#4B5866; border-radius:2px;"></div>
+  <div style="position:absolute; left:316px; top:231px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">45.8</div>
+  <div style="position:absolute; left:200px; top:248px; width:94px; height:11px; box-sizing:border-box; border:1.5px solid #4B5866; border-radius:2px;"></div>
+  <div style="position:absolute; left:300px; top:245px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">39.3</div>
+  <div style="position:absolute; left:610px; top:238px; font-size:13px; color:#6B7380;">兩者 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">46.4</span></div>
+
+  <div style="position:absolute; left:60px; top:268px; width:130px; height:32px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#1C2431;">HoVer</div>
+  <div style="position:absolute; left:200px; top:272px; width:89px; height:11px; background-color:#4B5866; border-radius:2px;"></div>
+  <div style="position:absolute; left:295px; top:269px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">37.2</div>
+  <div style="position:absolute; left:200px; top:286px; width:79px; height:11px; box-sizing:border-box; border:1.5px solid #4B5866; border-radius:2px;"></div>
+  <div style="position:absolute; left:285px; top:283px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">33.1</div>
+  <div style="position:absolute; left:610px; top:276px; font-size:13px; color:#6B7380;">兩者 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">39.0</span></div>
+
+  <div style="position:absolute; left:60px; top:306px; width:130px; height:32px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#1C2431;">Iris</div>
+  <div style="position:absolute; left:200px; top:310px; width:226px; height:11px; background-color:#4B5866; border-radius:2px;"></div>
+  <div style="position:absolute; left:432px; top:307px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">94.1</div>
+  <div style="position:absolute; left:200px; top:324px; width:87px; height:11px; box-sizing:border-box; border:1.5px solid #4B5866; border-radius:2px;"></div>
+  <div style="position:absolute; left:293px; top:321px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">36.4</div>
+  <div style="position:absolute; left:610px; top:314px; font-size:13px; color:#6B7380;">兩者 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">88.6</span></div>
+
+  <div style="position:absolute; left:60px; top:344px; width:130px; height:32px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#1C2431;">Heart Disease</div>
+  <div style="position:absolute; left:200px; top:348px; width:190px; height:11px; background-color:#4B5866; border-radius:2px;"></div>
+  <div style="position:absolute; left:396px; top:345px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">79.2</div>
+  <div style="position:absolute; left:200px; top:362px; width:62px; height:11px; box-sizing:border-box; border:1.5px solid #4B5866; border-radius:2px;"></div>
+  <div style="position:absolute; left:268px; top:359px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">25.8</div>
+  <div style="position:absolute; left:610px; top:352px; font-size:13px; color:#6B7380;">兩者 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">74.2</span></div>
+
+  <div style="position:absolute; left:60px; top:382px; width:130px; height:32px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#1C2431;"><span style="white-space:nowrap">Iris-Typo</span></div>
+  <div style="position:absolute; left:200px; top:386px; width:141px; height:11px; background-color:#4B5866; border-radius:2px;"></div>
+  <div style="position:absolute; left:347px; top:383px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">58.7</div>
+  <div style="position:absolute; left:200px; top:400px; width:136px; height:11px; box-sizing:border-box; border:1.5px solid #4B5866; border-radius:2px;"></div>
+  <div style="position:absolute; left:342px; top:397px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">56.7</div>
+  <div style="position:absolute; left:610px; top:390px; font-size:13px; color:#6B7380;">兩者 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">68.7</span></div>
+
+  <div style="position:absolute; left:60px; top:420px; width:130px; height:32px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#1C2431;">ScoNe</div>
+  <div style="position:absolute; left:200px; top:424px; width:181px; height:11px; background-color:#4B5866; border-radius:2px;"></div>
+  <div style="position:absolute; left:387px; top:421px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">75.4</div>
+  <div style="position:absolute; left:200px; top:438px; width:183px; height:11px; box-sizing:border-box; border:1.5px solid #4B5866; border-radius:2px;"></div>
+  <div style="position:absolute; left:389px; top:435px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">76.1</div>
+  <div style="position:absolute; left:610px; top:428px; font-size:13px; color:#6B7380;">兩者 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">79.4</span></div>
+
+  <div style="position:absolute; left:60px; top:458px; width:130px; height:32px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#1C2431;">HotPotQA Cond.</div>
+  <div style="position:absolute; left:200px; top:462px; width:25px; height:11px; background-color:#4B5866; border-radius:2px;"></div>
+  <div style="position:absolute; left:231px; top:459px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">10.4</div>
+  <div style="position:absolute; left:200px; top:476px; width:35px; height:11px; box-sizing:border-box; border:1.5px solid #4B5866; border-radius:2px;"></div>
+  <div style="position:absolute; left:241px; top:473px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">14.6</div>
+  <div style="position:absolute; left:610px; top:466px; font-size:13px; color:#6B7380;">兩者 <span style="font-family:'IBM Plex Mono', ui-monospace, monospace;">23.3</span></div>
+
+  <div style="position:absolute; left:60px; top:504px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">只調指令是整理者從四個只調指令的最佳化器取每個任務最高的一個。虛線框兩列只調指令較高：<br>HotPotQA Cond. 是作者點名的例外，ScoNe 是本站核對時和教訓 1 對不上的一格。</div>
+
+  <div style="position:absolute; left:840px; top:210px; font-size:13px; font-weight:700; color:#1C2431;"><span style="white-space:nowrap">GPT-4.1 Mini</span> · 六個任務的總分提升</div>
+  <div style="position:absolute; left:860px; top:234px; width:170px; height:18px; display:flex; align-items:center; font-size:13px; color:#2B3340;"><span style="white-space:nowrap">MIPROv2-No-Demos</span></div>
+  <div style="position:absolute; left:1040px; top:234px; width:115px; height:18px; box-sizing:border-box; border:1.5px solid #4B5866; border-radius:3px;"></div>
+  <div style="position:absolute; left:1163px; top:235px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">+4.11</div>
+  <div style="position:absolute; left:860px; top:260px; width:170px; height:18px; display:flex; align-items:center; font-size:13px; color:#2B3340;">MIPROv2</div>
+  <div style="position:absolute; left:1040px; top:260px; width:158px; height:18px; background-color:#C5CCD5; border-radius:3px;"></div>
+  <div style="position:absolute; left:1206px; top:261px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">+5.64</div>
+  <div style="position:absolute; left:860px; top:286px; width:170px; height:18px; display:flex; align-items:center; font-size:13px; font-weight:700; color:#1C2431;">GEPA</div>
+  <div style="position:absolute; left:1040px; top:286px; width:341px; height:18px; box-sizing:border-box; border:2px solid #1F2A3A; border-radius:3px;"></div>
+  <div style="position:absolute; left:1389px; top:287px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#1C2431;">+12.19</div>
+  <div style="position:absolute; left:860px; top:312px; width:170px; height:18px; display:flex; align-items:center; font-size:13px; font-weight:700; color:#1C2431;">GEPA+Merge</div>
+  <div style="position:absolute; left:1040px; top:312px; width:373px; height:18px; box-sizing:border-box; border:2px solid #1F2A3A; border-radius:3px;"></div>
+  <div style="position:absolute; left:1421px; top:313px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#1C2431;">+13.33</div>
+
+  <div style="position:absolute; left:840px; top:344px; font-size:13px; font-weight:700; color:#1C2431;">Qwen3 8B · 六個任務的總分提升</div>
+  <div style="position:absolute; left:860px; top:368px; width:170px; height:18px; display:flex; align-items:center; font-size:13px; color:#2B3340;">MIPROv2</div>
+  <div style="position:absolute; left:1040px; top:368px; width:73px; height:18px; background-color:#C5CCD5; border-radius:3px;"></div>
+  <div style="position:absolute; left:1121px; top:369px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">+2.61</div>
+  <div style="position:absolute; left:860px; top:394px; width:170px; height:18px; display:flex; align-items:center; font-size:13px; font-weight:700; color:#1C2431;">GEPA</div>
+  <div style="position:absolute; left:1040px; top:394px; width:269px; height:18px; box-sizing:border-box; border:2px solid #1F2A3A; border-radius:3px;"></div>
+  <div style="position:absolute; left:1317px; top:395px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#1C2431;">+9.62</div>
+  <div style="position:absolute; left:860px; top:420px; width:170px; height:18px; display:flex; align-items:center; font-size:13px; font-weight:700; color:#1C2431;">GEPA+Merge</div>
+  <div style="position:absolute; left:1040px; top:420px; width:201px; height:18px; box-sizing:border-box; border:2px solid #1F2A3A; border-radius:3px;"></div>
+  <div style="position:absolute; left:1249px; top:421px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#1C2431;">+7.17</div>
+
+  <div style="position:absolute; left:1040px; top:446px; width:420px; height:0px; border-top:1px solid #D5DAE1;"></div>
+  <div style="position:absolute; left:1030px; top:450px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">0</div>
+  <div style="position:absolute; left:1166px; top:450px; width:28px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">+5</div>
+  <div style="position:absolute; left:1304px; top:450px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">+10</div>
+  <div style="position:absolute; left:1444px; top:450px; width:32px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">+15</div>
+
+  <div style="position:absolute; left:840px; top:478px; width:700px; height:84px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; padding:10px 16px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-size:14px; font-weight:700; color:#1C2431;">觀察 2 直接點名 MIPRO</div>
+    <div style="font-size:13px; color:#2B3340; line-height:1.6;">先前研究顯示示範常勝過指令，這篇的結果顯示趨勢在改變；<br>作者歸因於近來模型遵循指令與反思的能力，以及 GEPA 的設計。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:600px; width:700px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">教訓 1：示範是主力，條件規則靠指令</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;">作者說只調示範在「除了一個以外」的任務都贏最好的只調指令；<br>BetterTogether 與單元 10 的 Data Flywheels 都拿這個結果當證據。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">任務模型 <span style="white-space:nowrap">Llama-3-8B</span>，寫指令的多半是 <span style="white-space:nowrap">GPT-3.5</span>；七個任務各跑五次。</div>
+  </div>
+  <div style="position:absolute; left:840px; top:600px; width:700px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 30px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:24px; font-weight:700; color:#1C2431;">觀察 2：只改指令，提升是兩倍以上</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.6;"><span style="white-space:nowrap">GPT-4.1 Mini</span> 上 GEPA +12.19、MIPROv2 +5.64；表上沒有只調示範的一組，<br>MIPROv2 加上示範比不加多 1.53 分（整理者算的）。</div>
+    <div style="font-size:13px; color:#8A93A0; margin-top:2px;">模型是 Qwen3 8B 與 <span style="white-space:nowrap">GPT-4.1 Mini</span>；rollout 預算對齊 MIPROv2 實際用掉的次數。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：左右的模型、任務與比的組都不同，數字不能互減；左邊是測試集分數，右邊是六個任務的總分提升，兩邊各用自己的量尺。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <h3>示範領先：MIPRO 的教訓 1</h3>
+    <p>MIPRO 把最佳化器分成三組：只調指令、只調示範、兩者一起調，在七個任務上用 <span style="white-space:nowrap">Llama-3-8B</span> 各跑五次（<a href="../mipro-optimizer/#lineup">MIPRO 第 7 章</a>）。作者從表 2 歸納的教訓 1 是：把 bootstrap 出來的示範當 few-shot 例子來最佳化，是達到最佳表現的關鍵；統計檢定顯示，連最簡單的只調示範（Bootstrap RS），在「除了一個以外」的任務上都贏過該任務最好的只調指令最佳化器。例外是 HotPotQA Conditional（<a href="../mipro-optimizer/#results">MIPRO 第 9 章</a>）。</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>表 2 · 測試集</th><th><span style="white-space:nowrap">未最佳化</span></th><th><span style="white-space:nowrap">只調示範</span></th><th><span style="white-space:nowrap">只調指令</span></th><th><span style="white-space:nowrap">兩者</span></th></tr></thead>
+        <tbody>
+          <tr><td>HotPotQA</td><td>36.1</td><td>45.8</td><td>39.3</td><td>46.4</td></tr>
+          <tr><td>HoVer</td><td>25.3</td><td>37.2</td><td>33.1</td><td>39.0</td></tr>
+          <tr><td>Iris</td><td>40.9</td><td>94.1</td><td>36.4</td><td>88.6</td></tr>
+          <tr><td>Heart Disease</td><td>26.8</td><td>79.2</td><td>25.8</td><td>74.2</td></tr>
+          <tr><td><span style="white-space:nowrap">Iris-Typo</span></td><td>32</td><td>58.7</td><td>56.7</td><td>68.7</td></tr>
+          <tr><td>ScoNe</td><td>69.1</td><td>75.4</td><td>76.1</td><td>79.4</td></tr>
+          <tr><td>HotPotQA<br>Conditional</td><td>6</td><td>10.4</td><td>14.6</td><td>23.3</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>「只調示範」是 Bootstrap RS，「兩者」是 MIPRO；「只調指令」一欄是整理者從表 2 的四個只調指令最佳化器裡，取每個任務最高的一個。七個任務裡，只調示範在五個高過這一欄。HotPotQA Conditional 反過來，是作者自己點名的例外；ScoNe 的測試欄也是只調指令略高（76.1 對 75.4），本站 MIPRO 頁核對時指出這一格和教訓 1 的說法對不上，論文沒有說檢定用的是哪個切分（<a href="../mipro-optimizer/#results">MIPRO 第 9 章</a>）。</p>
+    <p>MIPRO 也寫了指令什麼時候重要（教訓 3）：任務帶著條件式的規則，LM 一看不懂、幾個例子也示範不完的時候。HotPotQA Conditional 要依答案的類型改格式，種子指令寫明了四條規則。反過來，Heart Disease 的種子指令沒有寫任何判斷標準，只調指令推不出來，25.8 比未最佳化的 26.8 還低（<a href="../mipro-optimizer/#conditional">MIPRO 第 10 章</a>）。附錄 H 另外記下一個失敗模式：提案 LM 會把指令寫得太貼合它看過的例子，這種指令有時還留在分數最好的程式裡（<a href="../mipro-optimizer/#limits">MIPRO 第 12 章</a>）。</p>
+
+    <h3>兩篇拿這個結果當證據</h3>
+    <p>MIPRO 的這個結果被兩篇讀物拿去用。一個月後的 BetterTogether 只挑示範、不改指令，理由是這種簡單的隨機搜尋在 LM 程式上一向帶來大幅進步，常勝過手動或自動最佳化指令，引的正是 DSPy 與 MIPRO（<a href="../finetuning-prompt-optimization/#bootstrap">BetterTogether 第 2 章</a>）。單元 10 的 Data Flywheels 在 MIPRO 貼上 arXiv 兩週後發文，開頭的觀察之一是 few-shot 範例是改善 prompt 最有效的方法，連結指向 MIPRO（<a href="../data-flywheels/#flywheel">Data Flywheels 第 1 章</a>）。</p>
+
+    <h3>指令也領先：GEPA 的觀察 2</h3>
+    <p>GEPA 只改寫指令，不放示範（<a href="../gepa-prompt-evolution/#mutation">GEPA 第 3 章</a>）。它的對手 MIPROv2 同時最佳化指令與示範，用的是 DSPy 內建的版本，設定 auto＝heavy，也就是提出 18 個指令候選與 18 組 bootstrap 的示範；GEPA 的 rollout 預算對齊 MIPROv2 實際用掉的次數（<a href="../gepa-prompt-evolution/#setup">GEPA 第 7 章</a>）。在兩個模型、六個任務的 12 格裡，GEPA 每一格都贏 MIPROv2，差距最大的兩格都在 PUPA（<a href="../gepa-prompt-evolution/#vs-optimizers">GEPA 第 9 章</a>）。六個任務的總分提升如下：</p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>最佳化器</th><th>調什麼</th><th style="text-transform:none"><span style="white-space:nowrap">GPT-4.1 Mini</span></th><th style="text-transform:none"><span style="white-space:nowrap">Qwen3 8B</span></th></tr></thead>
+        <tbody>
+          <tr><td><span style="white-space:nowrap">MIPROv2-No-Demos</span></td><td>只調指令</td><td>+4.11</td><td>—</td></tr>
+          <tr><td>MIPROv2</td><td>指令＋示範</td><td>+5.64</td><td>+2.61</td></tr>
+          <tr><td>GEPA</td><td>只改寫指令</td><td>+12.19</td><td>+9.62</td></tr>
+          <tr><td>GEPA+Merge</td><td>只改寫指令，<br>再逐模組合併</td><td>+13.33</td><td>+7.17</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>表中的「—」表示那個模型沒有跑這一組。GEPA 的觀察 2 接著直接回應 MIPRO：先前 MIPRO 與 Wan 等人（2024）的研究提出有力的證據，顯示最佳化 few-shot 示範常勝過最佳化指令；作者說他們的結果顯示這個趨勢在改變，主要歸因於近來 LLM 遵循指令與自我反思的能力進步，加上 GEPA 的設計用上了這些能力。他們也照 Wan 等人的方法重做泛化差距，說反思演化出來的指令差距較小；本站 GEPA 頁讀圖 16 時看到，<span style="white-space:nowrap">GPT-4.1 Mini</span> 的三個任務都比 MIPROv2 接近零，Qwen3 8B 就沒那麼整齊（<a href="../gepa-prompt-evolution/#instructions">GEPA 第 10 章</a>）。長度也不同：MIPROv2 的 prompt 大部分是示範，GEPA 的大部分是指令，依圖 18 的 token 數，GEPA 在各任務短 2.1 到 9.2 倍（同一章）。</p>
+
+    <div class="explain stone">
+      <span class="label">整理者的讀法</span>
+      <h4>兩篇比的不是同一組</h4>
+      <ul>
+        <li><strong>比哪兩組</strong>：MIPRO 的教訓 1 比只調示範與只調指令；GEPA 的表上是只改指令對「指令＋示範」，沒有只調示範的一組。在 GEPA 的表 2 裡，MIPROv2 加上示範比不加多 1.53 分（+5.64 對 +4.11，整理者算的）。</li>
+        <li><strong>模型與年份</strong>：MIPRO 的任務模型是 <span style="white-space:nowrap">Llama-3-8B</span>，寫指令的多半是 <span style="white-space:nowrap">GPT-3.5</span>；GEPA 用 Qwen3 8B 與 <span style="white-space:nowrap">GPT-4.1 Mini</span>。GEPA 把趨勢改變主要歸因於模型，整理者在原文裡沒有找到拿較舊的模型重跑一次的實驗。</li>
+        <li><strong>寫指令時讀什麼</strong>：MIPRO 的只調指令最佳化器，寫指令前讀的是資料摘要、程式摘要、示範與過去的分數（<a href="../mipro-optimizer/#proposal">MIPRO 第 3 章</a>）；GEPA 的反思 LM 讀的是這幾筆的執行軌跡，以及評分時吐出的文字回饋（<a href="../gepa-prompt-evolution/#feedback">GEPA 第 4 章</a>）。</li>
+        <li><strong>名字</strong>：MIPRO 論文提出的是 MIPRO；GEPA 比的是 DSPy 裡的 MIPROv2，引作同一篇。兩者有什麼差別，本站沒有去查程式庫。</li>
+        <li><strong>同名的任務</strong>：兩篇都跑了 HotPotQA 與 HoVer，但程式、模型與預算不同，分數不能放在同一把量尺上。</li>
+      </ul>
+    </div>
+
+    <div class="explain">
+      <span class="label">跨單元的對照</span>
+      <h4>單元 5 已經並排過示範、指令、權重</h4>
+      <p><a href="../cs329z-unit-05/#optimizers">單元 5 的對照頁第 3 章</a>從 DSPy 出發，並排了 DSPy、MIPRO、BetterTogether、GEPA 各調了示範、指令、權重的哪一種組合，也整理了各篇怎麼描述 DSPy 最佳化什麼。這一章只看 MIPRO 與 GEPA 之間的分歧，不重複那一段。</p>
+    </div>
+
+    <p>還沒有答案的地方，兩篇自己也留下了。MIPRO 的教訓 5 說 LM 程式的最佳化器還有很多要學，並把「過度貼合例子的指令為什麼會留在最好的程式裡」留給後續研究（<a href="../mipro-optimizer/#limits">MIPRO 第 12 章</a>）；GEPA 的歸因說的是模型能力，這一點要靠跨模型世代的比較才量得到。</p>
+  </div>
+</section>
+
+
+<section id="weights" data-toc="要不要動權重">
+  <div class="container head">
+    <p class="chapter">Chapter 03 · 爭點二</p>
+    <h2><span class="seg">GEPA 只調 prompt，</span><span class="seg">BetterTogether 兩樣都調</span></h2>
+    <p class="lede">prompt 調完之後還要不要微調權重，兩篇的證據方向不同。GEPA 不動權重，在 Qwen3 8B 的六個任務贏了用強化學習調權重的 GRPO 五個；BetterTogether 九組實驗裡有七組的最高分同時調了 prompt 與權重。兩篇說的「prompt」與「權重」，各指不同的做法。</p>
+    
+  </div>
+  <div class="cardband" id="card-04"><div class="cardlabel"><span class="n">圖卡 04 / 07</span><span class="t">GEPA 只調 prompt，BetterTogether 兩樣都調</span><button type="button" class="zoom" data-card="04">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">GEPA 只調 prompt，BetterTogether 兩樣都調</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">四篇各怎麼調 prompt、怎麼調權重、量到什麼、預算怎麼算；兩篇說的「prompt」與「權重」，各指不同的做法</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:1480px; height:50px; box-sizing:border-box; background-color:#EEF1F5; border-radius:8px 8px 0px 0px; display:grid; grid-template-columns:240px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">讀物</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">調 prompt 的做法</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">調權重的做法</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">量到什麼</div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:14px; font-weight:700; color:#4B5866;">預算怎麼算</div>
+  </div>
+  <div style="position:absolute; left:60px; top:210px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1F2A3A;">BetterTogether</div><div style="font-size:13px; color:#8A93A0;">選讀 · 兩樣都調</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>只挑示範，<br>指令不改</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>用自己答對的軌跡<br>做 LoRA 微調</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>九組裡七組的最高分<br>兩樣都調</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>表 1 共約<br>75 個 A100 GPU 小時</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:306px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1F2A3A;">GEPA</div><div style="font-size:13px; color:#8A93A0;">必讀 · 只調 prompt</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>反思 LM 改寫指令，<br>不放示範</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>對手 GRPO：強化學習，<br>LoRA，24,000 次 rollout</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>Qwen3 8B 六個任務<br>贏 GRPO 五個，AIME 例外</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>rollout：1,839 到 7,051 次；<br><span style="white-space:nowrap">GPT-4.1 Mini</span> 上約 86 美元</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:402px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1F2A3A;">Snell</div><div style="font-size:13px; color:#8A93A0;">必讀 · 調推論算力</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>固定的 4-shot</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>驗證器與修訂模型<br>先從 <span style="white-space:nowrap">PaLM 2-S*</span> 微調</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>直接 prompt 現成模型<br>去修訂，效果不好</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>生成次數；<br>和大模型比時用 FLOPs</div></div>
+  </div>
+  <div style="position:absolute; left:60px; top:498px; width:1480px; height:96px; box-sizing:border-box; border-bottom:1px solid #E5E9EE; display:grid; grid-template-columns:240px repeat(4, minmax(0, 1fr));">
+    <div style="padding:0px 22px; display:flex; flex-direction:column; justify-content:center; gap:4px;"><div style="font-size:18px; font-weight:700; color:#1F2A3A;">MIPRO</div><div style="font-size:13px; color:#8A93A0;">選讀 · 只調 prompt</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>指令與示範一起調，<br>TPE 挑組合</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>不碰權重，<br>也不用 log 機率</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#8A93A0; line-height:1.5;"><div>這篇只調 prompt，<br>沒有權重的比較</div></div>
+    <div style="padding:0px 22px; display:flex; align-items:center; font-size:15px; color:#2B3340; line-height:1.5;"><div>依任務 20 到 50 次<br>完整評估的試驗</div></div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">兩邊的「權重」不是同一種</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">BetterTogether 是監督式微調，<br>資料是程式自己答對的軌跡；<br>GEPA 的對手 GRPO 是強化學習。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">兩篇都只在 7B 到 8B 的開放模型上動權重。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">只調權重，多半低於只調 prompt</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">BetterTogether 有分數的八欄都是；<br>GEPA 的六個任務有五個是，<br><span style="white-space:nowrap">AIME-2025</span> 上 GRPO 38.00 最高。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">兩篇都沒有把改寫指令和微調接在一起。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:630px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">預算的單位不同</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">GPU 小時、rollout 次數、<br>完整評估的試驗、生成次數，<br>四篇各用一種。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">哪一種花得少，無法從原文直接算出來。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：格子依本站讀物頁的章節整理，出處見本章正文的兩張表；Snell 與 MIPRO 沒有比 prompt 對權重，列出來是看它們各站在哪一邊。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>讀物</th><th style="text-transform:none">調 prompt 的做法</th><th>調權重的做法</th></tr></thead>
+        <tbody>
+          <tr><td>BetterTogether</td><td>只挑示範，指令不改<br>（<a href="../finetuning-prompt-optimization/#bootstrap">第 2 章</a>）</td><td>用程式自己答對的軌跡做 LoRA 微調，<br>同一個模型自己教自己<br>（<a href="../finetuning-prompt-optimization/#better-together">第 3 章</a>）</td></tr>
+          <tr><td>GEPA</td><td>反思 LM 改寫指令，不放示範<br>（<a href="../gepa-prompt-evolution/#mutation">第 3 章</a>）</td><td>對手 GRPO：強化學習、LoRA，<br>固定 24,000 次 rollout<br>（<a href="../gepa-prompt-evolution/#setup">第 7 章</a>）</td></tr>
+          <tr><td>Snell</td><td>固定的 4-shot prompt<br>（<a href="../test-time-compute/#prm">第 4 章</a>）</td><td>驗證器與修訂模型<br>都從 <span style="white-space:nowrap">PaLM 2-S*</span> 微調<br>（<a href="../test-time-compute/#prm">第 4</a>、<a href="../test-time-compute/#revision-training">7 章</a>）</td></tr>
+          <tr><td>MIPRO</td><td>指令與示範一起調<br>（<a href="../mipro-optimizer/#mipro">第 6 章</a>）</td><td>不碰權重，也不用 log 機率<br>（<a href="../mipro-optimizer/#problem">第 1 章</a>）</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>讀物</th><th>量到什麼</th><th>預算怎麼算</th></tr></thead>
+        <tbody>
+          <tr><td>BetterTogether</td><td>九組裡七組的最高分兩樣都調；<br>只調權重在八欄<br>低於只調 prompt，<br>另一欄湊不出微調資料<br>（<a href="../finetuning-prompt-optimization/#results">第 5 章</a>）</td><td>產生表 1 共約<br>75 個 A100 GPU 小時<br>（<a href="../finetuning-prompt-optimization/#limits">第 7 章</a>）</td></tr>
+          <tr><td>GEPA</td><td>六個任務贏 GRPO 五個，<br>平均 54.85 對 48.91，AIME 例外<br>（<a href="../gepa-prompt-evolution/#vs-grpo">第 8 章</a>）</td><td>rollout 次數：<br>GEPA 1,839 到 7,051，<br><span style="white-space:nowrap">GRPO 24,000</span><br>（<a href="../gepa-prompt-evolution/#vs-grpo">第 8 章</a>）</td></tr>
+          <tr><td>Snell</td><td>直接 prompt 現成的模型<br>去修訂或驗證，效果不好<br>（<a href="../test-time-compute/#difficulty-matters">第 1</a>、<a href="../test-time-compute/#revision-training">7 章</a>）</td><td>生成次數；<br>和放大模型比時換成 FLOPs<br>（<a href="../test-time-compute/#search-methods">第 5</a>、<a href="../test-time-compute/#flops-exchange">10 章</a>）</td></tr>
+          <tr><td>MIPRO</td><td>這篇只調 prompt，<br>沒有權重的比較</td><td>依任務 20 到 50 次<br>完整評估的試驗<br>（<a href="../mipro-optimizer/#lineup">第 7 章</a>）</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>兩樣一起調：BetterTogether</h3>
+    <p>BetterTogether 在 HotPotQA、GSM8K、Iris 與三個 7B 到 8B 的開放模型上比了八種策略，每一格是三個隨機種子的平均。九組資料集與模型的配對裡，七組的最高分同時用了 prompt 與權重最佳化；三種交替的順序之間沒有明確的贏家；作者也說，最佳化 prompt 在所有任務上都必要（<a href="../finetuning-prompt-optimization/#results">BetterTogether 第 5 章</a>）。只調權重的幾格特別低：本站 BetterTogether 頁核對過，有分數的八欄裡，只調權重都低於只調 prompt；<span style="white-space:nowrap">llama-2-7b-chat</span> 的 HotPotQA 只調權重是 12.2，比完全不調的 13.2 還低（同一章）。第 3 節的第一個預期正好說明順序的用意：先調 prompt，答對的軌跡變多，微調才有資料可學（<a href="../finetuning-prompt-optimization/#better-together">BetterTogether 第 3 章</a>）。</p>
+
+    <h3>只調 prompt：GEPA</h3>
+    <p>GEPA 的對手 GRPO 是強化學習，每步 4 個訓練例、每例 12 個 rollout，用 LoRA 跑 500 步，固定 24,000 次 rollout；GEPA 的預算則隨任務在 1,839 到 7,051 次之間（<a href="../gepa-prompt-evolution/#setup">GEPA 第 7</a>、<a href="../gepa-prompt-evolution/#vs-grpo">8 章</a>）。在 Qwen3 8B 的六個任務上，GEPA 贏了 HotpotQA、IFBench、HoVer、PUPA 與 <span style="white-space:nowrap">LiveBench-Math</span>，六項平均 54.85 對 48.91。唯一的例外是 <span style="white-space:nowrap">AIME-2025</span>：GRPO 38.00、GEPA 32.00，表 1 的圖說寫明了例外，正文沒有解釋原因。作者另外在兩跳的 HoVer 上換成全參數微調的 GRPO，差距的樣子和 LoRA 版相近（<a href="../gepa-prompt-evolution/#vs-grpo">GEPA 第 8 章</a>）。</p>
+    <p>GEPA 的引言說明了為什麼要找不動權重的做法：很多應用會呼叫昂貴的工具、推論預算有限，或者最大、最好的那些模型根本不能微調（<a href="../gepa-prompt-evolution/#rollouts">GEPA 第 1 章</a>）。GEPA 引 BetterTogether 只有一處，在第 2 節的形式化；論文沒有討論兩樣一起調的結果，整理者在原文裡也沒有找到把 GEPA 和微調接在一起的實驗。</p>
+
+    <h3>另外兩篇</h3>
+    <p>Snell 等人要分配的是推論時的算力，但他們用的驗證器與修訂模型，都是從 <span style="white-space:nowrap">PaLM 2-S*</span> 微調出來的；作者的理由是，直接 prompt 現成的模型去修訂或驗證效果不好，並預期未來的模型會直接具備這些能力。附錄 K 試過用 ReST-EM 再最佳化修訂模型，結果循序修訂越多、表現下降越多（<a href="../test-time-compute/#difficulty-matters">Snell 第 1</a>、<a href="../test-time-compute/#revision-training">7 章</a>）。MIPRO 則刻意把假設放得很弱：不碰權重、不用 log 機率，和 DSPy 的抽象一致；它也指出，需要 log 機率的做法，在只允許文字進出的商用 API 上越來越難成立（<a href="../mipro-optimizer/#problem">MIPRO 第 1 章</a>）。</p>
+
+    <div class="explain stone">
+      <span class="label">整理者的讀法</span>
+      <h4>兩篇的「prompt」與「權重」都不是同一種做法</h4>
+      <ul>
+        <li><strong>prompt</strong>：BetterTogether 只挑示範，指令一直是使用者給的簡單指令；GEPA 只改寫指令，不放示範。第 2 章的爭點就在這兩種之間。</li>
+        <li><strong>權重</strong>：BetterTogether 用程式自己答對的軌跡做監督式微調；GEPA 的對手 GRPO 是強化學習。兩篇都只在 7B 到 8B 的開放模型上動權重，<span style="white-space:nowrap">GPT-4.1 Mini</span> 只跑了 prompt 最佳化。</li>
+        <li><strong>預算</strong>：BetterTogether 報 GPU 小時，GEPA 報 rollout 次數與美元，單位不同，哪一種花得少，無法從兩篇直接算出來。</li>
+        <li><strong>沒有人比的組合</strong>：改寫指令的 prompt 最佳化，再加上微調。GEPA 的 GRPO 實作取自 Ziems 等人（2025），那篇的標題寫的是把 policy gradient 與 prompt 最佳化組合起來；它不在課程讀物裡，這一頁沒有讀它。</li>
+      </ul>
+    </div>
+
+    <div class="explain">
+      <span class="label">跨單元的對照</span>
+      <h4>實務文章與隱私防禦，各碰到這個選擇</h4>
+      <p>單元 10 的 Data Flywheels 寫給實務工作者：微調的負擔大，很多團隊寧可用 LLM API，迭代快、部署也簡單（<a href="../data-flywheels/#flywheel">Data Flywheels 第 1 章</a>）。單元 12 的 CDI 在引言引了 GEPA，說先前的研究用 prompt 最佳化改善隱私防禦，但有額外模組的防禦不好這樣最佳化，所以改用 GRPO 訓練一個 4B 的指引模型。它的對照組是用 prompt 最佳化調過的 system prompt：再攻一輪時，隱私保護率從 89.0% 掉到 55.1%，訓練後的指引模型從 89.7% 掉到 79.5%（<a href="../contextualized-privacy-defense/#optimization">CDI 第 6</a>、<a href="../contextualized-privacy-defense/#after-training">7 章</a>）。兩邊調的是不同的元件，不是同一個模型的 prompt 對權重。</p>
+    </div>
+
+    <p>還沒有答案的地方，兩篇自己也點出來了。BetterTogether 說還不理解為什麼兩者都重要，而且只試了 LoRA 一種微調（<a href="../finetuning-prompt-optimization/#limits">BetterTogether 第 7 章</a>）；GEPA 在 AIME 上輸給 GRPO 的原因，正文沒有解釋（<a href="../gepa-prompt-evolution/#vs-grpo">GEPA 第 8 章</a>）。</p>
+  </div>
+</section>
+
+
+<section id="hard-problems" data-toc="幾乎不會的題">
+  <div class="container head">
+    <p class="chapter">Chapter 04 · 爭點三</p>
+    <h2><span class="seg">最難的題 Snell 沒進展，</span><span class="seg">GEPA 從近 0 拉到兩成以上</span></h2>
+    <p class="lede">模型幾乎不會的題目，多花力氣有沒有用，四篇各有一個例子。Snell 等人在最難一級的數學題上，比過的搜尋都沒有明顯進展，FLOPs 對等時困難題也多半是放大模型較有效；GEPA 的推論時搜尋，把 GPT-4o 寫 kernel 的成績從接近零拉起。另外兩篇在最佳化的起點碰到類似的情況。</p>
+    
+  </div>
+  <div class="cardband" id="card-05"><div class="cardlabel"><span class="n">圖卡 05 / 07</span><span class="t">最難的題 Snell 沒進展，GEPA 從近 0 拉起</span><button type="button" class="zoom" data-card="05">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">最難的題 Snell 沒進展，GEPA 從近 0 拉起</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">模型幾乎不會的題：左邊是 Snell 圖 1 右的困難題，小模型加測試時算力對上約 14 倍參數的模型；右邊是 GEPA 的推論時搜尋，兩塊各用自己的量尺</div>
+
+  <div style="position:absolute; left:60px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">SNELL · FIGURE 1 · HARD</div>
+  <div style="position:absolute; left:60px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">困難題：小模型加算力，對上放大的模型</div>
+  <div style="position:absolute; left:840px; top:150px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; letter-spacing:0.12em; color:#8A93A0;">GEPA · SECTION 5.1 · NPUEVAL</div>
+  <div style="position:absolute; left:840px; top:172px; font-size:20px; font-weight:700; color:#1C2431;">推論時搜尋：<span style="white-space:nowrap">GPT-4o</span> 寫 NPU kernel</div>
+  <div style="position:absolute; left:800px; top:150px; width:0px; height:376px; border-left:1px dashed #D5DAE1;"></div>
+
+  <div style="position:absolute; left:560px; top:228px; width:1px; height:218px; background-color:#9AA3AE;"></div>
+
+  <div style="position:absolute; left:60px; top:212px; font-size:13px; font-weight:700; color:#1C2431;">修訂</div>
+  <div style="position:absolute; left:76px; top:236px; width:220px; height:20px; display:flex; align-items:center; font-size:13px; color:#2B3340;">推論量遠小於預訓練</div>
+  <div style="position:absolute; left:560px; top:236px; width:47px; height:20px; background-color:#2E7B4F; border-radius:0px 3px 3px 0px;"></div>
+  <div style="position:absolute; left:613px; top:238px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">+11.8%</div>
+  <div style="position:absolute; left:76px; top:268px; width:220px; height:20px; display:flex; align-items:center; font-size:13px; color:#2B3340;">推論量和預訓練相當</div>
+  <div style="position:absolute; left:512px; top:268px; width:48px; height:20px; background-color:#C8501F; border-radius:3px 0px 0px 3px;"></div>
+  <div style="position:absolute; left:450px; top:270px; width:56px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">−11.9%</div>
+  <div style="position:absolute; left:76px; top:300px; width:220px; height:20px; display:flex; align-items:center; font-size:13px; color:#2B3340;">推論量遠大於預訓練</div>
+  <div style="position:absolute; left:411px; top:300px; width:149px; height:20px; background-color:#C8501F; border-radius:3px 0px 0px 3px;"></div>
+  <div style="position:absolute; left:349px; top:302px; width:56px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">−37.2%</div>
+
+  <div style="position:absolute; left:60px; top:336px; font-size:13px; font-weight:700; color:#1C2431;">PRM 搜尋</div>
+  <div style="position:absolute; left:76px; top:358px; width:220px; height:20px; display:flex; align-items:center; font-size:13px; color:#2B3340;">推論量遠小於預訓練</div>
+  <div style="position:absolute; left:559px; top:358px; width:3px; height:20px; background-color:#4B5866;"></div>
+  <div style="position:absolute; left:568px; top:360px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#4B5866;">0.0%</div>
+  <div style="position:absolute; left:76px; top:390px; width:220px; height:20px; display:flex; align-items:center; font-size:13px; color:#2B3340;">推論量和預訓練相當</div>
+  <div style="position:absolute; left:419px; top:390px; width:141px; height:20px; background-color:#C8501F; border-radius:3px 0px 0px 3px;"></div>
+  <div style="position:absolute; left:357px; top:392px; width:56px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">−35.3%</div>
+  <div style="position:absolute; left:76px; top:422px; width:220px; height:20px; display:flex; align-items:center; font-size:13px; color:#2B3340;">推論量遠大於預訓練</div>
+  <div style="position:absolute; left:348px; top:422px; width:212px; height:20px; background-color:#C8501F; border-radius:3px 0px 0px 3px;"></div>
+  <div style="position:absolute; left:286px; top:424px; width:56px; text-align:right; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#C8501F;">−52.9%</div>
+
+  <div style="position:absolute; left:306px; top:452px; width:28px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">−60</div>
+  <div style="position:absolute; left:386px; top:452px; width:28px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">−40</div>
+  <div style="position:absolute; left:466px; top:452px; width:28px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">−20</div>
+  <div style="position:absolute; left:546px; top:452px; width:28px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">0</div>
+  <div style="position:absolute; left:626px; top:452px; width:28px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">+20</div>
+  <div style="position:absolute; left:60px; top:478px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">正值：小模型加測試時算力較有效；負值：放大的模型較有效。<br>另外，等級 5 的最難題上，比過的搜尋都沒有明顯的進展（Snell 第 6 章）。</div>
+
+  <div style="position:absolute; left:840px; top:212px; font-size:13px; color:#6B7380;">平均向量利用率（%）· AMD XDNA2 · 早期版本的 NPUEval</div>
+  <div style="position:absolute; left:860px; top:236px; width:220px; height:20px; display:flex; align-items:center; font-size:13px; color:#2B3340;">修正 10 次的 agent</div>
+  <div style="position:absolute; left:1090px; top:236px; width:43px; height:20px; background-color:#9AA3AE; border-radius:0px 3px 3px 0px;"></div>
+  <div style="position:absolute; left:1139px; top:238px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">4.25</div>
+  <div style="position:absolute; left:860px; top:268px; width:220px; height:20px; display:flex; align-items:center; font-size:13px; color:#2B3340;">＋技術手冊的 RAG</div>
+  <div style="position:absolute; left:1090px; top:268px; width:163px; height:20px; background-color:#9AA3AE; border-radius:0px 3px 3px 0px;"></div>
+  <div style="position:absolute; left:1259px; top:270px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">16.33</div>
+  <div style="position:absolute; left:860px; top:300px; width:220px; height:20px; display:flex; align-items:center; font-size:13px; color:#2B3340;">＋RAG＋MIPROv2</div>
+  <div style="position:absolute; left:1090px; top:300px; width:190px; height:20px; background-color:#9AA3AE; border-radius:0px 3px 3px 0px;"></div>
+  <div style="position:absolute; left:1286px; top:302px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#2B3340;">19.03</div>
+  <div style="position:absolute; left:860px; top:332px; width:220px; height:20px; display:flex; align-items:center; font-size:13px; font-weight:700; color:#1C2431;">GEPA 產生的單一 prompt</div>
+  <div style="position:absolute; left:1090px; top:332px; width:269px; height:20px; background-color:#2E7B4F; border-radius:0px 3px 3px 0px;"></div>
+  <div style="position:absolute; left:1365px; top:334px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">26.85</div>
+  <div style="position:absolute; left:860px; top:364px; width:220px; height:20px; display:flex; align-items:center; font-size:13px; font-weight:700; color:#1C2431;">GEPA，不用 RAG</div>
+  <div style="position:absolute; left:1090px; top:364px; width:305px; height:20px; background-color:#2E7B4F; border-radius:0px 3px 3px 0px;"></div>
+  <div style="position:absolute; left:1401px; top:366px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; font-weight:600; color:#2E7B4F;">30.52</div>
+
+  <div style="position:absolute; left:1090px; top:394px; width:400px; height:0px; border-top:1px solid #D5DAE1;"></div>
+  <div style="position:absolute; left:1080px; top:398px; width:20px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">0</div>
+  <div style="position:absolute; left:1176px; top:398px; width:28px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">10</div>
+  <div style="position:absolute; left:1276px; top:398px; width:28px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">20</div>
+  <div style="position:absolute; left:1376px; top:398px; width:28px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">30</div>
+  <div style="position:absolute; left:1476px; top:398px; width:28px; text-align:center; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; color:#8A93A0;">40</div>
+  <div style="position:absolute; left:840px; top:424px; width:700px; font-size:13px; color:#2B3340; line-height:1.6;">KernelBench 35 題（<span style="white-space:nowrap">GPT-4o</span>）：<span style="white-space:nowrap">fast<sub>1</sub></span> 從接近 0% 拉到 20% 以上，這是正文對圖 8 的描述。</div>
+  <div style="position:absolute; left:840px; top:456px; width:700px; font-size:13px; color:#6B7380; line-height:1.6;">回饋會依編譯錯誤檢索技術手冊；生成都在快取下進行。<br>作者說這些推論時搜尋的結果還是早期的。</div>
+
+  <div style="position:absolute; left:60px; top:536px; width:1480px; height:44px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px dashed #9AA3AE; border-radius:8px; padding:0px 16px; display:flex; align-items:center; font-size:14px; color:#2B3340;"><div>訓練期的最佳化也碰到起點很弱：MIPRO 的 Heart Disease 只調指令 25.8，低於基線 26.8；BetterTogether 的 <span style="white-space:nowrap">llama-2</span> 在 Iris 上起點 0.0，先調權重湊不出資料</div></div>
+
+  <div style="position:absolute; left:60px; top:600px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">Snell：難度是對這個模型而言</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">每題用 <span style="white-space:nowrap">PaLM 2-S*</span> 抽 2048 個樣本<br>估 pass@1，分成五級；作者選 MATH，<br>是因為模型已有需要的知識。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">對照組是參數約多 14 倍的模型。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:600px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">GEPA：回饋帶進技術手冊</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">kernel 的回饋會依編譯錯誤，<br>檢索手冊裡相關的章節；<br>作者說這些都是早期結果。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">對照組是同一個 agent 的其他設定。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:600px; width:470px; height:190px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:24px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">AIME 上換成 GRPO 最高</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">Qwen3 8B 的 <span style="white-space:nowrap">AIME-2025</span>：<br>起點 27.33，GEPA 32.00，<br>MIPROv2 20.00，GRPO 38.00。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">正文沒有解釋 AIME 為什麼是例外。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：兩塊的難度、模型、指標與對照組都不同，不能互比；圖 1 的「困難」一組怎麼從五級分出來，原文沒有說。</div>
+</div></div></div>
+  <div class="container prose">
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>讀物</th><th>幾乎不會的起點</th><th>多花力氣之後</th></tr></thead>
+        <tbody>
+          <tr><td>Snell</td><td>MATH 等級 5：<br><span style="white-space:nowrap">PaLM 2-S*</span> 在這題的 pass@1<br>落在最低的五分之一</td><td>比過的搜尋都沒有明顯進展；<br>FLOPs 對等時，困難題六格<br>有四格是放大模型較有效</td></tr>
+          <tr><td>GEPA<br>（kernel）</td><td>GPT-4o 修正 10 次的 agent，<br>NPU kernel 的向量利用率 4.25%</td><td>GEPA 不用 RAG 到 30.52%；<br>KernelBench 的 fast<sub>1</sub><br>從接近 0% 到 20% 以上</td></tr>
+          <tr><td>GEPA<br>（AIME）</td><td>Qwen3 8B 未最佳化 27.33 分</td><td>GEPA 32.00、MIPROv2 20.00，<br>調權重的 GRPO 38.00</td></tr>
+          <tr><td>MIPRO</td><td>Heart Disease 基線 26.8，<br>種子指令沒寫判斷標準</td><td>只調指令 25.8，<br>只調示範 79.2，兩者 74.2</td></tr>
+          <tr><td>BetterTogether</td><td><span style="white-space:nowrap">llama-2-7b-chat</span> 在 Iris 上<br>未最佳化 0.0</td><td>先調權重湊不出資料；<br>只調 prompt 56.7，<br><span style="white-space:nowrap">Π → Θ → Π 65.3</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Snell：難度是對這個模型而言</h3>
+    <p>Snell 等人的難度是相對於模型的：每一題用 <span style="white-space:nowrap">PaLM 2-S*</span> 抽 2048 個樣本估 pass@1，依五分位分成五級（<a href="../test-time-compute/#compute-optimal">Snell 第 3 章</a>）。按難度拆開看，等級 3、4 的題目上，beam search 一致勝過 <span style="white-space:nowrap">best-of-N</span>；等級 5 的最難題上，比過的方法都沒有明顯的進展（<a href="../test-time-compute/#search-results">Snell 第 6 章</a>）。第 8 節的結論也說，各種方法在難題上的收益都很小，需要能避開這個限制的新做法（<a href="../test-time-compute/#takeaways">Snell 第 13 章</a>）。</p>
+    <p>第 7 節把同樣的 FLOPs 拿去預訓練一個參數約多 14 倍的模型來比。圖 1 右印出的困難題六格是：修訂 +11.8%、−11.9%、−37.2%，搜尋 0.0%、−35.3%、−52.9%，依序對應推論量遠小於、約等於、遠大於預訓練量三種情境；正值代表小模型加測試時算力較有效，負值代表放大模型較有效。作者的讀法是，超出 base 模型能力的難題，或推論需求高時，預訓練較可能改善表現。圖 1 把題目分成簡單、中等、困難三組，正文用的是五級，原文沒有說三組怎麼分（<a href="../test-time-compute/#exchange-results">Snell 第 11 章</a>）。</p>
+
+    <h3>GEPA：從接近零拉起</h3>
+    <p>GEPA 第 5.1 節把要解的題目清單直接當成訓練集與驗證集，讓同一套搜尋在推論時替這批題目找更好的解。回饋函式會依編譯錯誤去檢索技術手冊裡相關的章節；所有生成都在快取下進行，作者說這樣看到的進步來自 prompt 的更新，不是多抽幾次的運氣。替 AMD 的 XDNA2 寫 NPU kernel 時，GPT-4o 修正 10 次的 agent 平均向量利用率 4.25%，加上技術手冊的 RAG 是 16.33%，再加 MIPROv2 是 19.03%，GEPA 不用 RAG 是 30.52%。KernelBench 的 35 題上，隨著搜尋預算增加，GEPA 把 GPT-4o 接近 0% 的 fast<sub>1</sub> 提高到 20% 以上。作者說這些都是早期結果，需要更系統的研究（<a href="../gepa-prompt-evolution/#extensions">GEPA 第 11 章</a>）。</p>
+    <p>同一篇的 <span style="white-space:nowrap">AIME-2025</span> 是另一個樣子。Qwen3 8B 的未最佳化程式 27.33 分，GEPA 32.00，MIPROv2 的 20.00 比起點還低，用強化學習調權重的 GRPO 是 38.00（<a href="../gepa-prompt-evolution/#vs-grpo">GEPA 第 8 章</a>）。</p>
+
+    <h3>另外兩篇的起點</h3>
+    <p>MIPRO 的 Heart Disease，種子指令只說「依病人資訊預測有沒有心臟病」，沒有給分類標準：只調指令的 0-Shot MIPRO 是 25.8，比未最佳化的 26.8 還低，只調示範的 Bootstrap RS 是 79.2。作者在限制裡寫明，沒有手寫的種子 prompt，最佳化器推不出複雜任務的規則（<a href="../mipro-optimizer/#conditional">MIPRO 第 10</a>、<a href="../mipro-optimizer/#limits">12 章</a>）。BetterTogether 的 <span style="white-space:nowrap">llama-2-7b-chat</span> 在 Iris 上，未最佳化的程式測試集是 0.0；表 1 的表說說明，vanilla 在訓練集上幾乎答不對時就湊不出微調資料，所以先調權重的三種策略都是「–」。先調 prompt 的只調 prompt 到 56.7，Π → Θ → Π 到 65.3（<a href="../finetuning-prompt-optimization/#iris">BetterTogether 第 6 章</a>）。</p>
+
+    <div class="explain stone">
+      <span class="label">整理者的讀法</span>
+      <h4>各種做法需要的起點不同</h4>
+      <ul>
+        <li><strong>bootstrap</strong>：MIPRO 的示範與 BetterTogether 的兩個最佳化器，都只留 metric 通過的軌跡，程式要先答對一些題目才有材料。</li>
+        <li><strong>寫指令</strong>：MIPRO 的作者說，要有寫明規則的種子 prompt。</li>
+        <li><strong>測試時算力</strong>：Snell 等人選 MATH 的理由，是模型已經有需要的知識，難處在用這些知識推論（<a href="../test-time-compute/#compute-optimal">Snell 第 3 章</a>）。</li>
+        <li><strong>GEPA 的 kernel 搜尋</strong>：回饋會依錯誤檢索技術手冊，帶進模型權重以外的資訊。</li>
+        <li><strong>對照組</strong>：Snell 等人對上參數約多 14 倍的模型；GEPA 的 kernel 對上同一個 agent 的其他設定。</li>
+      </ul>
+      <p>這是整理者把四個例子並排時看到的差別，四篇都沒有這樣比；它會不會決定結果，留在第 6 章的判斷題。</p>
+    </div>
+
+    <div class="explain">
+      <span class="label">跨單元的對照</span>
+      <h4>單元 1 的假設情境</h4>
+      <p>單元 1 的〈複合式 AI 系統〉用一個假設情境談過類似的取捨：假設最好的模型能解三成的程式競賽題，訓練預算加三倍也許到 35%；讓模型多次取樣、逐一測試，用當時的模型可能到 80%，AlphaCode 就是這樣做的（<a href="../compound-ai-systems/#reasons">複合式 AI 系統第 1 章</a>）。這三個數字是原文的假設，不是實驗；Snell 等人量的是 FLOPs 對等下的一個版本，結果依難度與推論量而定。兩篇沒有互相引用，這裡只並排。</p>
+    </div>
+
+    <p>還沒有答案的地方，三篇都列了方向。Snell 等人把快速估計難度、能處理難題的新做法列為未來方向（<a href="../test-time-compute/#takeaways">Snell 第 13 章</a>）；GEPA 說推論時搜尋需要更系統的研究（<a href="../gepa-prompt-evolution/#extensions">GEPA 第 11 章</a>）；MIPRO 鼓勵研究不靠手寫的輸入、也能學到任務規則的做法（<a href="../mipro-optimizer/#limits">MIPRO 第 12 章</a>）。</p>
+  </div>
+</section>
+
+
+<section id="citations" data-toc="誰引了誰">
+  <div class="container head">
+    <p class="chapter">Chapter 05 · 誰引了誰</p>
+    <h2><span class="seg">四條引用在三篇之間，</span><span class="seg">Snell 與另三篇互不引用</span></h2>
+    <p class="lede">單元內的四條引用都在三篇 prompt 最佳化論文之間：BetterTogether 拿 MIPRO 的結果當證據，MIPRO 的 v2 回頭引 BetterTogether，GEPA 拿 MIPROv2 當對手，也把兩篇當形式化的依據。Snell 等人的論文沒有引這三篇，三篇也沒有引它。</p>
+    
+  </div>
+  <div class="cardband" id="card-06"><div class="cardlabel"><span class="n">圖卡 06 / 07</span><span class="t">四條引用都在三篇之間</span><button type="button" class="zoom" data-card="06">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">四條引用都在三篇之間，Snell 一條也沒有</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">四篇依日期排在軸上，弧線從引用的一方指向被引的一方；下方三列是跨單元的引用</div>
+
+  <div style="position:absolute; left:1000px; top:128px; display:flex; align-items:center; gap:22px; font-size:13px; color:#2B3340;">
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:26px; height:0px; border-top:2px solid #1F2A3A;"></div>單元 9 內的引用</div>
+    <div style="display:flex; align-items:center; gap:8px;"><div style="width:26px; height:14px; box-sizing:border-box; border:1.5px dashed #9AA3AE; border-radius:7px; background-color:#F7F8FA;"></div>跨單元的引用（下方三列）</div>
+  </div>
+
+  <div style="position:absolute; left:731px; top:116px; width:181px; text-align:center; font-size:13px; font-weight:700; color:#1F2A3A; background-color:#FFFFFF; white-space:nowrap;">比較的對手＋先前的證據</div>
+  <div style="position:absolute; left:940px; top:196px; width:84px; text-align:center; font-size:13px; font-weight:700; color:#1F2A3A; background-color:#FFFFFF; white-space:nowrap;">形式化沿用</div>
+  <div style="position:absolute; left:380px; top:298px; width:96px; text-align:center; font-size:13px; font-weight:700; color:#1F2A3A; background-color:#FFFFFF; white-space:nowrap;">當證據＋背景</div>
+  <div style="position:absolute; left:351px; top:431px; width:100px; text-align:center; font-size:13px; font-weight:700; color:#1F2A3A; background-color:#FFFFFF; white-space:nowrap;">v2 回引：背景</div>
+
+  <div style="position:absolute; left:112px; top:390px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">2024</div>
+  <div style="position:absolute; left:952px; top:390px; font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#8A93A0;">2025</div>
+
+  <div style="position:absolute; left:180px; top:462px; width:120px; display:flex; flex-direction:column; align-items:center; gap:2px;"><div style="font-size:15px; font-weight:700; color:#1F2A3A;">MIPRO</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">2024-06-17</div><div style="font-size:12px; color:#8A93A0;">單元 9 · 選讀</div></div>
+  <div style="position:absolute; left:492px; top:462px; width:140px; display:flex; flex-direction:column; align-items:center; gap:2px;"><div style="font-size:15px; font-weight:700; color:#1F2A3A;">BetterTogether</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">2024-07-15</div><div style="font-size:12px; color:#8A93A0;">單元 9 · 選讀</div></div>
+  <div style="position:absolute; left:734px; top:396px; width:160px; display:flex; flex-direction:column; align-items:center; gap:2px;"><div style="font-size:15px; font-weight:700; color:#1F2A3A;">Snell 等</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">2024-08-06</div><div style="font-size:12px; color:#8A93A0;">單元 9 · 必讀</div><div style="font-size:12px; color:#8A93A0;">沒有引用，也沒被引用</div></div>
+  <div style="position:absolute; left:1340px; top:396px; width:120px; display:flex; flex-direction:column; align-items:center; gap:2px;"><div style="font-size:15px; font-weight:700; color:#1F2A3A;">GEPA</div><div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:12px; color:#6B7380;">2025-07-25</div><div style="font-size:12px; color:#8A93A0;">單元 9 · 必讀</div></div>
+
+  <div style="position:absolute; left:60px; top:526px; display:flex; align-items:center; gap:10px;">
+    <div style="width:300px; font-size:13px; font-weight:700; color:#1C2431;">其他單元引到 MIPRO（3 篇）</div>
+    <div style="height:28px; box-sizing:border-box; padding:0px 12px; display:flex; align-items:center; border:1.5px dashed #9AA3AE; border-radius:14px; background-color:#F7F8FA; font-size:13px; color:#2B3340; white-space:nowrap;">單元 10 Data Flywheels</div>
+    <div style="height:28px; box-sizing:border-box; padding:0px 12px; display:flex; align-items:center; border:1.5px dashed #9AA3AE; border-radius:14px; background-color:#F7F8FA; font-size:13px; color:#2B3340; white-space:nowrap;">單元 11 AutoMetrics</div>
+    <div style="height:28px; box-sizing:border-box; padding:0px 12px; display:flex; align-items:center; border:1.5px dashed #9AA3AE; border-radius:14px; background-color:#F7F8FA; font-size:13px; color:#2B3340; white-space:nowrap;">單元 12 隱私風險搜尋</div>
+  </div>
+  <div style="position:absolute; left:60px; top:562px; display:flex; align-items:center; gap:10px;">
+    <div style="width:300px; font-size:13px; font-weight:700; color:#1C2431;">其他單元引到 GEPA（3 篇）</div>
+    <div style="height:28px; box-sizing:border-box; padding:0px 12px; display:flex; align-items:center; border:1.5px dashed #9AA3AE; border-radius:14px; background-color:#F7F8FA; font-size:13px; color:#2B3340; white-space:nowrap;">單元 11 AutoMetrics</div>
+    <div style="height:28px; box-sizing:border-box; padding:0px 12px; display:flex; align-items:center; border:1.5px dashed #9AA3AE; border-radius:14px; background-color:#F7F8FA; font-size:13px; color:#2B3340; white-space:nowrap;">單元 12 隱私風險搜尋</div>
+    <div style="height:28px; box-sizing:border-box; padding:0px 12px; display:flex; align-items:center; border:1.5px dashed #9AA3AE; border-radius:14px; background-color:#F7F8FA; font-size:13px; color:#2B3340; white-space:nowrap;">單元 12 CDI</div>
+  </div>
+  <div style="position:absolute; left:60px; top:598px; display:flex; align-items:center; gap:10px;">
+    <div style="width:300px; font-size:13px; font-weight:700; color:#1C2431;">三篇引到的其他單元（3 篇）</div>
+    <div style="height:28px; box-sizing:border-box; padding:0px 12px; display:flex; align-items:center; border:1.5px dashed #9AA3AE; border-radius:14px; background-color:#F7F8FA; font-size:13px; color:#2B3340; white-space:nowrap;">單元 5 DSPy（三篇都引）</div>
+    <div style="height:28px; box-sizing:border-box; padding:0px 12px; display:flex; align-items:center; border:1.5px dashed #9AA3AE; border-radius:14px; background-color:#F7F8FA; font-size:13px; color:#2B3340; white-space:nowrap;">單元 6 ReAct（MIPRO、GEPA）</div>
+    <div style="height:28px; box-sizing:border-box; padding:0px 12px; display:flex; align-items:center; border:1.5px dashed #9AA3AE; border-radius:14px; background-color:#F7F8FA; font-size:13px; color:#2B3340; white-space:nowrap;">單元 3 RAG（BetterTogether）</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:640px; width:470px; height:184px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">四條引用都在三篇之間</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">BetterTogether 拿 MIPRO 的結果當證據；<br>MIPRO 的 v2 回頭引 BetterTogether；<br>GEPA 拿 MIPROv2 當對手，也引兩篇。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">Snell 與另三篇互不引用。</div>
+  </div>
+  <div style="position:absolute; left:577px; top:640px; width:470px; height:184px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">跨單元：MIPRO、GEPA 各被引三篇</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">Data Flywheels 拿 MIPRO 當證據；<br>AutoMetrics 用了兩篇的最佳化器；<br>單元 12 的兩篇在引言或相關工作引到。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">BetterTogether 與 Snell 沒有被其他單元引到。</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:640px; width:470px; height:184px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; gap:8px;">
+    <div style="font-size:22px; font-weight:700; color:#1C2431; line-height:1.4;">作者重疊，連到單元 5、8、11</div>
+    <div style="font-size:15px; color:#2B3340; line-height:1.6;">Khattab、Potts 在三篇 prompt 論文上；<br>講師 Michael J Ryan 在 MIPRO、GEPA<br>與單元 11 的 AutoMetrics。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.6;">GEPA 的四位作者也在單元 8 的 MAST。</div>
+  </div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：只畫原文或參考文獻裡找得到的引用；「沒有引用」是整理者搜尋過的結果。日期用 arXiv 第一版；軸在 2024 年 8 月與 2025 年 7 月之間截斷，間距不照比例。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <defs>
+      <marker id="an-c06" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#1F2A3A"></path></marker>
+    </defs>
+    <path d="M110 380H880" stroke="#D5DAE1" stroke-width="2"></path>
+    <path d="M950 380H1530" stroke="#D5DAE1" stroke-width="2"></path>
+    <path d="M898 390L908 370" stroke="#9AA3AE" stroke-width="2"></path>
+    <path d="M912 390L922 370" stroke="#9AA3AE" stroke-width="2"></path>
+    <path d="M1400 370Q821.5 -90 243 370" stroke="#1F2A3A" stroke-width="1.8" marker-end="url(#an-c06)"></path>
+    <path d="M1400 370Q982.5 70 565 370" stroke="#1F2A3A" stroke-width="1.8" marker-end="url(#an-c06)"></path>
+    <path d="M559 370Q398 290 237 370" stroke="#1F2A3A" stroke-width="1.8" marker-end="url(#an-c06)"></path>
+    <path d="M244 390Q401 460 557 392" stroke="#1F2A3A" stroke-width="1.8" marker-end="url(#an-c06)"></path>
+    <path d="M240 392V458" stroke="#D5DAE1" stroke-width="1"></path>
+    <path d="M562 404V458" stroke="#D5DAE1" stroke-width="1"></path>
+    <circle cx="240" cy="380" r="9" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="562" cy="380" r="9" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="814" cy="380" r="9" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="3"></circle>
+    <circle cx="1400" cy="380" r="9" fill="#1F2A3A" stroke="#FFFFFF" stroke-width="3"></circle>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>引用</th><th>怎麼用</th><th>在原文哪裡</th></tr></thead>
+        <tbody>
+          <tr><td><span style="white-space:nowrap">BetterTogether</span><br><span style="white-space:nowrap">→ MIPRO</span></td><td>背景＋當證據：引言說 DSPy 與 MIPRO<br>研究過最佳化每個模組的 prompt；<br>挑示範的隨機搜尋常勝過最佳化指令，<br>引的也是這兩篇</td><td><span style="white-space:nowrap">第 1、3 節；</span><br><span style="white-space:nowrap">本站<a href="../finetuning-prompt-optimization/#bootstrap">第 2 章</a></span></td></tr>
+          <tr><td><span style="white-space:nowrap">MIPRO</span><br><span style="white-space:nowrap">→ BetterTogether</span></td><td>背景：引言說 DSPy 的作者提出的最佳化器，<br>能用示範最佳化 prompt、權重或兩者，<br>但調不了多個 prompt 的指令</td><td><span style="white-space:nowrap">第 1 節，出自 v2；</span><br><span style="white-space:nowrap">本站<a href="../mipro-optimizer/#prologue">序章</a></span></td></tr>
+          <tr><td><span style="white-space:nowrap">GEPA → MIPRO</span></td><td>比較＋對照：MIPROv2 是表 1、2 的對手；<br>觀察 2 說先前的證據顯示示範常勝過指令，<br>這篇的結果顯示趨勢在改變</td><td><span style="white-space:nowrap">第 1、2、4、6 節，</span><br><span style="white-space:nowrap">附錄 E.4；</span><br><span style="white-space:nowrap">本站<a href="../gepa-prompt-evolution/#vs-optimizers">第 9</a>、<a href="../gepa-prompt-evolution/#instructions">10 章</a></span></td></tr>
+          <tr><td><span style="white-space:nowrap">GEPA</span><br><span style="white-space:nowrap">→ BetterTogether</span></td><td>背景：第 2 節的形式化沿用<br>Soylu 等人（2024）與另外三篇</td><td><span style="white-space:nowrap">第 2 節；</span><br><span style="white-space:nowrap">本站<a href="../gepa-prompt-evolution/#rollouts">第 1 章</a></span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>時間順序決定了誰能引誰：MIPRO（2024-06-17）、BetterTogether（2024-07-15）、Snell 等（2024-08-06）、GEPA（2025-07-25）。MIPRO 的 v1 早於 BetterTogether，它引 BetterTogether 的那一段出自 2024-10-06 的 v2：參考文獻寫的是 7 月才有的 arXiv 編號；整理者手上沒有 v1 的全文，無法確認 v1 有沒有類似的句子。Snell 等人的 v1 晚於 MIPRO 與 BetterTogether，時間上可以引，但它的 51 筆參考文獻裡沒有這兩篇；MIPRO 與 BetterTogether 的 v2 晚於 Snell 等，GEPA 更晚一年，三篇的原文也都沒有提到它。這幾條「沒有」是整理者在四篇的原文與參考文獻裡搜尋過的結果。</p>
+
+    <h3>單元 9 引到的其他單元</h3>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>引用</th><th>怎麼用</th><th>在原文哪裡</th></tr></thead>
+        <tbody>
+          <tr><td>三篇<br><span style="white-space:nowrap">→ 單元 5 DSPy</span></td><td>環境：MIPRO、BetterTogether 的程式與基線，<br>GEPA 被最佳化的程式，都寫在 DSPy 裡；<br>逐條的位置見單元 5 對照頁的引用章</td><td><span style="white-space:nowrap"><a href="../cs329z-unit-05/#citations">單元 5 對照頁第 5 章</a></span></td></tr>
+          <tr><td>MIPRO、GEPA<br><span style="white-space:nowrap">→ 單元 6 ReAct</span></td><td>背景：MIPRO 的引言<br>列舉串成多階段管線的研究；<br>GEPA 說複合式系統<br>包含 ReAct 這類腳手架</td><td><span style="white-space:nowrap">MIPRO 第 1 節；</span><br><span style="white-space:nowrap">GEPA 第 2 節</span></td></tr>
+          <tr><td>BetterTogether<br><span style="white-space:nowrap">→ 單元 3 RAG</span></td><td>背景：引言列舉檢索增強生成的系統，<br>Lewis 等人（2020）是其中之一</td><td><span style="white-space:nowrap">第 1 節；參考文獻</span><br><span style="white-space:nowrap">Lewis et al. (2020)</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>其他單元引到單元 9</h3>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead><tr><th>引用</th><th>怎麼用</th><th>在原文哪裡</th></tr></thead>
+        <tbody>
+          <tr><td>單元 10<br>Data Flywheels<br><span style="white-space:nowrap">→ MIPRO</span></td><td>當證據：開頭的觀察之一是<br>few-shot 範例<br>是改善 prompt 最有效的方法，<br>連結指向 MIPRO</td><td><span style="white-space:nowrap">2024-07-01；</span><br><span style="white-space:nowrap">本站<a href="../data-flywheels/#flywheel">第 1 章</a></span></td></tr>
+          <tr><td>單元 11<br>AutoMetrics<br><span style="white-space:nowrap">→ MIPRO、GEPA</span></td><td>環境：用 DSPy 的 MIPROv2 產生評審；<br>τ-bench 案例用 DSPy 的 GEPA 最佳化 agent</td><td><span style="white-space:nowrap">2025-12-19；</span><br><span style="white-space:nowrap">本站<a href="../autometrics-evaluators/#generate">第 4</a>、<a href="../autometrics-evaluators/#tau-bench">12 章</a></span></td></tr>
+          <tr><td>單元 12<br>隱私風險搜尋<br><span style="white-space:nowrap">→ MIPRO、GEPA</span></td><td>背景＋當證據：相關工作列舉<br>直接改 agent prompt 的研究；<br>反思式搜尋有效的理由、<br>平行搜尋的理由都引了 GEPA</td><td><span style="white-space:nowrap">2025-08-14，本站依 v3；</span><br><span style="white-space:nowrap">本站<a href="../privacy-risk-simulation/#attack-search">第 4</a>、<a href="../privacy-risk-simulation/#related">11 章</a></span></td></tr>
+          <tr><td>單元 12<br>CDI<br><span style="white-space:nowrap">→ GEPA</span></td><td>背景：先前的研究<br>用 prompt 最佳化改善防禦，<br>有額外模組的防禦<br>不好這樣最佳化</td><td><span style="white-space:nowrap">2026-03-03；第 1 節，</span><br><span style="white-space:nowrap">本站<a href="../contextualized-privacy-defense/#problem">第 1 章</a>沒寫到</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>BetterTogether 與 Snell 等人沒有被其他單元的讀物引到。單元 1 的〈複合式 AI 系統〉和 GEPA 用同一個詞「複合式 AI 系統」，但 GEPA 的參考文獻裡沒有那篇文章，不算引用。BetterTogether 的 HotPotQA 程式用 ColBERTv2 當檢索器，引的是 ColBERTv2 的論文，不是單元 3 那篇 2020 年的 <a href="../colbert-late-interaction/">ColBERT</a>。</p>
+
+    <h3>共同的人</h3>
+    <p>Omar Khattab 與 Christopher Potts 在 MIPRO、BetterTogether、GEPA 三篇的作者名單上，Khattab 三篇都是最後一位作者，兩人也是單元 5 DSPy 的作者。BetterTogether 的第一作者 Dilara Soylu、MIPRO 的同等貢獻第一作者 Krista <span style="white-space:nowrap">Opsahl-Ong</span>，都在 GEPA 的名單上。課程講師 Michael J Ryan 是 MIPRO 的同等貢獻第一作者、GEPA 的作者，也是單元 11 AutoMetrics 的第一作者，那篇用了 MIPROv2 與 GEPA。GEPA 的 Lakshya A Agrawal、Dan Klein、Ion Stoica、Matei Zaharia 也在單元 8 <a href="../multi-agent-failures/">MAST</a> 的名單上，Zaharia 也是 MIPRO 的作者。Snell 等四位作者不在本站其他讀物的名單上。</p>
+  </div>
+</section>
+
+
+<section id="judgment" data-toc="判斷題">
+  <div class="container head">
+    <p class="chapter">Chapter 06 · 判斷題</p>
+    <h2><span class="seg">三個問題，</span><span class="seg">證據在前面，</span><span class="seg">答案留給你</span></h2>
+    <p class="lede">這一章把前面三個爭點寫成三個判斷題。每一題列出兩邊的證據在哪一章、還缺什麼證據，以及一個可以自己動手驗證的小實驗；不附答案。</p>
+    
+  </div>
+  <div class="cardband" id="card-07"><div class="cardlabel"><span class="n">圖卡 07 / 07</span><span class="t">三個判斷題，答案留給你</span><button type="button" class="zoom" data-card="07">開大圖</button></div><div class="frame"><div style="position:relative; width:1600px; height:900px; background-color:#FFFFFF; overflow:hidden;">
+  <div style="position:absolute; left:60px; top:36px; font-size:36px; font-weight:700; color:#1C2431; letter-spacing:0.01em;">三個問題，證據在前面，答案留給你</div>
+  <div style="position:absolute; left:60px; top:92px; font-size:15px; color:#6B7380;">把第 2 到 4 章的三個爭點寫成判斷題：每題標出證據在哪一章、還缺什麼證據；下排是整理者排的動手驗證順序</div>
+
+  <div style="position:absolute; left:60px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">01　判斷題 &#183; <span style="letter-spacing:0.12em">DEMOS</span></div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">示範領先的趨勢，<br>要看到什麼才算變了？</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">MIPRO 量到只調示範多半領先，<br>兩篇讀物拿它當證據；<br>GEPA 只改指令，12 格都贏 MIPROv2，<br>說趨勢變了。兩邊比的組不同。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">證據：第 2 章<br>還缺：同模型、同預算的三組並排</div>
+  </div>
+  <div style="position:absolute; left:577px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">02　判斷題 &#183; <span style="letter-spacing:0.12em">WEIGHTS</span></div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">prompt 調過之後，<br>還要不要動權重？</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">BetterTogether 九組裡七組<br>最高分兩樣都調；GEPA 不動權重，<br>六個任務贏 GRPO 五個，<br><span style="white-space:nowrap">AIME-2025</span> 上 GRPO 最高。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">證據：第 3 章<br>還缺：改寫指令再加微調的結果</div>
+  </div>
+  <div style="position:absolute; left:1094px; top:160px; width:470px; height:380px; box-sizing:border-box; background-color:#F7F8FA; border:1.5px solid #D5DAE1; border-radius:12px; padding:30px 32px; display:flex; flex-direction:column; gap:14px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:13px; color:#8A93A0;">03　判斷題 &#183; <span style="letter-spacing:0.12em">HARD CASES</span></div>
+    <div style="font-size:24px; font-weight:700; color:#1C2431; line-height:1.4;">模型幾乎不會的題，<br>先加哪一種力氣？</div>
+    <div style="font-size:16px; color:#2B3340; line-height:1.75;">Snell 的最難題沒有進展，<br>困難題多半是放大模型較有效；<br>GEPA 的推論時搜尋從近 0 拉起，<br>回饋帶進了技術手冊。</div>
+    <div style="font-size:13px; color:#8A93A0; line-height:1.7;">證據：第 4 章<br>還缺：同一批題目、同預算的四條路</div>
+  </div>
+
+  <div style="position:absolute; left:60px; top:590px; font-size:20px; font-weight:700; color:#1C2431;">動手驗證的順序（整理者排的）</div>
+  <div style="position:absolute; left:60px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#1F2A3A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:rgba(255,255,255,0.6);">01</div>
+    <div style="font-size:16px; font-weight:700; color:#FFFFFF;">挑一個有標註的任務</div>
+  </div>
+  <div style="position:absolute; left:360px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">02</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">量起點：未最佳化答對幾成</div>
+  </div>
+  <div style="position:absolute; left:660px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">03</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">只調示範、只調指令</div>
+  </div>
+  <div style="position:absolute; left:960px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#EEF1F5; border:1px solid #D5DAE1; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">04</div>
+    <div style="font-size:16px; font-weight:700; color:#1C2431;">加微調，或多抽幾次</div>
+  </div>
+  <div style="position:absolute; left:1260px; top:630px; width:260px; height:72px; box-sizing:border-box; background-color:#FCF1EA; border:1.5px solid #E6B49A; border-radius:8px; padding:12px 18px; display:flex; flex-direction:column; justify-content:center; gap:3px;">
+    <div style="font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:11px; letter-spacing:0.12em; color:#8A93A0;">05</div>
+    <div style="font-size:16px; font-weight:700; color:#C8501F;">用同一個單位記預算</div>
+  </div>
+  <div style="position:absolute; left:60px; top:722px; width:1480px; font-size:13px; color:#8A93A0; line-height:1.6;">第 02 步決定能不能 bootstrap：未最佳化幾乎答不對時，先調 prompt 或寫一條寫明規則的種子指令（BetterTogether、MIPRO 碰到的情況）；第 03 步檢驗第 2 章的分歧；<br>第 04 步檢驗第 3、4 章：微調用答對的軌跡（BetterTogether 的做法），多抽幾次要配一個檢查器（Snell 的驗證器）；第 05 步把 GPU 小時、rollout 與生成次數換成同一個單位，<br>例如美元或總呼叫次數。這五步不是任何一篇讀物的建議，是整理者把三題的證據接起來的順序。</div>
+
+  <div style="position:absolute; left:60px; bottom:30px; font-size:13px; color:#8A93A0;">注意：三題都不附答案；卡上的「還缺」是四篇都沒有報告的證據，不是整理者的結論。</div>
+
+  <svg style="position:absolute; left:0px; top:0px; pointer-events:none;" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+    <path d="M334 658L346 666L334 674Z" fill="#9AA3AE"></path>
+    <path d="M634 658L646 666L634 674Z" fill="#9AA3AE"></path>
+    <path d="M934 658L946 666L934 674Z" fill="#9AA3AE"></path>
+    <path d="M1234 658L1246 666L1234 674Z" fill="#9AA3AE"></path>
+  </svg>
+</div></div></div>
+  <div class="container prose">
+
+    <div class="thought">
+      <span class="label">判斷題 · 01</span>
+      <h4>GEPA 說示範領先的趨勢變了，要看到什麼才算數？</h4>
+      <p>示範領先的一方：MIPRO 的教訓 1，以及拿它當證據的 BetterTogether 與 Data Flywheels。指令也能領先的一方：GEPA 只改寫指令，在兩個模型、六個任務都贏 MIPROv2，prompt 也短得多；MIPRO 自己的 HotPotQA Conditional 也是指令領先（都在<a href="#demos-instructions">第 2 章</a>）。</p>
+      <p>還缺的證據：同一個任務、同一個模型、同樣的預算下，只調示範、只調指令、兩者都調三組並排；再換一個較舊、一個較新的模型各跑一次，才檢驗得了 GEPA 把改變歸因於模型能力的說法。</p>
+      <p class="hint">挑一個有一兩百筆標註的任務，用 DSPy 的 BootstrapFewShotWithRandomSearch 只調示範、用 GEPA 只調指令、用 MIPROv2 兩者都調；各記分數、rollout 次數，以及最後的 prompt 有多長。</p>
+    </div>
+
+    <div class="thought">
+      <span class="label">判斷題 · 02</span>
+      <h4>prompt 調過之後，再花預算微調權重值不值得？</h4>
+      <p>值得的一方：BetterTogether 九組裡七組的最高分兩樣都調；GEPA 的 AIME-2025 上，調權重的 GRPO 最高。先不動權重的一方：GEPA 在其他五個任務贏 GRPO，rollout 少很多；BetterTogether 只調權重的八欄都低於只調 prompt；Data Flywheels 說很多團隊寧可用 API（都在<a href="#weights">第 3 章</a>）。</p>
+      <p>還缺的證據：改寫指令的 prompt 最佳化再加上微調的結果，以及用同一個單位算的成本。兩篇的「權重」一個是監督式微調、一個是強化學習，模型都在 8B 以內。</p>
+      <p class="hint">拿一個已經調過 prompt 的小管線，收集它答對的軌跡做一輪 LoRA 微調，再在新權重上重挑一次示範；記分數的變化、花掉的 GPU 時間，以及換一批題目時分數還在不在。</p>
+    </div>
+
+    <div class="thought">
+      <span class="label">判斷題 · 03</span>
+      <h4>模型幾乎不會的題目，該先多花推論算力、調 prompt、調權重，還是換更大的模型？</h4>
+      <p>換大模型的一方：Snell 等人在最難一級的題上，搜尋沒有明顯進展，FLOPs 對等時困難題多半是放大模型較有效。多花推論算力的一方：GEPA 的推論時搜尋把 kernel 從接近零拉起，回饋帶進了技術手冊。其他線索：BetterTogether 的 llama-2 在 Iris 上要先調 prompt 才湊得出微調資料；MIPRO 說沒有寫明規則的種子 prompt，最佳化器推不出規則（都在<a href="#hard-problems">第 4 章</a>）。</p>
+      <p>還缺的證據：同一批幾乎不會的題目上，多抽幾次加檢查、反思加外部資料、先調 prompt 再微調、換大模型四條路，用同一個預算並排的結果。</p>
+      <p class="hint">從你的任務裡挑 30 題、模型抽一次幾乎都錯的題目；試多抽 16 次再用檢查器挑、把錯誤訊息或文件放進前文讓它改、先 bootstrap 幾個答對的示範；記哪一條先讓分數離開零，以及各花了多少次呼叫。</p>
+    </div>
+
+    <div class="explain stone">
+      <span class="label">為什麼不附答案</span>
+      <h4>證據在別人的任務上量出來</h4>
+      <p>四篇的數字來自不同的任務、模型與年份，預算的單位也不同，三篇 prompt 最佳化論文還出自同一群作者。放到你自己的任務上會不會成立，要用你的任務量過才知道。這一頁只負責把證據排在一起，判斷留給讀者。</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="glossary" class="nocard glossary" data-toc="同一件事的名字">
+  <div class="wide">
+    <p class="eyebrow">Reference · 用詞對照</p>
+    <h2><span class="seg">同一件事，</span><span class="seg">四篇各用不同的名字</span></h2>
+    <p class="lede">四篇對預算、示範、指令、權重、軌跡與評分各有說法。每一條先寫這件事，再列各篇怎麼稱呼、在本站讀物頁的哪一章；沒有談到的篇就不列。</p>
+    <dl class="glossary-grid">
+      <div class="term"><dt>budget</dt><span class="zh-name">預算</span><dd>Snell：生成次數，一次生成是從 base 模型抽一個答案；和放大模型比時換成 FLOPs（第 5、10 章）。GEPA：rollout，把系統跑一次再評分，也報美元（第 7 章）。MIPRO：試驗，分完整評估與小批次（第 7 章）。BetterTogether：A100 GPU 小時（第 7 章）。</dd></div>
+      <div class="term"><dt>demonstration</dt><span class="zh-name">示範</span><dd>MIPRO：bootstrap 出來的 few-shot 示範，分數過門檻的軌跡（第 3 章）。BetterTogether：BootstrapFewShotRS 挑的示範，每個模組最多 3 個（第 2 章）。GEPA：不調示範（第 3 章）。Snell：固定的 4-shot 示範（第 4 章）。</dd></div>
+      <div class="term"><dt>instruction</dt><span class="zh-name">指令</span><dd>MIPRO：提案 LM 寫的自由格式指令（第 3 章）。GEPA：反思 LM 改寫的模組指令（第 3 章）。BetterTogether：使用者給的簡單指令，不改（第 2 章）。</dd></div>
+      <div class="term"><dt>weights</dt><span class="zh-name">權重</span><dd>BetterTogether：LoRA 微調的 θ，所有模組共用一個模型（第 1、2 章）。GEPA：對手 GRPO 改的權重，GEPA 本身不動（第 1、7 章）。Snell：微調出 PRM 與修訂模型（第 4、7 章）。MIPRO：不碰權重（第 1 章）。</dd></div>
+      <div class="term"><dt>trace</dt><span class="zh-name">軌跡</span><dd>GEPA：執行軌跡與評估軌跡（第 4 章）。BetterTogether：一次執行裡每個模組的輸入與輸出，只留答對的（第 2 章）。MIPRO：分數達到門檻，就把整條軌跡存成候選示範（第 3 章）。Snell：一串錯答案後面接一個正確答案的修訂軌跡（第 7 章）。</dd></div>
+      <div class="term"><dt>feedback</dt><span class="zh-name">評分與回饋</span><dd>GEPA：回饋函式，分數之外再回傳文字（第 4 章）。Snell：驗證器，PRM 逐步打分、ORM 看整個解（第 4 章）。MIPRO、BetterTogether：metric 加上門檻 λ（MIPRO 第 3 章、BetterTogether 第 2 章）。</dd></div>
+      <div class="term"><dt>search</dt><span class="zh-name">搜尋</span><dd>Snell：對 PRM 做 beam search 與 lookahead（第 5 章）。GEPA：Pareto 抽樣挑候選，也能拿來做推論時搜尋（第 5、11 章）。MIPRO：TPE 在事先提好的候選裡挑組合（第 6 章）。BetterTogether：隨機搜尋示範的子集（第 2 章）。</dd></div>
+      <div class="term"><dt>difficulty</dt><span class="zh-name">難度與起點</span><dd>Snell：某個 base 模型在這題的 pass@1，分五級（第 3 章）。MIPRO：規則藏在條件裡、幾個例子示範不完的任務（第 10 章）。BetterTogether：vanilla 幾乎答不對時，湊不出微調資料（第 6 章）。</dd></div>
+      <div class="term"><dt>reflection</dt><span class="zh-name">反思與修訂</span><dd>GEPA：反思 LM 讀軌跡與回饋、歸因後改寫指令（第 3 章）。Snell：修訂模型看著前幾次的答案再寫一次（第 7、8 章）。MIPRO：Module-Level OPRO 讀過去的指令與分數寫新指令（第 5 章）。</dd></div>
+      <div class="term"><dt>reinforcement learning</dt><span class="zh-name">強化學習</span><dd>GEPA：GRPO，固定 24,000 次 rollout（第 7、8 章）。Snell：附錄 K 的 ReST-EM，拿來最佳化修訂模型反而變差（第 7 章）。BetterTogether：沒有用，權重用監督式微調（第 2 章）。</dd></div>
+      <div class="term"><dt>LM program</dt><span class="zh-name">程式與系統</span><dd>MIPRO、BetterTogether：LM 程式，由幾個語言模組組成（MIPRO 第 1 章、BetterTogether 第 1 章）。GEPA：複合式 AI 系統，包含 agent 與多 agent 系統（第 1 章）。Snell：一個模型回答一題，不談多模組。</dd></div>
+      <div class="term"><dt>self-improvement</dt><span class="zh-name">自我改進</span><dd>BetterTogether：同一個模型自己教自己（第 3 章）。Snell：推論量遠小於預訓練量的例子是自我改進的流程；未來可把測試時算力的輸出蒸餾回 base 模型（第 10、13 章）。</dd></div>
+    </dl>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>課程：CS 329Z Engineering AI Agents，Stanford University，Fall 2026，第 5 週「Optimization」。<br><a href="https://cs329z.stanford.edu/">cs329z.stanford.edu</a></p>
+    <p>讀物原文：<br>
+      Snell、Lee、Xu、Kumar，〈Scaling LLM <span style="white-space:nowrap">Test-Time</span> Compute Optimally can be More Effective than Scaling Model Parameters〉，arXiv，2024-08-06。<a href="https://arxiv.org/abs/2408.03314">arxiv.org/abs/2408.03314</a><br>
+      Agrawal 等，〈GEPA: Reflective Prompt Evolution Can Outperform Reinforcement Learning〉，arXiv，2025-07-25。<a href="https://arxiv.org/abs/2507.19457">arxiv.org/abs/2507.19457</a><br>
+      <span style="white-space:nowrap">Opsahl-Ong</span> 等，〈Optimizing Instructions and Demonstrations for <span style="white-space:nowrap">Multi-Stage</span> Language Model Programs〉，arXiv，2024-06-17。<a href="https://arxiv.org/abs/2406.11695">arxiv.org/abs/2406.11695</a><br>
+      Soylu、Potts、Khattab，〈<span style="white-space:nowrap">Fine-Tuning</span> and Prompt Optimization: Two Great Steps that Work Better Together〉，arXiv，2024-07-15。<a href="https://arxiv.org/abs/2407.10930">arxiv.org/abs/2407.10930</a></p>
+    <p>本站的整理：<a href="../test-time-compute/">Scaling LLM <span style="white-space:nowrap">Test-Time</span> Compute Optimally</a>、<a href="../gepa-prompt-evolution/">GEPA</a>、<a href="../mipro-optimizer/">MIPRO</a>、<a href="../finetuning-prompt-optimization/">BetterTogether</a>。其他單元：<a href="../compound-ai-systems/">複合式 AI 系統</a>（單元 1）、<a href="../retrieval-augmented-generation/">RAG</a>、<a href="../colbert-late-interaction/">ColBERT</a>（單元 3）、<a href="../dspy-compiling-pipelines/">DSPy</a> 與<a href="../cs329z-unit-05/">單元 5 對照頁</a>（單元 5）、<a href="../react-reasoning-acting/">ReAct</a>（單元 6）、<a href="../multi-agent-failures/">MAST</a>（單元 8）、<a href="../data-flywheels/">Data Flywheels</a>、<a href="../lima-less-is-more/">LIMA</a>、<a href="../llm-data-annotation/">LLM 資料標註綜述</a>（單元 10）、<a href="../autometrics-evaluators/">AutoMetrics</a>（單元 11）、<a href="../privacy-risk-simulation/">隱私風險模擬搜尋</a>、<a href="../contextualized-privacy-defense/">CDI</a>（單元 12）。</p>
+    <p class="credit">整理於 2026-09-30</p>
+    <p class="disclaimer">本頁為學習用的整理與對照，不是原文的翻譯。觀點與著作權屬於各篇的原作者；各篇的數字條件不同，引用前請回到原文確認。</p>
+  </div>
+</footer>
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="圖卡大圖"><button type="button" class="close">關閉（Esc）</button><div class="frame"></div></div>
+<script>
+(function () {
+  var W = 1600, H = 900;
+  function fitFrames() {
+    var frames = document.querySelectorAll('.cardband .frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], root = f.firstElementChild;
+      if (!root) continue;
+      var avail = f.clientWidth;
+      if (!avail) continue;
+      var s = Math.min(1, avail / W);
+      root.style.transform = 'scale(' + s + ')';
+      f.style.height = Math.round(H * s) + 'px';
+    }
+  }
+  var KEY = 'rearranged-article-mode';
+  function setMode(m, save) {
+    document.body.classList.toggle('mode-cards', m === 'cards');
+    var btns = document.querySelectorAll('.modebar button[data-mode]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-mode') === m ? 'true' : 'false');
+    }
+    if (save) { try { localStorage.setItem(KEY, m); } catch (e) {} }
+    fitFrames();
+  }
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  setMode(saved === 'cards' ? 'cards' : 'full', false);
+
+  var box = document.getElementById('lightbox');
+  var boxFrame = box.querySelector('.frame');
+  function fitLightbox() {
+    if (!box.classList.contains('open')) return;
+    var root = boxFrame.firstElementChild;
+    if (!root) return;
+    var s = Math.min(1, (window.innerWidth - 48) / W, (window.innerHeight - 48) / H);
+    root.style.transform = 'scale(' + s + ')';
+    boxFrame.style.width = Math.round(W * s) + 'px';
+    boxFrame.style.height = Math.round(H * s) + 'px';
+  }
+  function openLightbox(num) {
+    var bandEl = document.getElementById('card-' + num);
+    if (!bandEl) return;
+    var root = bandEl.querySelector('.frame > div');
+    boxFrame.innerHTML = '';
+    var clone = root.cloneNode(true);
+    clone.style.transform = '';
+    boxFrame.appendChild(clone);
+    box.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    fitLightbox();
+  }
+  function closeLightbox() {
+    box.classList.remove('open');
+    boxFrame.innerHTML = '';
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var b = t.closest('.modebar button[data-mode]');
+    if (b) { setMode(b.getAttribute('data-mode'), true); return; }
+    var z = t.closest('.cardlabel .zoom');
+    if (z) { openLightbox(z.getAttribute('data-card')); return; }
+    if (t.closest('.lightbox') && !t.closest('.lightbox .frame')) { closeLightbox(); }
+  });
+  document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') closeLightbox(); });
+  window.addEventListener('resize', function () { fitFrames(); fitLightbox(); });
+  window.addEventListener('load', fitFrames);
+  fitFrames();
+})();
+</script>
+</body>
+</html>
