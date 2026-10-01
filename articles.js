@@ -251,6 +251,41 @@ window.ARTICLES = {
       ]
     },
     {
+      "slug": "cs329z-unit-13",
+      "path": "articles/cs329z-unit-13/index.html",
+      "title": "CS 329Z 單元 13 對照：寫程式的 agent 外面那一層怎麼做，SWE-agent、OpenHands、SWE-bench 與兩份 Anthropic 文件各給了什麼證據",
+      "summary": "CS 329Z 第 9 週「Coding & Software Agents」那一講的五篇讀物並排：SWE-bench 出考題，SWE-agent 替模型設計介面，OpenHands 是讓 agent 寫程式、下指令、上網的開源平台，Claude Code 的最佳實務文件與 Effective Harnesses 寫 Anthropic 自家的做法。本頁整理五篇在三個問題上各拿出什麼證據：分數的差距來自外層還是模型、該給模型看多少、做完了要看到什麼才算，以及原文之間怎麼互相引用、同一件事各篇怎麼稱呼。判斷題不附答案，判斷留給讀者。",
+      "source": {
+        "name": "CS 329Z · Engineering AI Agents（Stanford，Fall 2026）",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "date": "2026-09-30",
+      "tags": [
+        "cs329z",
+        "unit-synthesis",
+        "coding-agents",
+        "agent-harness",
+        "swe-bench"
+      ],
+      "formats": [
+        "圖卡＋教材整合版"
+      ],
+      "course": {
+        "name": "CS 329Z",
+        "week": 9,
+        "kind": "單元對照",
+        "section": "Coding Agents & Proactive Agents",
+        "lecture": "Coding & Software Agents",
+        "url": "https://cs329z.stanford.edu/"
+      },
+      "extras": [
+        {
+          "label": "圖解卡連續閱讀版",
+          "path": "articles/cs329z-unit-13/cards.html"
+        }
+      ]
+    },
+    {
       "slug": "cs329z-unit-12",
       "path": "articles/cs329z-unit-12/index.html",
       "title": "CS 329Z 單元 12 對照：agent 的護欄守不守得住，隱私、注入與擴展政策六篇讀物各給了什麼證據",
